@@ -12,6 +12,7 @@ import numpy as np
 from asr.logger import ASRLogger
 from asr.utils_audio import stereo_to_mono, resample_linear
 from asr.vad import EnergyVAD
+from asr.diarizer import OnlineDiarizer
 
 Mode = Literal["mix", "split"]
 
@@ -26,13 +27,11 @@ class Segment:
 
 class ASRPipeline:
     """
-    Consumes AudioEngine tap_queue packets and produces ASR events.
+    Consumes AudioEngine tap_queue packets and produces ASR events (+ optional diarization).
 
-    Quality-oriented defaults:
-      - longer segments (more context)
-      - longer endpoint silence (less chopping)
-      - overlap between segments (reduces boundary word loss)
-      - beam_size higher (worker)
+    - VAD segments speech
+    - Faster-Whisper transcribes each segment
+    - Online diarizer assigns speaker labels per segment (per stream)
     """
 
     def __init__(
@@ -48,13 +47,18 @@ class ASRPipeline:
         compute_type: str = "int8_float16",
         beam_size: int = 5,
         ui_queue: Optional["queue.Queue[dict]"] = None,
-        # ---- quality tuning knobs ----
+        # ---- ASR/VAD quality tuning knobs ----
         endpoint_silence_ms: float = 800.0,
         max_segment_s: float = 12.0,
         overlap_ms: float = 300.0,
         vad_energy_threshold: float = 0.006,
         vad_hangover_ms: int = 400,
         vad_min_speech_ms: int = 350,
+        # ---- diarization ----
+        diarization_enabled: bool = True,
+        diar_sim_threshold: float = 0.74,
+        diar_min_segment_s: float = 1.0,
+        diar_window_s: float = 120.0,
     ):
         self.tap_q = tap_queue
         self.project_root = project_root
@@ -88,6 +92,14 @@ class ASRPipeline:
         self._vad_energy_threshold = float(vad_energy_threshold)
         self._vad_hangover_ms = int(vad_hangover_ms)
         self._vad_min_speech_ms = int(vad_min_speech_ms)
+
+        # diarization per stream
+        self._diar_enabled = bool(diarization_enabled)
+        self._diar_sim_threshold = float(diar_sim_threshold)
+        self._diar_min_segment_s = float(diar_min_segment_s)
+        self._diar_window_s = float(diar_window_s)
+        self._diarizers: Dict[str, OnlineDiarizer] = {}
+        self._last_speaker_estimate_ts: float = 0.0
 
         self.session_id = f"sess_{int(time.time())}"
         self.logger = ASRLogger(
@@ -124,6 +136,10 @@ class ASRPipeline:
             "vad_energy_threshold": self._vad_energy_threshold,
             "vad_hangover_ms": self._vad_hangover_ms,
             "vad_min_speech_ms": self._vad_min_speech_ms,
+            "diarization_enabled": self._diar_enabled,
+            "diar_sim_threshold": self._diar_sim_threshold,
+            "diar_min_segment_s": self._diar_min_segment_s,
+            "diar_window_s": self._diar_window_s,
             "ts": time.time(),
         })
 
@@ -167,8 +183,6 @@ class ASRPipeline:
             pass
         self._push_ui(rec)
 
-    # ================= ingest =================
-
     def _ensure_stream(self, name: str) -> None:
         if name not in self._vads:
             self._vads[name] = EnergyVAD(
@@ -180,6 +194,13 @@ class ASRPipeline:
             self._buffers[name] = []
             self._buf_t0[name] = None
             self._residual_16k[name] = np.zeros((0,), dtype=np.float32)
+
+        if self._diar_enabled and name not in self._diarizers:
+            self._diarizers[name] = OnlineDiarizer(
+                similarity_threshold=self._diar_sim_threshold,
+                min_segment_s=self._diar_min_segment_s,
+                window_s=self._diar_window_s,
+            )
 
     def _heartbeat(self, stream: str, vad: EnergyVAD) -> None:
         now = time.time()
@@ -194,6 +215,8 @@ class ASRPipeline:
             "thr": vad.last_threshold(),
             "ts": now,
         })
+
+    # ================= ingest =================
 
     def _feed_stream(
         self,
@@ -225,13 +248,11 @@ class ASRPipeline:
             if speech:
                 silence_frames = 0
                 if self._buf_t0[stream] is None:
-                    # estimate segment start inside this packet window
                     frac = i / max(1, total_frames)
                     self._buf_t0[stream] = t0 + (t1 - t0) * frac
                 self._buffers[stream].append(fr)
             else:
                 silence_frames += 1
-                # if we are already in segment, keep silence frames (helps punctuation/word endings)
                 if self._buf_t0[stream] is not None:
                     self._buffers[stream].append(fr)
 
@@ -261,7 +282,6 @@ class ASRPipeline:
 
         audio = np.concatenate(frames).astype(np.float32, copy=False)
 
-        # reject too short speech
         if not self._vads[stream].speech_long_enough():
             self._buf_t0[stream] = None
             self._buffers[stream] = []
@@ -273,6 +293,7 @@ class ASRPipeline:
             "t_start": t_start,
             "t_end": t_end,
             "samples": int(audio.shape[0]),
+            "dur_s": float(audio.shape[0]) / 16000.0,
             "ts": time.time(),
         })
 
@@ -285,13 +306,12 @@ class ASRPipeline:
                 "ts": time.time(),
             })
 
-        # ---- overlap: keep tail for next segment to reduce boundary losses ----
+        # overlap: keep tail
         overlap_samples = int(round((self._overlap_ms / 1000.0) * 16000.0))
         overlap_samples = max(0, min(overlap_samples, int(audio.shape[0])))
 
         if overlap_samples > 0:
             tail = audio[-overlap_samples:]
-            # frame-align tail to VAD frame length
             vad = self._vads[stream]
             frame_len = vad.frame_len
             n_frames = tail.size // frame_len
@@ -302,7 +322,6 @@ class ASRPipeline:
                     for i in range(n_frames)
                 ]
                 self._buffers[stream] = tail_frames
-                # approximate new segment start time for tail
                 self._buf_t0[stream] = float(t_end) - (tail_used.size / 16000.0)
             else:
                 self._buffers[stream] = []
@@ -345,6 +364,21 @@ class ASRPipeline:
         except Exception as e:
             self._log_event({"type": "error", "where": "worker", "error": str(e), "ts": time.time()})
 
+    def _maybe_emit_speaker_estimate(self, stream: str, n_est: Optional[int]) -> None:
+        now = time.time()
+        if now - self._last_speaker_estimate_ts < 2.0:
+            return
+        self._last_speaker_estimate_ts = now
+        if n_est is None:
+            return
+        self._log_event({
+            "type": "speaker_estimate",
+            "stream": stream,
+            "n_speakers": int(n_est),
+            "window_s": float(self._diar_window_s),
+            "ts": now,
+        })
+
     def _worker_loop(self) -> None:
         self._log_event({
             "type": "asr_init_start",
@@ -369,11 +403,36 @@ class ASRPipeline:
             self._log_event({"type": "error", "where": "asr_init", "error": str(e), "ts": time.time()})
             return
 
+        # ---- init diarization ONCE (not per segment) ----
+        if self._diar_enabled:
+            try:
+                # constructs encoder; will fail fast if torch/resemblyzer broken
+                from asr.diarizer import _ResemblyzerBackend  # noqa
+                _ResemblyzerBackend()
+                self._log_event({"type": "diar_init_ok", "ts": time.time()})
+            except Exception as e:
+                self._log_event({"type": "error", "where": "diar_init", "error": str(e), "ts": time.time()})
+                self._diar_enabled = False
+
         while not self._stop.is_set():
             try:
                 seg = self._seg_q.get(timeout=0.2)
             except queue.Empty:
                 continue
+
+            # ---- diarization per segment ----
+            speaker = "S?"
+            n_est: Optional[int] = None
+            if self._diar_enabled:
+                try:
+                    diar = self._diarizers.get(seg.stream)
+                    if diar is not None:
+                        speaker, n_est = diar.assign(seg.audio_16k, ts=time.time())
+                        self._maybe_emit_speaker_estimate(seg.stream, n_est)
+                except Exception as e:
+                    self._log_event({"type": "error", "where": "diar_assign", "error": str(e), "ts": time.time()})
+                    speaker = "S?"
+                    n_est = None
 
             t0 = time.time()
             try:
@@ -383,6 +442,7 @@ class ASRPipeline:
                 self._log_event({
                     "type": "segment",
                     "stream": seg.stream,
+                    "speaker": speaker,
                     "t_start": seg.t_start,
                     "t_end": seg.t_end,
                     "text": "",
@@ -394,6 +454,7 @@ class ASRPipeline:
             self._log_event({
                 "type": "segment",
                 "stream": seg.stream,
+                "speaker": speaker,
                 "t_start": seg.t_start,
                 "t_end": seg.t_end,
                 "text": text,
