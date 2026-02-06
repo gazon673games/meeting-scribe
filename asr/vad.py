@@ -11,19 +11,23 @@ class EnergyVAD:
     Dependency-free VAD for MVP.
 
     Operates on 16k mono float32 frames.
-    Tuned for lower latency by default.
+
+    IMPORTANT:
+      - energy_threshold: lower -> more sensitive (more false positives on noise)
+      - hangover_ms: keep speech after energy drops to avoid chopping
+      - min_speech_ms: minimum duration required to accept a segment
     """
     frame_ms: int = 20
     sample_rate: int = 16000
 
-    # Lower threshold => more sensitive (risk: more false positives on noise)
+    # For better recall on speech (quality mode often wants slightly lower thr)
     energy_threshold: float = 0.006
 
-    # Keep "speech" a bit after energy drops (helps avoid chopping words)
-    hangover_ms: int = 200
+    # Quality mode: keep speech longer to avoid chopping words
+    hangover_ms: int = 400
 
-    # Minimum speech duration to accept a segment
-    min_speech_ms: int = 200
+    # Quality mode: reject too short segments (reduce junk)
+    min_speech_ms: int = 350
 
     def __post_init__(self) -> None:
         self.frame_len = int(self.sample_rate * self.frame_ms / 1000)
