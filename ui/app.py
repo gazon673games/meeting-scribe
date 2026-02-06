@@ -13,6 +13,7 @@ import numpy as np
 import sounddevice as sd
 import soundcard as sc
 from PySide6.QtCore import Qt, QTimer
+
 from PySide6.QtWidgets import (
     QApplication,
     QWidget,
@@ -449,7 +450,22 @@ class MainWindow(QWidget):
                 if not text:
                     continue
                 stream = str(ev.get("stream", ""))
-                self._append_transcript_line(f"[{tss}] {stream}: {text}")
+                spk = str(ev.get("speaker", "") or "")
+                if spk == "S?":
+                    spk = ""
+                spk_part = f" {spk}" if spk else ""
+                self._append_transcript_line(f"[{tss}] {stream}{spk_part}: {text}")
+
+            elif typ == "speaker_estimate":
+                stream = str(ev.get("stream", ""))
+                nsp = ev.get("n_speakers", None)
+                win = ev.get("window_s", None)
+                if nsp is not None:
+                    if win is not None:
+                        self._append_transcript_line(f"[{tss}] {stream}: ~{int(nsp)} speaker(s) in last {int(win)}s")
+                    else:
+                        self._append_transcript_line(f"[{tss}] {stream}: ~{int(nsp)} speaker(s)")
+
             elif typ == "asr_init_start":
                 model = ev.get("model", "")
                 device = ev.get("device", "")
@@ -458,18 +474,28 @@ class MainWindow(QWidget):
             elif typ == "segment_ready":
                 stream = ev.get("stream", "")
                 samples = ev.get("samples", 0)
-                self._append_transcript_line(f"[{tss}] segment ready ({stream}, samples={samples})")
+                dur_s = ev.get("dur_s", None)
+                if dur_s is not None:
+                    self._append_transcript_line(f"[{tss}] segment ready ({stream}, {float(dur_s):.2f}s)")
+                else:
+                    self._append_transcript_line(f"[{tss}] segment ready ({stream}, samples={samples})")
+
             elif typ == "error":
                 where = ev.get("where", "")
                 err = ev.get("error", "")
                 self._append_transcript_line(f"[{tss}] ERROR {where}: {err}")
+
             elif typ == "asr_started":
                 model = ev.get("model", "")
                 mode = ev.get("mode", "")
-                self._append_transcript_line(f"[{tss}] ASR started (mode={mode}, model={model})")
+                diar = ev.get("diarization_enabled", None)
+                diar_s = "on" if diar else "off"
+                self._append_transcript_line(f"[{tss}] ASR started (mode={mode}, model={model}, diar={diar_s})")
+
             elif typ == "asr_init_ok":
                 model = ev.get("model", "")
                 self._append_transcript_line(f"[{tss}] ASR init OK ({model})")
+
             elif typ == "asr_stopped":
                 self._append_transcript_line(f"[{tss}] ASR stopped")
 
@@ -628,6 +654,26 @@ class MainWindow(QWidget):
                     mode=mode,
                     source_names=None,
                     asr_model_name=model_name,
+                    device="cuda",
+                    compute_type="float16",  # <-- максимум качества на RTX 4060
+                    beam_size=5,  # <-- качество/скорость баланс
+
+                    # ---- сегментация под спикеров (важнее, чем “красиво для ASR”) ----
+                    endpoint_silence_ms=650.0,
+                    max_segment_s=7.0,
+                    overlap_ms=200.0,
+
+                    # ---- VAD ----
+                    vad_energy_threshold=0.0055,
+                    vad_hangover_ms=350,
+                    vad_min_speech_ms=350,
+
+                    # ---- diarization ----
+                    diarization_enabled=True,
+                    diar_sim_threshold=0.78,  # было 0.74 → слишком “липко”
+                    diar_min_segment_s=1.6,
+                    diar_window_s=120.0,
+
                     ui_queue=self.asr_ui_q,
                 )
                 self.asr.start()
