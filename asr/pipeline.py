@@ -1,4 +1,4 @@
-# --- File: asr/pipeline.py ---
+# --- File: D:\work\own\voice2textTest\asr\pipeline.py ---
 from __future__ import annotations
 
 import queue
@@ -25,6 +25,16 @@ class Segment:
 
 
 class ASRPipeline:
+    """
+    Consumes AudioEngine tap_queue packets and produces ASR events.
+
+    Quality-oriented defaults:
+      - longer segments (more context)
+      - longer endpoint silence (less chopping)
+      - overlap between segments (reduces boundary word loss)
+      - beam_size higher (worker)
+    """
+
     def __init__(
         self,
         *,
@@ -33,11 +43,18 @@ class ASRPipeline:
         language: str = "ru",
         mode: Mode = "mix",
         source_names: Optional[List[str]] = None,
-        asr_model_name: str = "medium",
+        asr_model_name: str = "large-v3",
         device: str = "cuda",
         compute_type: str = "int8_float16",
-        beam_size: int = 3,
+        beam_size: int = 5,
         ui_queue: Optional["queue.Queue[dict]"] = None,
+        # ---- quality tuning knobs ----
+        endpoint_silence_ms: float = 800.0,
+        max_segment_s: float = 12.0,
+        overlap_ms: float = 300.0,
+        vad_energy_threshold: float = 0.006,
+        vad_hangover_ms: int = 400,
+        vad_min_speech_ms: int = 350,
     ):
         self.tap_q = tap_queue
         self.project_root = project_root
@@ -63,9 +80,14 @@ class ASRPipeline:
         self._buf_t0: Dict[str, Optional[float]] = {}
         self._residual_16k: Dict[str, np.ndarray] = {}
 
-        # 🔧 latency tuning
-        self._endpoint_silence_ms = 300.0
-        self._max_segment_s = 4.0
+        # quality tuning
+        self._endpoint_silence_ms = float(endpoint_silence_ms)
+        self._max_segment_s = float(max_segment_s)
+        self._overlap_ms = float(overlap_ms)
+
+        self._vad_energy_threshold = float(vad_energy_threshold)
+        self._vad_hangover_ms = int(vad_hangover_ms)
+        self._vad_min_speech_ms = int(vad_min_speech_ms)
 
         self.session_id = f"sess_{int(time.time())}"
         self.logger = ASRLogger(
@@ -96,6 +118,12 @@ class ASRPipeline:
             "device": self.device,
             "compute_type": self.compute_type,
             "beam_size": self.beam_size,
+            "endpoint_silence_ms": self._endpoint_silence_ms,
+            "max_segment_s": self._max_segment_s,
+            "overlap_ms": self._overlap_ms,
+            "vad_energy_threshold": self._vad_energy_threshold,
+            "vad_hangover_ms": self._vad_hangover_ms,
+            "vad_min_speech_ms": self._vad_min_speech_ms,
             "ts": time.time(),
         })
 
@@ -143,7 +171,12 @@ class ASRPipeline:
 
     def _ensure_stream(self, name: str) -> None:
         if name not in self._vads:
-            self._vads[name] = EnergyVAD(sample_rate=16000)
+            self._vads[name] = EnergyVAD(
+                sample_rate=16000,
+                energy_threshold=self._vad_energy_threshold,
+                hangover_ms=self._vad_hangover_ms,
+                min_speech_ms=self._vad_min_speech_ms,
+            )
             self._buffers[name] = []
             self._buf_t0[name] = None
             self._residual_16k[name] = np.zeros((0,), dtype=np.float32)
@@ -192,18 +225,23 @@ class ASRPipeline:
             if speech:
                 silence_frames = 0
                 if self._buf_t0[stream] is None:
+                    # estimate segment start inside this packet window
                     frac = i / max(1, total_frames)
                     self._buf_t0[stream] = t0 + (t1 - t0) * frac
                 self._buffers[stream].append(fr)
             else:
                 silence_frames += 1
+                # if we are already in segment, keep silence frames (helps punctuation/word endings)
                 if self._buf_t0[stream] is not None:
                     self._buffers[stream].append(fr)
 
-            if self._buf_t0[stream] and (
-                silence_frames >= silence_limit or
-                len(self._buffers[stream]) >= max_frames
-            ):
+            should_end = (
+                (self._buf_t0[stream] is not None) and (
+                    silence_frames >= silence_limit or
+                    len(self._buffers[stream]) >= max_frames
+                )
+            )
+            if should_end:
                 self._finalize_segment(stream, t1)
                 vad.reset()
                 silence_frames = 0
@@ -221,7 +259,9 @@ class ASRPipeline:
             self._buffers[stream] = []
             return
 
-        audio = np.concatenate(frames)
+        audio = np.concatenate(frames).astype(np.float32, copy=False)
+
+        # reject too short speech
         if not self._vads[stream].speech_long_enough():
             self._buf_t0[stream] = None
             self._buffers[stream] = []
@@ -245,8 +285,31 @@ class ASRPipeline:
                 "ts": time.time(),
             })
 
-        self._buf_t0[stream] = None
-        self._buffers[stream] = []
+        # ---- overlap: keep tail for next segment to reduce boundary losses ----
+        overlap_samples = int(round((self._overlap_ms / 1000.0) * 16000.0))
+        overlap_samples = max(0, min(overlap_samples, int(audio.shape[0])))
+
+        if overlap_samples > 0:
+            tail = audio[-overlap_samples:]
+            # frame-align tail to VAD frame length
+            vad = self._vads[stream]
+            frame_len = vad.frame_len
+            n_frames = tail.size // frame_len
+            if n_frames > 0:
+                tail_used = tail[-(n_frames * frame_len):]
+                tail_frames = [
+                    tail_used[i * frame_len:(i + 1) * frame_len]
+                    for i in range(n_frames)
+                ]
+                self._buffers[stream] = tail_frames
+                # approximate new segment start time for tail
+                self._buf_t0[stream] = float(t_end) - (tail_used.size / 16000.0)
+            else:
+                self._buffers[stream] = []
+                self._buf_t0[stream] = None
+        else:
+            self._buffers[stream] = []
+            self._buf_t0[stream] = None
 
     def _ingest_loop_safe(self) -> None:
         try:
@@ -262,8 +325,8 @@ class ASRPipeline:
                 continue
 
             self._pkt_count += 1
-            t0 = pkt.get("t_start", 0.0)
-            t1 = pkt.get("t_end", 0.0)
+            t0 = float(pkt.get("t_start", 0.0))
+            t1 = float(pkt.get("t_end", 0.0))
 
             if self.mode == "mix":
                 blk = pkt.get("mix")
@@ -272,7 +335,7 @@ class ASRPipeline:
             else:
                 for n, blk in (pkt.get("sources") or {}).items():
                     if isinstance(blk, np.ndarray):
-                        self._feed_stream(n, t0, t1, blk)
+                        self._feed_stream(str(n), t0, t1, blk)
 
     # ================= ASR worker =================
 

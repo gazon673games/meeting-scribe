@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, Iterable
+from typing import Dict, Any, Optional
 
 import numpy as np
 
@@ -10,14 +10,24 @@ import numpy as np
 @dataclass
 class FasterWhisperASR:
     """
-    Wrapper around faster-whisper if installed.
-    If not installed, raises RuntimeError with actionable message.
+    Wrapper around faster-whisper.
+
+    Quality knobs:
+      - beam_size (higher -> better, slower)
+      - temperature (optional, can help on hard audio)
+      - initial_prompt (optional, helps with domain terms)
+      - condition_on_previous_text (usually True helps coherence)
     """
     model_name: str = "large-v3"
     language: str = "ru"
     device: str = "cuda"          # "cpu" or "cuda"
     compute_type: str = "int8_float16"
     beam_size: int = 5
+
+    # optional decoding hints
+    temperature: Optional[float] = None
+    initial_prompt: Optional[str] = None
+    condition_on_previous_text: bool = True
 
     def __post_init__(self) -> None:
         try:
@@ -29,28 +39,29 @@ class FasterWhisperASR:
                 f"Import error: {type(e).__name__}: {e}"
             )
 
-        self._WhisperModel = WhisperModel
-        self._model = self._WhisperModel(
+        self._model = WhisperModel(
             self.model_name,
             device=self.device,
             compute_type=self.compute_type,
         )
 
     def transcribe(self, audio_16k_mono: np.ndarray) -> Dict[str, Any]:
-        """
-        audio_16k_mono: float32 mono 16k
-        Returns dict with 'text' and optional metadata.
-        """
         x = np.asarray(audio_16k_mono, dtype=np.float32)
         if x.ndim != 1:
             x = x.reshape(-1).astype(np.float32, copy=False)
 
-        segments, info = self._model.transcribe(
-            x,
-            language=self.language,
-            beam_size=int(self.beam_size),
-            vad_filter=False,  # we do VAD ourselves
-        )
+        kwargs: Dict[str, Any] = {
+            "language": self.language,
+            "beam_size": int(self.beam_size),
+            "vad_filter": False,  # VAD is done upstream
+            "condition_on_previous_text": bool(self.condition_on_previous_text),
+        }
+        if self.temperature is not None:
+            kwargs["temperature"] = float(self.temperature)
+        if self.initial_prompt:
+            kwargs["initial_prompt"] = str(self.initial_prompt)
+
+        segments, info = self._model.transcribe(x, **kwargs)
 
         text_parts = []
         for s in segments:
@@ -59,11 +70,8 @@ class FasterWhisperASR:
                 text_parts.append(t)
 
         text = "".join(text_parts).strip()
-        out = {
-            "text": text,
-        }
+        out: Dict[str, Any] = {"text": text}
 
-        # best-effort metadata
         try:
             out["language"] = getattr(info, "language", None)
             out["language_probability"] = getattr(info, "language_probability", None)
