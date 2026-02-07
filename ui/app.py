@@ -8,12 +8,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple, List
-from PySide6.QtGui import QTextCursor
-import numpy as np
-import sounddevice as sd
-import soundcard as sc
-from PySide6.QtCore import Qt, QTimer
 
+from PySide6.QtGui import QTextCursor
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QWidget,
@@ -32,10 +29,13 @@ from PySide6.QtWidgets import (
     QTextEdit,
 )
 
+import numpy as np
+import sounddevice as sd
+import soundcard as sc
+
 from audio.engine import AudioEngine, AudioFormat
 from audio.sources.wasapi_loopback import WasapiLoopbackSource
 from audio.sources.microphone import MicrophoneSource
-
 from asr.pipeline import ASRPipeline
 
 try:
@@ -307,10 +307,17 @@ class MainWindow(QWidget):
         top.addStretch(1)
         root.addLayout(top)
 
+        # ===== ASR row =====
         asr_row = QHBoxLayout()
-        self.chk_asr = QCheckBox("Enable ASR (Russian)")
+        self.chk_asr = QCheckBox("Enable ASR")
         self.chk_asr.setChecked(True)
         asr_row.addWidget(self.chk_asr)
+
+        asr_row.addWidget(QLabel("Lang:"))
+        self.cmb_lang = QComboBox()
+        self.cmb_lang.addItems(["ru", "en", "auto"])
+        self.cmb_lang.setCurrentText("ru")
+        asr_row.addWidget(self.cmb_lang)
 
         asr_row.addWidget(QLabel("Mode:"))
         self.cmb_asr_mode = QComboBox()
@@ -327,6 +334,7 @@ class MainWindow(QWidget):
         asr_row.addStretch(1)
         root.addLayout(asr_row)
 
+        # ===== WAV row =====
         wav_row = QHBoxLayout()
         self.chk_wav = QCheckBox("Write WAV (master mix)")
         self.chk_wav.setChecked(False)
@@ -338,6 +346,7 @@ class MainWindow(QWidget):
         wav_row.addWidget(self.txt_output, 1)
         root.addLayout(wav_row)
 
+        # ===== control row =====
         ctrl = QHBoxLayout()
         self.btn_start = QPushButton("Start")
         self.btn_stop = QPushButton("Stop")
@@ -351,6 +360,7 @@ class MainWindow(QWidget):
         ctrl.addStretch(1)
         root.addLayout(ctrl)
 
+        # ===== sources group =====
         self.grp = QGroupBox("Sources")
         self.grp_layout = QVBoxLayout(self.grp)
         root.addWidget(self.grp)
@@ -378,6 +388,7 @@ class MainWindow(QWidget):
         status_row.addWidget(self.lbl_status, 1)
         root.addLayout(status_row)
 
+        # ===== transcript =====
         self.grp_tr = QGroupBox("Transcript")
         tr_layout = QVBoxLayout(self.grp_tr)
         self.txt_tr = QTextEdit()
@@ -386,10 +397,12 @@ class MainWindow(QWidget):
         tr_layout.addWidget(self.txt_tr)
         root.addWidget(self.grp_tr, 1)
 
+        # ===== timers =====
         self.ui_timer = QTimer(self)
         self.ui_timer.setInterval(100)
         self.ui_timer.timeout.connect(self._tick_ui)
 
+        # ===== signals =====
         self.btn_add.clicked.connect(self._add_device_dialog)
         self.txt_output.textChanged.connect(self._on_output_changed)
         self.btn_start.clicked.connect(self._start_all)
@@ -486,7 +499,8 @@ class MainWindow(QWidget):
             elif typ == "asr_started":
                 model = ev.get("model", "")
                 mode = ev.get("mode", "")
-                self._append_transcript_line(f"[{tss}] ASR started (mode={mode}, model={model})")
+                lang = ev.get("language", "")
+                self._append_transcript_line(f"[{tss}] ASR started (lang={lang}, mode={mode}, model={model})")
 
             elif typ == "asr_init_ok":
                 model = ev.get("model", "")
@@ -539,6 +553,21 @@ class MainWindow(QWidget):
         while f"{base}_{i}" in self.rows:
             i += 1
         return f"{base}_{i}"
+
+    # ===== NEW: language helpers =====
+    def _get_asr_lang(self) -> str:
+        v = (self.cmb_lang.currentText() or "ru").strip().lower()
+        if v not in ("ru", "en", "auto"):
+            v = "ru"
+        return v
+
+    def _get_asr_prompt(self, lang: str) -> Optional[str]:
+        # keep it short; can be extended with your domain terms
+        if lang == "ru":
+            return "Транскрибируй разговорную русскую речь. Сохраняй числа, имена, термины. Ставь пунктуацию."
+        if lang == "en":
+            return "Transcribe conversational English. Keep numbers, names, and technical terms. Add punctuation."
+        return None  # auto -> avoid biasing detection
 
     def _add_row(self, name: str) -> None:
         if name in self.rows:
@@ -645,14 +674,20 @@ class MainWindow(QWidget):
 
         self.asr_running = False
         self.asr = None
+
         if self.chk_asr.isChecked():
             mode = "split" if self.cmb_asr_mode.currentIndex() == 1 else "mix"
             model_name = self.cmb_model.currentText().strip() or "medium"
+
+            lang_ui = self._get_asr_lang()  # "ru"|"en"|"auto"
+            asr_lang = None if lang_ui == "auto" else lang_ui
+            prompt = self._get_asr_prompt(lang_ui)
+
             try:
                 self.asr = ASRPipeline(
                     tap_queue=self.tap_q,
                     project_root=self.project_root,
-                    language="ru",
+                    language=lang_ui,             # for logs/UI
                     mode=mode,
                     asr_model_name=model_name,
                     device="cuda",
@@ -664,7 +699,11 @@ class MainWindow(QWidget):
                     vad_energy_threshold=0.0055,
                     vad_hangover_ms=350,
                     vad_min_speech_ms=350,
-                    # step2: overload tuning (can be exposed to UI later)
+
+                    # IMPORTANT: diarization off
+                    diarization_enabled=False,
+                    log_speaker_labels=False,
+
                     overload_enter_qsize=18,
                     overload_exit_qsize=6,
                     overload_hard_drop_qsize=28,
@@ -672,7 +711,7 @@ class MainWindow(QWidget):
                     overload_beam_cap=2,
                     overload_overlap_ms=120.0,
                     overload_max_segment_s=5.0,
-                    # utterances + logs
+
                     utterance_enabled=True,
                     utterance_gap_s=0.85,
                     utterance_max_s=18.0,
@@ -680,6 +719,10 @@ class MainWindow(QWidget):
                     log_max_bytes=25 * 1024 * 1024,
                     log_backup_count=5,
                     ui_queue=self.asr_ui_q,
+
+                    # NEW: faster-whisper language/prompt
+                    asr_language=asr_lang,               # None -> auto-detect
+                    asr_initial_prompt=prompt,
                 )
                 self.asr.start()
                 self.asr_running = True
@@ -702,6 +745,7 @@ class MainWindow(QWidget):
 
         self.btn_add.setEnabled(False)
         self.chk_asr.setEnabled(False)
+        self.cmb_lang.setEnabled(False)
         self.cmb_asr_mode.setEnabled(False)
         self.cmb_model.setEnabled(False)
 
@@ -736,6 +780,7 @@ class MainWindow(QWidget):
 
         self.btn_add.setEnabled(True)
         self.chk_asr.setEnabled(True)
+        self.cmb_lang.setEnabled(True)
         self.cmb_asr_mode.setEnabled(True)
         self.cmb_model.setEnabled(True)
 
@@ -772,7 +817,6 @@ class MainWindow(QWidget):
         drained = self.writer.drained_blocks()
         self.lbl_drops.setText(f"drops: out={dropped_out} tap={dropped_tap} drained={drained}")
 
-        # Step2: explicit warning if engine is dropping
         if dropped_out > 0 or dropped_tap > 0:
             self._warn_throttle(f"Engine drops detected: out={dropped_out} tap={dropped_tap}", min_interval_s=2.0)
 
@@ -809,13 +853,9 @@ class MainWindow(QWidget):
 
         self._drain_asr_ui_events(limit=80)
 
-        # Step2: status line indicates overload
         if self._is_running():
             if self._asr_overload_active:
                 self.lbl_status.setText("running (ASR overload: degraded mode)")
-            else:
-                # keep whatever was set by start, but avoid spamming
-                pass
 
     @staticmethod
     def _rms_to_pct(rms: float) -> int:

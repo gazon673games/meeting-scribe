@@ -83,9 +83,13 @@ class _PyannoteBackend:
         diar = self._pipeline({"waveform": wav, "sample_rate": 16000})
         out: List[DiarSegment] = []
         for turn, _, label in diar.itertracks(yield_label=True):
-            out.append(DiarSegment(t0=float(t_offset) + float(turn.start),
-                                   t1=float(t_offset) + float(turn.end),
-                                   speaker=str(label)))
+            out.append(
+                DiarSegment(
+                    t0=float(t_offset) + float(turn.start),
+                    t1=float(t_offset) + float(turn.end),
+                    speaker=str(label),
+                )
+            )
         return out
 
 
@@ -155,7 +159,9 @@ class _AdaptiveBeam:
     cool_down_s: float = 2.0
     last_change_ts: float = 0.0
 
-    def maybe_update(self, *, seg_qsize: int, last_latency_s: float, last_dur_s: float, now: float) -> Tuple[int, Optional[str]]:
+    def maybe_update(
+        self, *, seg_qsize: int, last_latency_s: float, last_dur_s: float, now: float
+    ) -> Tuple[int, Optional[str]]:
         if (now - float(self.last_change_ts)) < float(self.cool_down_s):
             return (int(self.cur_beam), None)
 
@@ -263,10 +269,17 @@ class ASRPipeline:
 
         # Optional: stop writing speaker labels into events (useful if diarization is unreliable)
         log_speaker_labels: bool = True,
+
+        # ===== NEW: faster-whisper language/prompt =====
+        asr_language: Optional[str] = "ru",          # None -> auto-detect in faster-whisper
+        asr_initial_prompt: Optional[str] = None,    # passed to faster-whisper
     ):
         self.tap_q = tap_queue
         self.project_root = project_root
+
+        # UI/log language marker (can be "auto")
         self.language = language
+
         self.mode = mode
         self.source_names = source_names
 
@@ -274,6 +287,9 @@ class ASRPipeline:
         self.device = device
         self.compute_type = compute_type
         self.beam_size = int(beam_size)
+
+        self.asr_language = asr_language
+        self.asr_initial_prompt = asr_initial_prompt
 
         self.ui_q = ui_queue
 
@@ -390,7 +406,7 @@ class ASRPipeline:
             {
                 "type": "asr_started",
                 "session_id": self.session_id,
-                "language": self.language,
+                "language": self.language,  # UI/log marker ("ru"/"en"/"auto")
                 "mode": self.mode,
                 "model": self.asr_model_name,
                 "device": self.device,
@@ -429,6 +445,8 @@ class ASRPipeline:
                 "utterance_flush_s": self._utt_flush_s,
                 "log_rotation": {"max_bytes": self.logger.max_bytes, "backup_count": self.logger.backup_count},
                 "log_speaker_labels": self._log_speaker_labels,
+                "asr_language": self.asr_language,  # None => auto
+                "asr_initial_prompt": bool(self.asr_initial_prompt),
                 "ts": time.time(),
             }
         )
@@ -472,7 +490,6 @@ class ASRPipeline:
 
     def _maybe_emit_overload_event(self, active: bool, reason: str) -> None:
         now = time.time()
-        # throttle UI spam
         if (now - float(self._over_last_event_ts)) < 0.6:
             return
         self._over_last_event_ts = now
@@ -499,7 +516,6 @@ class ASRPipeline:
                 self._maybe_emit_overload_event(True, f"enter: qsize>={self._over_enter}")
             return
 
-        # active:
         held = (now - float(self._over_since)) < float(self._over_hold_s)
         if not held and qsz <= self._over_exit:
             self._over_active = False
@@ -507,10 +523,6 @@ class ASRPipeline:
             self._maybe_emit_overload_event(False, f"exit: qsize<={self._over_exit}")
 
     def _segmentation_params(self) -> Tuple[float, float, float]:
-        """
-        Returns (endpoint_silence_ms, max_segment_s, overlap_ms) depending on overload.
-        endpoint_silence_ms we keep the same (usually OK), but you can also reduce if needed.
-        """
         if self._over_active:
             return (self._endpoint_silence_ms_base, self._over_max_segment_s, self._over_overlap_ms)
         return (self._endpoint_silence_ms_base, self._max_segment_s_base, self._overlap_ms_base)
@@ -629,7 +641,6 @@ class ASRPipeline:
         res = self._residual_16k[stream]
         merged = np.concatenate([res, x16]) if res.size else x16
 
-        # IMPORTANT: overload state is driven by worker, but ingest can still use current state
         endpoint_silence_ms, max_segment_s, _overlap_ms = self._segmentation_params()
 
         total_frames = merged.size // frame_len
@@ -709,7 +720,6 @@ class ASRPipeline:
             }
         )
 
-        # enqueue; on overload we prefer dropping rather than blocking ingest thread
         try:
             self._seg_q.put_nowait(Segment(stream, float(t_start), float(t_end), audio))
         except queue.Full:
@@ -724,7 +734,6 @@ class ASRPipeline:
                 }
             )
 
-        # overlap depends on overload
         _, _max_seg_s, overlap_ms = self._segmentation_params()
         overlap_samples = int(round((overlap_ms / 1000.0) * 16000.0))
         overlap_samples = max(0, min(overlap_samples, int(audio.shape[0])))
@@ -909,8 +918,7 @@ class ASRPipeline:
         if qsz < int(self._over_hard):
             return
 
-        # Keep last N segments (small tail) by draining the queue quickly.
-        keep = max(1, int(self._over_exit))  # reuse exit as "tail" size
+        keep = max(1, int(self._over_exit))
         drop_cnt = max(0, qsz - keep)
 
         if drop_cnt <= 0:
@@ -942,10 +950,11 @@ class ASRPipeline:
         try:
             self._asr = FasterWhisperASR(
                 model_name=self.asr_model_name,
-                language=self.language,
+                language=self.asr_language,              # None -> auto-detect
                 device=self.device,
                 compute_type=self.compute_type,
                 beam_size=self.beam_size,
+                initial_prompt=self.asr_initial_prompt,  # NEW
             )
             self._log_event({"type": "asr_init_ok", "model": self.asr_model_name, "ts": time.time()})
         except Exception as e:
@@ -956,7 +965,6 @@ class ASRPipeline:
         self._init_diarization_backend()
 
         while not self._stop.is_set():
-            # overload is controlled here (queue is owned by worker)
             self._update_overload_state()
             self._drain_old_segments_if_hard_overload()
 
@@ -970,7 +978,6 @@ class ASRPipeline:
                         pass
                 continue
 
-            # update again after taking one (more responsive)
             self._update_overload_state()
 
             speaker = "S?"
@@ -1018,7 +1025,6 @@ class ASRPipeline:
 
             seg_dur_s = max(1e-6, float(seg.audio_16k.shape[0]) / 16000.0)
 
-            # beam selection: adaptive beam + overload cap
             beam_to_use = int(self._beam_ctl.cur_beam)
             if self._over_active:
                 beam_to_use = min(beam_to_use, int(self._over_beam_cap))
@@ -1057,7 +1063,6 @@ class ASRPipeline:
                 if text:
                     self._last_text[seg.stream] = _norm_text(text)
 
-            # adaptive beam update uses real latency ratio; but if overload active we still keep it (cap applied separately)
             if self._adaptive_beam_enabled:
                 now = time.time()
                 qsz = int(self._seg_q.qsize())

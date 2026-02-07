@@ -1,4 +1,4 @@
-# --- File: D:\work\own\voice2textTest\asr\worker_faster_whisper.py ---
+# --- File: asr/worker_faster_whisper.py ---
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -17,14 +17,14 @@ class FasterWhisperASR:
       - temperature (optional, can help on hard audio)
       - initial_prompt (optional, helps with domain terms)
       - condition_on_previous_text (usually True helps coherence)
+      - language: "ru"/"en"/... or None for auto-detect
     """
     model_name: str = "large-v3"
-    language: str = "ru"
-    device: str = "cuda"          # "cpu" or "cuda"
+    language: Optional[str] = "ru"   # <--- CHANGED: Optional
+    device: str = "cuda"            # "cpu" or "cuda"
     compute_type: str = "int8_float16"
     beam_size: int = 5
 
-    # optional decoding hints
     temperature: Optional[float] = None
     initial_prompt: Optional[str] = None
     condition_on_previous_text: bool = True
@@ -45,6 +45,10 @@ class FasterWhisperASR:
             compute_type=self.compute_type,
         )
 
+        if self.language is not None:
+            s = str(self.language).strip().lower()
+            self.language = s if s else None
+
     def transcribe(self, audio_16k_mono: np.ndarray, *, beam_size: Optional[int] = None) -> Dict[str, Any]:
         x = np.asarray(audio_16k_mono, dtype=np.float32)
         if x.ndim != 1:
@@ -55,13 +59,18 @@ class FasterWhisperASR:
             bs = 1
 
         kwargs: Dict[str, Any] = {
-            "language": self.language,
             "beam_size": bs,
             "vad_filter": False,  # VAD is done upstream
             "condition_on_previous_text": bool(self.condition_on_previous_text),
         }
+
+        # IMPORTANT: language can be None -> auto detect
+        if self.language is not None:
+            kwargs["language"] = self.language
+
         if self.temperature is not None:
             kwargs["temperature"] = float(self.temperature)
+
         if self.initial_prompt:
             kwargs["initial_prompt"] = str(self.initial_prompt)
 
