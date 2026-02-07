@@ -13,7 +13,7 @@ class FasterWhisperASR:
     Wrapper around faster-whisper.
 
     Quality knobs:
-      - beam_size (higher -> better, slower)
+      - beam_size (higher -> better, slower). Can be overridden per call.
       - temperature (optional, can help on hard audio)
       - initial_prompt (optional, helps with domain terms)
       - condition_on_previous_text (usually True helps coherence)
@@ -45,14 +45,18 @@ class FasterWhisperASR:
             compute_type=self.compute_type,
         )
 
-    def transcribe(self, audio_16k_mono: np.ndarray) -> Dict[str, Any]:
+    def transcribe(self, audio_16k_mono: np.ndarray, *, beam_size: Optional[int] = None) -> Dict[str, Any]:
         x = np.asarray(audio_16k_mono, dtype=np.float32)
         if x.ndim != 1:
             x = x.reshape(-1).astype(np.float32, copy=False)
 
+        bs = int(beam_size) if beam_size is not None else int(self.beam_size)
+        if bs < 1:
+            bs = 1
+
         kwargs: Dict[str, Any] = {
             "language": self.language,
-            "beam_size": int(self.beam_size),
+            "beam_size": bs,
             "vad_filter": False,  # VAD is done upstream
             "condition_on_previous_text": bool(self.condition_on_previous_text),
         }
@@ -70,7 +74,7 @@ class FasterWhisperASR:
                 text_parts.append(t)
 
         text = "".join(text_parts).strip()
-        out: Dict[str, Any] = {"text": text}
+        out: Dict[str, Any] = {"text": text, "beam_size": bs}
 
         try:
             out["language"] = getattr(info, "language", None)
