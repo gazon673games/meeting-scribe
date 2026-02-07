@@ -6,7 +6,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Callable, Deque, Dict, List, Optional, Protocol, Tuple
+from typing import Callable, Deque, Dict, List, Optional, Protocol, Tuple, Literal, Set
 
 import numpy as np
 
@@ -65,19 +65,25 @@ class _SourceState:
         object.__setattr__(self, "delay_buf", deque())
 
 
+TapMode = Literal["mix", "sources", "both"]
+
+
 class AudioEngine:
     """
-    Real-time safe mixer with per-source ring buffers and master clock.
+    Real-time safe-ish mixer with per-source ring buffers and master clock.
 
-    Adds:
-      - tap_queue: optional queue of per-tick packets for downstream consumers (WAV/ASR/etc.)
-        Packet:
-          {
-            "t_start": float,
-            "t_end": float,
-            "mix": np.ndarray (blocksize, channels),
-            "sources": {name: np.ndarray (blocksize, channels)}
-          }
+    tap_queue packet (if enabled):
+      {
+        "t_start": float,
+        "t_end": float,
+        "mix": np.ndarray (blocksize, channels)      # if tap_mode includes mix
+        "sources": {name: np.ndarray (...)}          # if tap_mode includes sources
+      }
+
+    Changes (long-run stability):
+      - configurable tap mode (mix/sources/both) + optional source filter
+      - early tap drop: if tap queue is near full, we skip building/copying packets
+      - "active_sources" for normalization is based on signal presence (RMS), not merely enabled
     """
 
     def __init__(
@@ -115,10 +121,18 @@ class AudioEngine:
         self._tap_q_max = int(tap_queue_max)
         self._dropped_tap_blocks: int = 0
 
+        # tap config (NEW)
+        self._tap_mode: TapMode = "both"
+        self._tap_sources_filter: Optional[Set[str]] = None
+        self._tap_drop_threshold: float = 0.85  # if tap_q fill ratio >= this, skip packet build/copies
+
         self._autosync_enabled: bool = False
         self._autosync_ref: Optional[str] = None
         self._autosync_target: Optional[str] = None
         self._autosync_last_offset_ms: float = 0.0
+
+        # mix normalization behavior (NEW)
+        self._mix_active_rms_eps: float = 1e-4
 
     @property
     def format(self) -> AudioFormat:
@@ -132,6 +146,39 @@ class AudioEngine:
         with self._lock:
             self._tap_q = tap_queue
             self._dropped_tap_blocks = 0
+
+    def set_tap_config(
+        self,
+        *,
+        mode: TapMode = "both",
+        sources: Optional[List[str]] = None,
+        drop_threshold: float = 0.85,
+    ) -> None:
+        """
+        mode:
+          - "mix": put only mix into tap packets
+          - "sources": put only sources into tap packets
+          - "both": put mix + sources into tap packets
+        sources:
+          - None: no filtering (all sources)
+          - list[str]: only include these source names in tap packets (when mode includes "sources")
+        drop_threshold:
+          - if tap queue fill ratio >= threshold, we skip building/copying tap packets
+        """
+        m = str(mode).strip().lower()
+        if m not in ("mix", "sources", "both"):
+            m = "both"
+
+        thr = float(drop_threshold)
+        if thr < 0.1:
+            thr = 0.1
+        if thr > 0.99:
+            thr = 0.99
+
+        with self._lock:
+            self._tap_mode = m  # type: ignore[assignment]
+            self._tap_sources_filter = set(sources) if sources else None
+            self._tap_drop_threshold = thr
 
     def add_source(self, src: AudioSource) -> None:
         with self._lock:
@@ -204,6 +251,12 @@ class AudioEngine:
                 "drops": {
                     "dropped_out_blocks": int(self._dropped_out_blocks),
                     "dropped_tap_blocks": int(self._dropped_tap_blocks),
+                },
+                "tap": {
+                    "enabled": bool(self._tap_q is not None),
+                    "mode": str(self._tap_mode),
+                    "filter": sorted(list(self._tap_sources_filter)) if self._tap_sources_filter else None,
+                    "drop_threshold": float(self._tap_drop_threshold),
                 },
                 "autosync": {
                     "enabled": bool(self._autosync_enabled),
@@ -316,6 +369,16 @@ class AudioEngine:
 
             st.buffer_frames = int(sum(len(b) for b in st.buf))
 
+    def _tap_should_send(self, tap_q: "queue.Queue[dict]") -> bool:
+        # Avoid doing expensive packet building/copies if the tap queue is close to full.
+        try:
+            qsz = int(tap_q.qsize())
+        except Exception:
+            return True
+        cap = max(1, int(self._tap_q_max))
+        ratio = qsz / float(cap)
+        return ratio < float(self._tap_drop_threshold)
+
     def _mix_loop(self) -> None:
         fmt = self._fmt
         period_s = fmt.blocksize / float(fmt.sample_rate)
@@ -334,20 +397,28 @@ class AudioEngine:
                 items: List[Tuple[str, _SourceState]] = list(self._state.items())
                 master_filters = list(self._master_filters)
                 tap_q = self._tap_q
+                tap_mode = self._tap_mode
+                tap_filter = set(self._tap_sources_filter) if self._tap_sources_filter else None
 
             t_start = float(self._tick_index) * period_s
             t_end = t_start + period_s
             self._tick_index += 1
 
             mix = np.zeros((fmt.blocksize, fmt.channels), dtype=np.float32)
-            sources_out: Dict[str, np.ndarray] = {}
-            active_sources = 0
 
+            # We only build sources_out if tap wants sources.
+            want_sources = (tap_q is not None) and (tap_mode in ("sources", "both"))
+            sources_out: Optional[Dict[str, np.ndarray]] = {} if want_sources else None
+
+            active_sources = 0
             ts_mono = time.monotonic()
 
             for name, st in items:
                 if not st.enabled:
                     continue
+                if tap_filter is not None and want_sources and name not in tap_filter:
+                    # We still need this source for mixing if enabled. Filter only affects what we export to tap.
+                    pass
 
                 raw = None
                 with st.buf_lock:
@@ -385,7 +456,7 @@ class AudioEngine:
                 # Resample to engine rate
                 block_src = self._resample_to_engine_rate(block_src, int(src_fmt.sample_rate), int(fmt.sample_rate))
 
-                # FIX: after resample, enforce exact engine blocksize (dst_n may differ from fmt.blocksize)
+                # Enforce exact engine blocksize after resample
                 if block_src.ndim == 1:
                     block_src = block_src[:, None]
                 block_src = self._pad_or_crop_n(block_src, fmt.blocksize)
@@ -400,10 +471,18 @@ class AudioEngine:
                 st.rms = self._rms(block_eng)
                 st.last_ts = ts_mono
 
-                sources_out[name] = block_eng
-                mix += block_eng
-                active_sources += 1
+                # Count active sources by signal presence (NEW)
+                if float(st.rms) > float(self._mix_active_rms_eps):
+                    active_sources += 1
 
+                # Export to tap only if requested AND passes filter (NEW)
+                if sources_out is not None:
+                    if tap_filter is None or name in tap_filter:
+                        sources_out[name] = block_eng
+
+                mix += block_eng
+
+            # Normalize only by actually "active" sources (NEW)
             if active_sources > 1:
                 mix *= 1.0 / float(active_sources)
 
@@ -424,18 +503,27 @@ class AudioEngine:
                 with self._lock:
                     self._dropped_out_blocks += 1
 
+            # Tap packet (NEW: early drop + minimal copies)
             if tap_q is not None:
-                pkt = {
-                    "t_start": float(t_start),
-                    "t_end": float(t_end),
-                    "mix": np.array(mixed, copy=True),
-                    "sources": {k: np.array(v, copy=True) for k, v in sources_out.items()},
-                }
-                try:
-                    tap_q.put_nowait(pkt)
-                except queue.Full:
+                if not self._tap_should_send(tap_q):
                     with self._lock:
                         self._dropped_tap_blocks += 1
+                else:
+                    pkt: Dict[str, object] = {"t_start": float(t_start), "t_end": float(t_end)}
+                    if tap_mode in ("mix", "both"):
+                        pkt["mix"] = np.array(mixed, copy=True)
+                    if tap_mode in ("sources", "both"):
+                        # Only copy/export selected sources (and only if we built it)
+                        src_map: Dict[str, np.ndarray] = {}
+                        if sources_out is not None:
+                            for k, v in sources_out.items():
+                                src_map[k] = np.array(v, copy=True)
+                        pkt["sources"] = src_map
+                    try:
+                        tap_q.put_nowait(pkt)  # type: ignore[arg-type]
+                    except queue.Full:
+                        with self._lock:
+                            self._dropped_tap_blocks += 1
 
     @staticmethod
     def _channel_map_to_engine(x: np.ndarray, src_ch: int, eng_ch: int) -> np.ndarray:

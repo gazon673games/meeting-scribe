@@ -295,7 +295,6 @@ class MainWindow(QWidget):
 
         self.output_name = "capture_mix.wav"
 
-        # Step2 UI: overload indicator
         self._asr_overload_active: bool = False
         self._last_warn_ts: float = 0.0
 
@@ -488,7 +487,6 @@ class MainWindow(QWidget):
                 self._warn_throttle(f"ASR skipped {cnt} old segments due to overload (q={qsz})")
 
             elif typ == "segment":
-                # ignore per-segment spam in UI
                 continue
 
             elif typ == "asr_init_start":
@@ -554,7 +552,6 @@ class MainWindow(QWidget):
             i += 1
         return f"{base}_{i}"
 
-    # ===== NEW: language helpers =====
     def _get_asr_lang(self) -> str:
         v = (self.cmb_lang.currentText() or "ru").strip().lower()
         if v not in ("ru", "en", "auto"):
@@ -562,12 +559,11 @@ class MainWindow(QWidget):
         return v
 
     def _get_asr_prompt(self, lang: str) -> Optional[str]:
-        # keep it short; can be extended with your domain terms
         if lang == "ru":
             return "Транскрибируй разговорную русскую речь. Сохраняй числа, имена, термины. Ставь пунктуацию."
         if lang == "en":
             return "Transcribe conversational English. Keep numbers, names, and technical terms. Add punctuation."
-        return None  # auto -> avoid biasing detection
+        return None
 
     def _add_row(self, name: str) -> None:
         if name in self.rows:
@@ -663,8 +659,26 @@ class MainWindow(QWidget):
             except queue.Empty:
                 break
 
+        # apply delays from UI
         for n in list(self.rows.keys()):
             self._apply_delay_from_ui(n)
+
+        # ===== NEW: configure tap mode BEFORE starting engine =====
+        enabled_sources: List[str] = [n for n, r in self.rows.items() if r.enabled.isChecked()]
+
+        if self.chk_asr.isChecked():
+            # Ensure tap is enabled only when ASR is enabled (reduces long-run overhead)
+            self.engine.set_tap_queue(self.tap_q)
+
+            mode = "split" if self.cmb_asr_mode.currentIndex() == 1 else "mix"
+            if mode == "mix":
+                self.engine.set_tap_config(mode="mix", sources=None, drop_threshold=0.85)
+            else:
+                # tap only the enabled sources (no mix)
+                self.engine.set_tap_config(mode="sources", sources=enabled_sources, drop_threshold=0.85)
+        else:
+            # ASR off => no need to build/copy tap packets at all
+            self.engine.set_tap_queue(None)
 
         try:
             self.engine.start()
@@ -679,7 +693,7 @@ class MainWindow(QWidget):
             mode = "split" if self.cmb_asr_mode.currentIndex() == 1 else "mix"
             model_name = self.cmb_model.currentText().strip() or "medium"
 
-            lang_ui = self._get_asr_lang()  # "ru"|"en"|"auto"
+            lang_ui = self._get_asr_lang()
             asr_lang = None if lang_ui == "auto" else lang_ui
             prompt = self._get_asr_prompt(lang_ui)
 
@@ -687,7 +701,7 @@ class MainWindow(QWidget):
                 self.asr = ASRPipeline(
                     tap_queue=self.tap_q,
                     project_root=self.project_root,
-                    language=lang_ui,             # for logs/UI
+                    language=lang_ui,
                     mode=mode,
                     asr_model_name=model_name,
                     device="cuda",
@@ -700,7 +714,6 @@ class MainWindow(QWidget):
                     vad_hangover_ms=350,
                     vad_min_speech_ms=350,
 
-                    # IMPORTANT: diarization off
                     diarization_enabled=False,
                     log_speaker_labels=False,
 
@@ -720,8 +733,7 @@ class MainWindow(QWidget):
                     log_backup_count=5,
                     ui_queue=self.asr_ui_q,
 
-                    # NEW: faster-whisper language/prompt
-                    asr_language=asr_lang,               # None -> auto-detect
+                    asr_language=asr_lang,
                     asr_initial_prompt=prompt,
                 )
                 self.asr.start()
@@ -772,6 +784,12 @@ class MainWindow(QWidget):
                 self.engine.stop()
             except Exception as e:
                 self._set_status(f"Engine stop error: {e}")
+
+        # optional: disable tap after stop (keeps idle overhead near zero)
+        try:
+            self.engine.set_tap_queue(None)
+        except Exception:
+            pass
 
         self.ui_timer.stop()
 
