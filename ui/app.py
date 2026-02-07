@@ -1,13 +1,14 @@
 # --- File: D:\work\own\voice2textTest\ui\app.py ---
 from __future__ import annotations
 
+import json
 import queue
 import sys
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict, Any
 
 from PySide6.QtGui import QTextCursor
 from PySide6.QtCore import Qt, QTimer
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QDialogButtonBox,
     QTextEdit,
+    QSizePolicy,
 )
 
 import numpy as np
@@ -42,6 +44,9 @@ try:
     import soundfile as sf
 except ImportError:
     sf = None
+
+
+CONFIG_VERSION = 1
 
 
 @dataclass
@@ -272,17 +277,24 @@ class DevicePickerDialog(QDialog):
 
 
 class MainWindow(QWidget):
+    PROFILE_REALTIME = "Realtime"
+    PROFILE_BALANCED = "Balanced"
+    PROFILE_QUALITY = "Quality"
+    PROFILE_CUSTOM = "Custom"
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Voice2TextTest — Audio Mixer + ASR")
-        self.resize(1120, 720)
+        self.resize(1180, 820)
 
         self.project_root = Path(__file__).resolve().parents[1]
+        self.config_path = self.project_root / "config.json"
+
         self.fmt = AudioFormat(sample_rate=48000, channels=2, dtype="float32", blocksize=1024)
 
         self.out_q: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=400)
         self.tap_q: "queue.Queue[dict]" = queue.Queue(maxsize=200)
-        self.asr_ui_q: "queue.Queue[dict]" = queue.Queue(maxsize=400)
+        self.asr_ui_q: "queue.Queue[dict]" = queue.Queue(maxsize=600)
 
         self.engine = AudioEngine(format=self.fmt, output_queue=self.out_q, tap_queue=self.tap_q)
         self.rows: dict[str, SourceRow] = {}
@@ -298,6 +310,20 @@ class MainWindow(QWidget):
         self._asr_overload_active: bool = False
         self._last_warn_ts: float = 0.0
 
+        # ===== NEW: session metrics mirror (UI side) =====
+        self._tap_dropped_total: int = 0
+        self._seg_dropped_total: int = 0
+        self._seg_skipped_total: int = 0
+        self._avg_latency_s: float = 0.0
+        self._p95_latency_s: float = 0.0
+        self._lag_s: float = 0.0
+
+        # ===== NEW: silence alert tracking =====
+        self._silence_eps = 1e-4
+        self._silence_alert_s = 15.0
+        self._desktop_silence_since_mono: Optional[float] = None
+
+        # ===== UI =====
         root = QVBoxLayout(self)
 
         top = QHBoxLayout()
@@ -311,6 +337,12 @@ class MainWindow(QWidget):
         self.chk_asr = QCheckBox("Enable ASR")
         self.chk_asr.setChecked(True)
         asr_row.addWidget(self.chk_asr)
+
+        asr_row.addWidget(QLabel("Profile:"))
+        self.cmb_profile = QComboBox()
+        self.cmb_profile.addItems([self.PROFILE_REALTIME, self.PROFILE_BALANCED, self.PROFILE_QUALITY, self.PROFILE_CUSTOM])
+        self.cmb_profile.setCurrentText(self.PROFILE_BALANCED)
+        asr_row.addWidget(self.cmb_profile)
 
         asr_row.addWidget(QLabel("Lang:"))
         self.cmb_lang = QComboBox()
@@ -332,6 +364,50 @@ class MainWindow(QWidget):
 
         asr_row.addStretch(1)
         root.addLayout(asr_row)
+
+        # ===== NEW: profile settings group =====
+        self.grp_asr_cfg = QGroupBox("ASR settings (Profile)")
+        cfg_layout = QVBoxLayout(self.grp_asr_cfg)
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight)
+
+        self.cmb_compute = QComboBox()
+        self.cmb_compute.addItems(["int8_float16", "float16", "int8", "int8_float32", "float32"])
+        self.cmb_compute.setCurrentText("float16")
+
+        self.txt_beam = QLineEdit("5")
+        self.txt_endpoint = QLineEdit("650.0")
+        self.txt_maxseg = QLineEdit("7.0")
+        self.txt_overlap = QLineEdit("200.0")
+        self.txt_vad_thr = QLineEdit("0.0055")
+
+        self.cmb_overload_strategy = QComboBox()
+        self.cmb_overload_strategy.addItems(["drop_old", "keep_all"])
+        self.cmb_overload_strategy.setCurrentText("drop_old")
+
+        self.txt_over_enter = QLineEdit("18")
+        self.txt_over_exit = QLineEdit("6")
+        self.txt_over_hard = QLineEdit("28")
+        self.txt_over_beamcap = QLineEdit("2")
+        self.txt_over_maxseg = QLineEdit("5.0")
+        self.txt_over_overlap = QLineEdit("120.0")
+
+        form.addRow("compute_type:", self.cmb_compute)
+        form.addRow("beam_size:", self.txt_beam)
+        form.addRow("endpoint_silence_ms:", self.txt_endpoint)
+        form.addRow("max_segment_s:", self.txt_maxseg)
+        form.addRow("overlap_ms:", self.txt_overlap)
+        form.addRow("vad_energy_threshold:", self.txt_vad_thr)
+        form.addRow("overload_strategy:", self.cmb_overload_strategy)
+        form.addRow("overload_enter_qsize:", self.txt_over_enter)
+        form.addRow("overload_exit_qsize:", self.txt_over_exit)
+        form.addRow("overload_hard_qsize:", self.txt_over_hard)
+        form.addRow("overload_beam_cap:", self.txt_over_beamcap)
+        form.addRow("overload_max_segment_s:", self.txt_over_maxseg)
+        form.addRow("overload_overlap_ms:", self.txt_over_overlap)
+
+        cfg_layout.addLayout(form)
+        root.addWidget(self.grp_asr_cfg)
 
         # ===== WAV row =====
         wav_row = QHBoxLayout()
@@ -381,6 +457,13 @@ class MainWindow(QWidget):
         drops_row.addWidget(self.lbl_drops, 1)
         root.addLayout(drops_row)
 
+        # ===== NEW: completeness row =====
+        comp_row = QHBoxLayout()
+        self.lbl_completeness = QLabel("Completeness: OK")
+        self.lbl_completeness.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        comp_row.addWidget(self.lbl_completeness, 1)
+        root.addLayout(comp_row)
+
         status_row = QHBoxLayout()
         self.lbl_status = QLabel("ready")
         self.lbl_status.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -398,8 +481,14 @@ class MainWindow(QWidget):
 
         # ===== timers =====
         self.ui_timer = QTimer(self)
-        self.ui_timer.setInterval(100)
+        self.ui_timer.setInterval(120)
         self.ui_timer.timeout.connect(self._tick_ui)
+
+        # autosave debounce
+        self._cfg_dirty = False
+        self._cfg_save_timer = QTimer(self)
+        self._cfg_save_timer.setInterval(350)
+        self._cfg_save_timer.timeout.connect(self._flush_config_if_dirty)
 
         # ===== signals =====
         self.btn_add.clicked.connect(self._add_device_dialog)
@@ -408,9 +497,282 @@ class MainWindow(QWidget):
         self.btn_stop.clicked.connect(self._stop_all)
         self.btn_clear.clicked.connect(self._clear_transcript)
 
+        self.cmb_profile.currentIndexChanged.connect(self._on_profile_changed)
+
+        # config widgets -> autosave
+        for w in [
+            self.chk_asr,
+            self.cmb_lang,
+            self.cmb_asr_mode,
+            self.cmb_model,
+            self.cmb_compute,
+            self.txt_beam,
+            self.txt_endpoint,
+            self.txt_maxseg,
+            self.txt_overlap,
+            self.txt_vad_thr,
+            self.cmb_overload_strategy,
+            self.txt_over_enter,
+            self.txt_over_exit,
+            self.txt_over_hard,
+            self.txt_over_beamcap,
+            self.txt_over_maxseg,
+            self.txt_over_overlap,
+            self.chk_wav,
+            self.txt_output,
+        ]:
+            self._wire_config_change(w)
+
         if sf is None:
             self.chk_wav.setEnabled(False)
             self.chk_wav.setChecked(False)
+
+        # ===== load config + apply profile =====
+        self._load_config_into_ui()
+        self._apply_profile_to_fields(self.cmb_profile.currentText(), force=True)
+        self._set_custom_enabled(self.cmb_profile.currentText() == self.PROFILE_CUSTOM)
+
+    # ---------------- config ----------------
+
+    def _wire_config_change(self, w) -> None:
+        # Best-effort connect (Qt widgets differ)
+        try:
+            if isinstance(w, QLineEdit):
+                w.textChanged.connect(lambda _t: self._mark_config_dirty())
+            elif isinstance(w, QCheckBox):
+                w.stateChanged.connect(lambda _s: self._mark_config_dirty())
+            elif isinstance(w, QComboBox):
+                w.currentIndexChanged.connect(lambda _i: self._mark_config_dirty())
+        except Exception:
+            pass
+
+    def _mark_config_dirty(self) -> None:
+        self._cfg_dirty = True
+        if not self._cfg_save_timer.isActive():
+            self._cfg_save_timer.start()
+
+    def _flush_config_if_dirty(self) -> None:
+        if not self._cfg_dirty:
+            self._cfg_save_timer.stop()
+            return
+        self._cfg_dirty = False
+        self._cfg_save_timer.stop()
+        try:
+            cfg = self._build_config_from_ui()
+            tmp = self.config_path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(self.config_path)
+        except Exception:
+            pass
+
+    def _build_config_from_ui(self) -> Dict[str, Any]:
+        return {
+            "version": CONFIG_VERSION,
+            "ui": {
+                "asr_enabled": bool(self.chk_asr.isChecked()),
+                "lang": str(self.cmb_lang.currentText()),
+                "asr_mode": int(self.cmb_asr_mode.currentIndex()),
+                "model": str(self.cmb_model.currentText()),
+                "profile": str(self.cmb_profile.currentText()),
+                "wav_enabled": bool(self.chk_wav.isChecked()),
+                "output_file": str(self.txt_output.text() or "").strip(),
+            },
+            "asr": {
+                "compute_type": str(self.cmb_compute.currentText()),
+                "beam_size": self._safe_int(self.txt_beam.text(), 5, 1, 20),
+                "endpoint_silence_ms": self._safe_float(self.txt_endpoint.text(), 650.0, 50.0, 5000.0),
+                "max_segment_s": self._safe_float(self.txt_maxseg.text(), 7.0, 1.0, 60.0),
+                "overlap_ms": self._safe_float(self.txt_overlap.text(), 200.0, 0.0, 2000.0),
+                "vad_energy_threshold": self._safe_float(self.txt_vad_thr.text(), 0.0055, 1e-5, 1.0),
+                "overload_strategy": str(self.cmb_overload_strategy.currentText()),
+                "overload_enter_qsize": self._safe_int(self.txt_over_enter.text(), 18, 1, 999),
+                "overload_exit_qsize": self._safe_int(self.txt_over_exit.text(), 6, 1, 999),
+                "overload_hard_qsize": self._safe_int(self.txt_over_hard.text(), 28, 1, 999),
+                "overload_beam_cap": self._safe_int(self.txt_over_beamcap.text(), 2, 1, 20),
+                "overload_max_segment_s": self._safe_float(self.txt_over_maxseg.text(), 5.0, 0.5, 60.0),
+                "overload_overlap_ms": self._safe_float(self.txt_over_overlap.text(), 120.0, 0.0, 2000.0),
+            },
+        }
+
+    def _load_config_into_ui(self) -> None:
+        if not self.config_path.exists():
+            return
+        try:
+            cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+
+        ui = cfg.get("ui", {}) if isinstance(cfg, dict) else {}
+        asr = cfg.get("asr", {}) if isinstance(cfg, dict) else {}
+
+        try:
+            if "asr_enabled" in ui:
+                self.chk_asr.setChecked(bool(ui.get("asr_enabled")))
+            if "lang" in ui and str(ui.get("lang")) in ("ru", "en", "auto"):
+                self.cmb_lang.setCurrentText(str(ui.get("lang")))
+            if "asr_mode" in ui:
+                idx = int(ui.get("asr_mode", 1))
+                self.cmb_asr_mode.setCurrentIndex(1 if idx == 1 else 0)
+            if "model" in ui and str(ui.get("model")) in ("large-v3", "medium", "small"):
+                self.cmb_model.setCurrentText(str(ui.get("model")))
+            if "profile" in ui and str(ui.get("profile")) in (
+                self.PROFILE_REALTIME, self.PROFILE_BALANCED, self.PROFILE_QUALITY, self.PROFILE_CUSTOM
+            ):
+                self.cmb_profile.setCurrentText(str(ui.get("profile")))
+            if "wav_enabled" in ui and sf is not None:
+                self.chk_wav.setChecked(bool(ui.get("wav_enabled")))
+            if "output_file" in ui:
+                val = str(ui.get("output_file") or "").strip()
+                if val:
+                    self.txt_output.setText(val)
+        except Exception:
+            pass
+
+        try:
+            if "compute_type" in asr:
+                v = str(asr.get("compute_type"))
+                if v:
+                    self.cmb_compute.setCurrentText(v)
+            if "beam_size" in asr:
+                self.txt_beam.setText(str(int(asr.get("beam_size"))))
+            if "endpoint_silence_ms" in asr:
+                self.txt_endpoint.setText(str(float(asr.get("endpoint_silence_ms"))))
+            if "max_segment_s" in asr:
+                self.txt_maxseg.setText(str(float(asr.get("max_segment_s"))))
+            if "overlap_ms" in asr:
+                self.txt_overlap.setText(str(float(asr.get("overlap_ms"))))
+            if "vad_energy_threshold" in asr:
+                self.txt_vad_thr.setText(str(float(asr.get("vad_energy_threshold"))))
+            if "overload_strategy" in asr:
+                v = str(asr.get("overload_strategy")).strip().lower()
+                self.cmb_overload_strategy.setCurrentText("keep_all" if v == "keep_all" else "drop_old")
+            if "overload_enter_qsize" in asr:
+                self.txt_over_enter.setText(str(int(asr.get("overload_enter_qsize"))))
+            if "overload_exit_qsize" in asr:
+                self.txt_over_exit.setText(str(int(asr.get("overload_exit_qsize"))))
+            if "overload_hard_qsize" in asr:
+                self.txt_over_hard.setText(str(int(asr.get("overload_hard_qsize"))))
+            if "overload_beam_cap" in asr:
+                self.txt_over_beamcap.setText(str(int(asr.get("overload_beam_cap"))))
+            if "overload_max_segment_s" in asr:
+                self.txt_over_maxseg.setText(str(float(asr.get("overload_max_segment_s"))))
+            if "overload_overlap_ms" in asr:
+                self.txt_over_overlap.setText(str(float(asr.get("overload_overlap_ms"))))
+        except Exception:
+            pass
+
+    # ---------------- profiles ----------------
+
+    def _profile_defaults(self, profile: str) -> Dict[str, Any]:
+        p = (profile or "").strip().lower()
+
+        # These are tuned to your current baseline (float16, no diarization)
+        if p == self.PROFILE_REALTIME.lower():
+            return {
+                "compute_type": "int8_float16",
+                "beam_size": 2,
+                "endpoint_silence_ms": 450.0,
+                "max_segment_s": 5.0,
+                "overlap_ms": 120.0,
+                "vad_energy_threshold": 0.0055,
+                "overload_strategy": "drop_old",
+                "overload_enter_qsize": 14,
+                "overload_exit_qsize": 5,
+                "overload_hard_qsize": 22,
+                "overload_beam_cap": 1,
+                "overload_max_segment_s": 3.5,
+                "overload_overlap_ms": 80.0,
+            }
+
+        if p == self.PROFILE_QUALITY.lower():
+            return {
+                "compute_type": "float16",
+                "beam_size": 6,
+                "endpoint_silence_ms": 900.0,
+                "max_segment_s": 12.0,
+                "overlap_ms": 320.0,
+                "vad_energy_threshold": 0.0052,
+                "overload_strategy": "keep_all",
+                "overload_enter_qsize": 22,
+                "overload_exit_qsize": 8,
+                "overload_hard_qsize": 40,
+                "overload_beam_cap": 3,
+                "overload_max_segment_s": 6.0,
+                "overload_overlap_ms": 160.0,
+            }
+
+        # Balanced (default)
+        return {
+            "compute_type": "float16",
+            "beam_size": 5,
+            "endpoint_silence_ms": 650.0,
+            "max_segment_s": 7.0,
+            "overlap_ms": 200.0,
+            "vad_energy_threshold": 0.0055,
+            "overload_strategy": "drop_old",
+            "overload_enter_qsize": 18,
+            "overload_exit_qsize": 6,
+            "overload_hard_qsize": 28,
+            "overload_beam_cap": 2,
+            "overload_max_segment_s": 5.0,
+            "overload_overlap_ms": 120.0,
+        }
+
+    def _apply_profile_to_fields(self, profile: str, *, force: bool = False) -> None:
+        # For non-custom profiles, overwrite fields with profile defaults.
+        if (profile or "") != self.PROFILE_CUSTOM:
+            d = self._profile_defaults(profile)
+            self.cmb_compute.setCurrentText(str(d["compute_type"]))
+            self.txt_beam.setText(str(int(d["beam_size"])))
+            self.txt_endpoint.setText(str(float(d["endpoint_silence_ms"])))
+            self.txt_maxseg.setText(str(float(d["max_segment_s"])))
+            self.txt_overlap.setText(str(float(d["overlap_ms"])))
+            self.txt_vad_thr.setText(str(float(d["vad_energy_threshold"])))
+
+            self.cmb_overload_strategy.setCurrentText(str(d["overload_strategy"]))
+            self.txt_over_enter.setText(str(int(d["overload_enter_qsize"])))
+            self.txt_over_exit.setText(str(int(d["overload_exit_qsize"])))
+            self.txt_over_hard.setText(str(int(d["overload_hard_qsize"])))
+            self.txt_over_beamcap.setText(str(int(d["overload_beam_cap"])))
+            self.txt_over_maxseg.setText(str(float(d["overload_max_segment_s"])))
+            self.txt_over_overlap.setText(str(float(d["overload_overlap_ms"])))
+
+            self._set_custom_enabled(False)
+            self._mark_config_dirty()
+            return
+
+        # Custom: keep current, just enable editing
+        self._set_custom_enabled(True)
+        if force:
+            self._mark_config_dirty()
+
+    def _set_custom_enabled(self, enabled: bool) -> None:
+        # keep profile dropdown always enabled
+        for w in [
+            self.cmb_compute,
+            self.txt_beam,
+            self.txt_endpoint,
+            self.txt_maxseg,
+            self.txt_overlap,
+            self.txt_vad_thr,
+            self.cmb_overload_strategy,
+            self.txt_over_enter,
+            self.txt_over_exit,
+            self.txt_over_hard,
+            self.txt_over_beamcap,
+            self.txt_over_maxseg,
+            self.txt_over_overlap,
+        ]:
+            try:
+                w.setEnabled(bool(enabled))
+            except Exception:
+                pass
+
+    def _on_profile_changed(self) -> None:
+        prof = self.cmb_profile.currentText()
+        self._apply_profile_to_fields(prof, force=True)
+
+    # ---------------- transcript/UI helpers ----------------
 
     def _clear_transcript(self) -> None:
         self.txt_tr.clear()
@@ -424,7 +786,7 @@ class MainWindow(QWidget):
             return "??:??:??"
 
     def _append_transcript_line(self, line: str) -> None:
-        max_chars = 200_000
+        max_chars = 260_000
         if self.txt_tr.document().characterCount() > max_chars:
             self.txt_tr.clear()
             self.txt_tr.append("[transcript cleared: too large]")
@@ -440,80 +802,6 @@ class MainWindow(QWidget):
         self._last_warn_ts = now
         tss = self._fmt_ts(now)
         self._append_transcript_line(f"[{tss}] WARNING: {msg}")
-
-    def _drain_asr_ui_events(self, limit: int = 80) -> None:
-        n = 0
-        while n < limit:
-            try:
-                ev = self.asr_ui_q.get_nowait()
-            except queue.Empty:
-                break
-            n += 1
-
-            typ = str(ev.get("type", ""))
-            ts = float(ev.get("ts", time.time()))
-            tss = self._fmt_ts(ts)
-
-            if typ == "utterance":
-                text = (ev.get("text") or "").strip()
-                if not text:
-                    continue
-                stream = str(ev.get("stream", ""))
-                overload = bool(ev.get("overload", False))
-                if overload:
-                    self._asr_overload_active = True
-                self._append_transcript_line(f"[{tss}] {stream}: {text}")
-
-            elif typ == "asr_overload":
-                active = bool(ev.get("active", False))
-                reason = str(ev.get("reason", ""))
-                qsz = ev.get("seg_qsize", None)
-                beam = ev.get("beam_cur", None)
-                self._asr_overload_active = active
-                if active:
-                    self._append_transcript_line(f"[{tss}] OVERLOAD ON: {reason} q={qsz} beam={beam}")
-                else:
-                    self._append_transcript_line(f"[{tss}] OVERLOAD OFF: {reason} q={qsz}")
-
-            elif typ == "segment_dropped":
-                stream = str(ev.get("stream", ""))
-                reason = str(ev.get("reason", ""))
-                qsz = ev.get("seg_qsize", None)
-                self._warn_throttle(f"ASR dropped segment ({stream}) reason={reason} q={qsz}")
-
-            elif typ == "segment_skipped_overload":
-                cnt = int(ev.get("count", 0))
-                qsz = ev.get("seg_qsize", None)
-                self._warn_throttle(f"ASR skipped {cnt} old segments due to overload (q={qsz})")
-
-            elif typ == "segment":
-                continue
-
-            elif typ == "asr_init_start":
-                model = ev.get("model", "")
-                device = ev.get("device", "")
-                self._append_transcript_line(f"[{tss}] ASR init start ({model}, {device})")
-
-            elif typ == "asr_started":
-                model = ev.get("model", "")
-                mode = ev.get("mode", "")
-                lang = ev.get("language", "")
-                self._append_transcript_line(f"[{tss}] ASR started (lang={lang}, mode={mode}, model={model})")
-
-            elif typ == "asr_init_ok":
-                model = ev.get("model", "")
-                self._append_transcript_line(f"[{tss}] ASR init OK ({model})")
-
-            elif typ == "error":
-                where = ev.get("where", "")
-                err = ev.get("error", "")
-                self._append_transcript_line(f"[{tss}] ERROR {where}: {err}")
-
-            elif typ == "asr_stopped":
-                self._append_transcript_line(f"[{tss}] ASR stopped")
-
-            else:
-                continue
 
     def _set_status(self, text: str) -> None:
         self.lbl_status.setText(text)
@@ -643,6 +931,94 @@ class MainWindow(QWidget):
         except Exception as e:
             self._set_status(f"Failed to add device: {e}")
 
+    # ---------------- ASR/UI event drain ----------------
+
+    def _drain_asr_ui_events(self, limit: int = 120) -> None:
+        n = 0
+        while n < limit:
+            try:
+                ev = self.asr_ui_q.get_nowait()
+            except queue.Empty:
+                break
+            n += 1
+
+            typ = str(ev.get("type", ""))
+            ts = float(ev.get("ts", time.time()))
+            tss = self._fmt_ts(ts)
+
+            if typ == "utterance":
+                text = (ev.get("text") or "").strip()
+                if not text:
+                    continue
+                stream = str(ev.get("stream", ""))
+                overload = bool(ev.get("overload", False))
+                if overload:
+                    self._asr_overload_active = True
+                self._append_transcript_line(f"[{tss}] {stream}: {text}")
+
+            elif typ == "asr_overload":
+                active = bool(ev.get("active", False))
+                reason = str(ev.get("reason", ""))
+                qsz = ev.get("seg_qsize", None)
+                beam = ev.get("beam_cur", None)
+                lag = ev.get("lag_s", None)
+                if bool(active):
+                    self._asr_overload_active = True
+                    self._append_transcript_line(f"[{tss}] OVERLOAD: {reason} q={qsz} beam={beam} lag={lag}")
+                else:
+                    self._asr_overload_active = False
+                    self._append_transcript_line(f"[{tss}] OVERLOAD OFF: {reason} q={qsz}")
+
+            elif typ == "segment_dropped":
+                stream = str(ev.get("stream", ""))
+                reason = str(ev.get("reason", ""))
+                qsz = ev.get("seg_qsize", None)
+                self._warn_throttle(f"ASR dropped segment ({stream}) reason={reason} q={qsz}")
+
+            elif typ == "segment_skipped_overload":
+                cnt = int(ev.get("count", 0))
+                qsz = ev.get("seg_qsize", None)
+                self._warn_throttle(f"ASR skipped {cnt} old segments due to overload (q={qsz})")
+
+            elif typ == "asr_metrics":
+                self._seg_dropped_total = int(ev.get("seg_dropped_total", self._seg_dropped_total))
+                self._seg_skipped_total = int(ev.get("seg_skipped_total", self._seg_skipped_total))
+                self._avg_latency_s = float(ev.get("avg_latency_s", self._avg_latency_s))
+                self._p95_latency_s = float(ev.get("p95_latency_s", self._p95_latency_s))
+                self._lag_s = float(ev.get("lag_s", self._lag_s))
+
+            elif typ == "segment":
+                continue
+
+            elif typ == "asr_init_start":
+                model = ev.get("model", "")
+                device = ev.get("device", "")
+                self._append_transcript_line(f"[{tss}] ASR init start ({model}, {device})")
+
+            elif typ == "asr_started":
+                model = ev.get("model", "")
+                mode = ev.get("mode", "")
+                lang = ev.get("language", "")
+                osx = ev.get("overload_strategy", "")
+                self._append_transcript_line(f"[{tss}] ASR started (lang={lang}, mode={mode}, model={model}, overload={osx})")
+
+            elif typ == "asr_init_ok":
+                model = ev.get("model", "")
+                self._append_transcript_line(f"[{tss}] ASR init OK ({model})")
+
+            elif typ == "error":
+                where = ev.get("where", "")
+                err = ev.get("error", "")
+                self._append_transcript_line(f"[{tss}] ERROR {where}: {err}")
+
+            elif typ == "asr_stopped":
+                self._append_transcript_line(f"[{tss}] ASR stopped")
+
+            else:
+                continue
+
+    # ---------------- start/stop ----------------
+
     def _start_all(self) -> None:
         if self._is_running():
             return
@@ -652,6 +1028,15 @@ class MainWindow(QWidget):
 
         self._asr_overload_active = False
         self._last_warn_ts = 0.0
+
+        self._tap_dropped_total = 0
+        self._seg_dropped_total = 0
+        self._seg_skipped_total = 0
+        self._avg_latency_s = 0.0
+        self._p95_latency_s = 0.0
+        self._lag_s = 0.0
+
+        self._desktop_silence_since_mono = None
 
         while True:
             try:
@@ -663,21 +1048,17 @@ class MainWindow(QWidget):
         for n in list(self.rows.keys()):
             self._apply_delay_from_ui(n)
 
-        # ===== NEW: configure tap mode BEFORE starting engine =====
         enabled_sources: List[str] = [n for n, r in self.rows.items() if r.enabled.isChecked()]
 
         if self.chk_asr.isChecked():
-            # Ensure tap is enabled only when ASR is enabled (reduces long-run overhead)
             self.engine.set_tap_queue(self.tap_q)
 
             mode = "split" if self.cmb_asr_mode.currentIndex() == 1 else "mix"
             if mode == "mix":
                 self.engine.set_tap_config(mode="mix", sources=None, drop_threshold=0.85)
             else:
-                # tap only the enabled sources (no mix)
                 self.engine.set_tap_config(mode="sources", sources=enabled_sources, drop_threshold=0.85)
         else:
-            # ASR off => no need to build/copy tap packets at all
             self.engine.set_tap_queue(None)
 
         try:
@@ -697,6 +1078,22 @@ class MainWindow(QWidget):
             asr_lang = None if lang_ui == "auto" else lang_ui
             prompt = self._get_asr_prompt(lang_ui)
 
+            # read profile settings (even if not editable, they’re already set by profile)
+            compute_type = str(self.cmb_compute.currentText() or "float16")
+            beam_size = self._safe_int(self.txt_beam.text(), 5, 1, 20)
+            endpoint_silence_ms = self._safe_float(self.txt_endpoint.text(), 650.0, 50.0, 5000.0)
+            max_segment_s = self._safe_float(self.txt_maxseg.text(), 7.0, 1.0, 60.0)
+            overlap_ms = self._safe_float(self.txt_overlap.text(), 200.0, 0.0, 2000.0)
+            vad_thr = self._safe_float(self.txt_vad_thr.text(), 0.0055, 1e-5, 1.0)
+
+            overload_strategy = str(self.cmb_overload_strategy.currentText() or "drop_old").strip().lower()
+            overload_enter = self._safe_int(self.txt_over_enter.text(), 18, 1, 999)
+            overload_exit = self._safe_int(self.txt_over_exit.text(), 6, 1, 999)
+            overload_hard = self._safe_int(self.txt_over_hard.text(), 28, 1, 999)
+            overload_beamcap = self._safe_int(self.txt_over_beamcap.text(), 2, 1, 20)
+            overload_maxseg = self._safe_float(self.txt_over_maxseg.text(), 5.0, 0.5, 60.0)
+            overload_overlap = self._safe_float(self.txt_over_overlap.text(), 120.0, 0.0, 2000.0)
+
             try:
                 self.asr = ASRPipeline(
                     tap_queue=self.tap_q,
@@ -705,25 +1102,26 @@ class MainWindow(QWidget):
                     mode=mode,
                     asr_model_name=model_name,
                     device="cuda",
-                    compute_type="float16",
-                    beam_size=5,
-                    endpoint_silence_ms=650.0,
-                    max_segment_s=7.0,
-                    overlap_ms=200.0,
-                    vad_energy_threshold=0.0055,
+                    compute_type=compute_type,
+                    beam_size=beam_size,
+                    endpoint_silence_ms=endpoint_silence_ms,
+                    max_segment_s=max_segment_s,
+                    overlap_ms=overlap_ms,
+                    vad_energy_threshold=vad_thr,
                     vad_hangover_ms=350,
                     vad_min_speech_ms=350,
 
                     diarization_enabled=False,
                     log_speaker_labels=False,
 
-                    overload_enter_qsize=18,
-                    overload_exit_qsize=6,
-                    overload_hard_drop_qsize=28,
+                    overload_strategy="keep_all" if overload_strategy == "keep_all" else "drop_old",
+                    overload_enter_qsize=overload_enter,
+                    overload_exit_qsize=overload_exit,
+                    overload_hard_drop_qsize=overload_hard,
                     overload_hold_s=2.5,
-                    overload_beam_cap=2,
-                    overload_overlap_ms=120.0,
-                    overload_max_segment_s=5.0,
+                    overload_beam_cap=overload_beamcap,
+                    overload_overlap_ms=overload_overlap,
+                    overload_max_segment_s=overload_maxseg,
 
                     utterance_enabled=True,
                     utterance_gap_s=0.85,
@@ -735,6 +1133,9 @@ class MainWindow(QWidget):
 
                     asr_language=asr_lang,
                     asr_initial_prompt=prompt,
+
+                    metrics_emit_interval_s=1.0,
+                    metrics_latency_window=200,
                 )
                 self.asr.start()
                 self.asr_running = True
@@ -757,9 +1158,11 @@ class MainWindow(QWidget):
 
         self.btn_add.setEnabled(False)
         self.chk_asr.setEnabled(False)
+        self.cmb_profile.setEnabled(False)
         self.cmb_lang.setEnabled(False)
         self.cmb_asr_mode.setEnabled(False)
         self.cmb_model.setEnabled(False)
+        self.grp_asr_cfg.setEnabled(False)
 
         self.chk_wav.setEnabled(False)
         self.txt_output.setEnabled(False)
@@ -785,7 +1188,6 @@ class MainWindow(QWidget):
             except Exception as e:
                 self._set_status(f"Engine stop error: {e}")
 
-        # optional: disable tap after stop (keeps idle overhead near zero)
         try:
             self.engine.set_tap_queue(None)
         except Exception:
@@ -798,9 +1200,12 @@ class MainWindow(QWidget):
 
         self.btn_add.setEnabled(True)
         self.chk_asr.setEnabled(True)
+        self.cmb_profile.setEnabled(True)
         self.cmb_lang.setEnabled(True)
         self.cmb_asr_mode.setEnabled(True)
         self.cmb_model.setEnabled(True)
+        self.grp_asr_cfg.setEnabled(True)
+        self._set_custom_enabled(self.cmb_profile.currentText() == self.PROFILE_CUSTOM)
 
         self.chk_wav.setEnabled(sf is not None)
         self.txt_output.setEnabled(True)
@@ -812,7 +1217,7 @@ class MainWindow(QWidget):
             r.meter.setValue(0)
             r.status.setText("stopped")
 
-        self._drain_asr_ui_events(limit=200)
+        self._drain_asr_ui_events(limit=300)
 
         werr = self.writer.last_error()
         if werr:
@@ -820,25 +1225,36 @@ class MainWindow(QWidget):
         else:
             self._set_status("stopped")
 
+        self._flush_config_if_dirty()
+
+    # ---------------- tick UI ----------------
+
     def _tick_ui(self) -> None:
         meters = self.engine.get_meters()
-        now = time.monotonic()
+        now_mono = time.monotonic()
 
+        # master
         mrms = float(meters["master"]["rms"])
         mlast = float(meters["master"]["last_ts"])
         self.master_meter.setValue(self._rms_to_pct(mrms))
-        self.master_status.setText("active" if (now - mlast) < 0.5 and mrms > 1e-4 else "silence")
+        self.master_status.setText("active" if (now_mono - mlast) < 0.6 and mrms > 1e-4 else "silence")
 
         drops = meters.get("drops", {})
         dropped_out = int(drops.get("dropped_out_blocks", 0))
         dropped_tap = int(drops.get("dropped_tap_blocks", 0))
+        self._tap_dropped_total = dropped_tap
+
         drained = self.writer.drained_blocks()
         self.lbl_drops.setText(f"drops: out={dropped_out} tap={dropped_tap} drained={drained}")
 
         if dropped_out > 0 or dropped_tap > 0:
             self._warn_throttle(f"Engine drops detected: out={dropped_out} tap={dropped_tap}", min_interval_s=2.0)
 
+        # sources
         srcs = meters.get("sources", {})
+        desktop_any_active = False
+        desktop_any_present = False
+
         for name, info in srcs.items():
             if name not in self.rows:
                 self._add_row(name)
@@ -860,7 +1276,7 @@ class MainWindow(QWidget):
                 r.delay_ms.setText(str(int(round(delay_ms))))
 
             r.meter.setValue(self._rms_to_pct(rms))
-            active = (now - last_ts) < 0.5 and rms > 1e-4
+            active = (now_mono - last_ts) < 0.6 and rms > 1e-4
 
             rate_warn = ""
             if src_rate and src_rate != self.fmt.sample_rate:
@@ -869,11 +1285,40 @@ class MainWindow(QWidget):
             state = "active" if active else "silence"
             r.status.setText(f"{state} buf={buf_frames} miss={miss_out} drop_in={drop_in} delay={int(round(delay_ms))}ms{rate_warn}")
 
-        self._drain_asr_ui_events(limit=80)
+            # silence alert target: any loopback named desktop_audio*
+            if str(name).startswith("desktop_audio"):
+                desktop_any_present = True
+                if rms > float(self._silence_eps):
+                    desktop_any_active = True
 
-        if self._is_running():
-            if self._asr_overload_active:
-                self.lbl_status.setText("running (ASR overload: degraded mode)")
+        # drain ASR events and update metrics
+        self._drain_asr_ui_events(limit=140)
+
+        # completeness label
+        ok = (self._tap_dropped_total <= 0) and (self._seg_dropped_total <= 0) and (self._seg_skipped_total <= 0)
+        status = "OK" if ok else "DROPS"
+        self.lbl_completeness.setText(
+            f"Completeness: {status} | tap_drop={self._tap_dropped_total} seg_drop={self._seg_dropped_total} "
+            f"seg_skip={self._seg_skipped_total} | avg_lat={self._avg_latency_s:.2f}s p95={self._p95_latency_s:.2f}s "
+            f"lag={self._lag_s:.2f}s"
+        )
+
+        # desktop silence alert
+        if self._is_running() and desktop_any_present:
+            if desktop_any_active:
+                self._desktop_silence_since_mono = None
+            else:
+                if self._desktop_silence_since_mono is None:
+                    self._desktop_silence_since_mono = now_mono
+                else:
+                    dur = float(now_mono - float(self._desktop_silence_since_mono))
+                    if dur >= float(self._silence_alert_s):
+                        self._warn_throttle(f"desktop_audio silence for {dur:.1f}s (rms<{self._silence_eps})", min_interval_s=4.0)
+
+        if self._is_running() and self._asr_overload_active:
+            self.lbl_status.setText("running (ASR overload: degraded mode)")
+
+    # ---------------- utils ----------------
 
     @staticmethod
     def _rms_to_pct(rms: float) -> int:
@@ -884,6 +1329,24 @@ class MainWindow(QWidget):
             x = 1.0
         pct = int((x ** 0.5) * 100.0)
         return max(0, min(100, pct))
+
+    @staticmethod
+    def _safe_int(s: str, default: int, lo: int, hi: int) -> int:
+        try:
+            v = int(str(s).strip())
+        except Exception:
+            v = int(default)
+        v = max(int(lo), min(int(hi), int(v)))
+        return int(v)
+
+    @staticmethod
+    def _safe_float(s: str, default: float, lo: float, hi: float) -> float:
+        try:
+            v = float(str(s).strip().replace(",", "."))
+        except Exception:
+            v = float(default)
+        v = max(float(lo), min(float(hi), float(v)))
+        return float(v)
 
     def closeEvent(self, event) -> None:
         try:
