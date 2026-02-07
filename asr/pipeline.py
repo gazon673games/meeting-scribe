@@ -5,7 +5,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
-from typing import Dict, Optional, Literal, List, Any
+from typing import Dict, Optional, Literal, List, Any, Tuple
 
 import numpy as np
 
@@ -80,7 +80,6 @@ class _PyannoteBackend:
         x = np.asarray(audio_16k, dtype=np.float32).reshape(-1)
         if x.size == 0:
             return []
-
         wav = self._torch.from_numpy(x).unsqueeze(0)
         diar = self._pipeline({"waveform": wav, "sample_rate": 16000})
 
@@ -91,14 +90,6 @@ class _PyannoteBackend:
 
 
 class _PreGainAGC:
-    """
-    Very simple AGC-lite to stabilize level before VAD.
-    Not a compressor; just slow gain toward target RMS with clamps.
-
-    target_rms: desirable RMS for speech-ish audio (0.04..0.08 typical in float32 [-1,1]).
-    max_gain: cap, to avoid amplifying noise too much.
-    alpha: how fast gain moves (smaller -> slower).
-    """
     def __init__(self, target_rms: float = 0.06, max_gain: float = 6.0, alpha: float = 0.02):
         self.target_rms = float(target_rms)
         self.max_gain = float(max_gain)
@@ -121,12 +112,87 @@ class _PreGainAGC:
         if r > 1e-7:
             desired = self.target_rms / r
             desired = max(1.0 / self.max_gain, min(self.max_gain, desired))
-            # smooth gain
             self.gain = (1.0 - self.alpha) * self.gain + self.alpha * desired
 
         y = x * float(self.gain)
-        # keep within range
         return np.clip(y, -1.0, 1.0).astype(np.float32, copy=False)
+
+
+def _norm_text(s: str) -> str:
+    s = (s or "").strip()
+    # normalize whitespace; keep punctuation as-is
+    s = " ".join(s.split())
+    return s
+
+
+def _trim_overlap(prev_text: str, cur_text: str, *, max_window: int = 80, min_match: int = 8) -> Tuple[str, int]:
+    """
+    Removes duplicated prefix from cur_text if it matches a suffix of prev_text.
+    Returns: (trimmed_text, removed_chars_count)
+    """
+    p = _norm_text(prev_text)
+    c = _norm_text(cur_text)
+
+    if not p or not c:
+        return (c, 0)
+
+    # compare on normalized, but we will trim on normalized too (fine for UI/logs)
+    ps = p[-max_window:]
+    best = 0
+    # find longest k such that ps[-k:] == c[:k]
+    max_k = min(len(ps), len(c))
+    for k in range(min(max_k, max_window), min_match - 1, -1):
+        if ps[-k:] == c[:k]:
+            best = k
+            break
+
+    if best > 0:
+        trimmed = c[best:].lstrip()
+        return (trimmed, best)
+
+    return (c, 0)
+
+
+@dataclass
+class _AdaptiveBeam:
+    """
+    Simple global adaptive beam controller.
+      - If backlog or latency ratio high -> decrease beam
+      - If stable/idle -> slowly increase beam
+    """
+    min_beam: int = 1
+    max_beam: int = 5
+    cur_beam: int = 5
+
+    backlog_hi: int = 12          # seg queue size to trigger downshift
+    backlog_lo: int = 2           # seg queue size to allow upshift
+    latency_ratio_hi: float = 1.1 # latency > dur * ratio -> downshift
+    latency_ratio_lo: float = 0.7 # latency < dur * ratio -> upshift
+
+    cool_down_s: float = 2.0
+    last_change_ts: float = 0.0
+
+    def maybe_update(self, *, seg_qsize: int, last_latency_s: float, last_dur_s: float, now: float) -> Tuple[int, Optional[str]]:
+        if (now - float(self.last_change_ts)) < float(self.cool_down_s):
+            return (int(self.cur_beam), None)
+
+        dur = max(1e-6, float(last_dur_s))
+        ratio = float(last_latency_s) / dur
+
+        reason = None
+
+        if seg_qsize >= int(self.backlog_hi) or ratio >= float(self.latency_ratio_hi):
+            if self.cur_beam > self.min_beam:
+                self.cur_beam -= 1
+                self.last_change_ts = now
+                reason = f"downshift (q={seg_qsize}, lat_ratio={ratio:.2f})"
+        elif seg_qsize <= int(self.backlog_lo) and ratio <= float(self.latency_ratio_lo):
+            if self.cur_beam < self.max_beam:
+                self.cur_beam += 1
+                self.last_change_ts = now
+                reason = f"upshift (q={seg_qsize}, lat_ratio={ratio:.2f})"
+
+        return (int(self.cur_beam), reason)
 
 
 class ASRPipeline:
@@ -156,11 +222,16 @@ class ASRPipeline:
         diar_window_s: float = 120.0,
         diar_chunk_s: float = 30.0,
         diar_step_s: float = 10.0,
-        # NEW: AGC-lite knobs
         agc_enabled: bool = True,
         agc_target_rms: float = 0.06,
         agc_max_gain: float = 6.0,
         agc_alpha: float = 0.02,
+        # NEW (Step 3): overlap text dedup + adaptive beam
+        text_dedup_enabled: bool = True,
+        text_dedup_window: int = 80,
+        adaptive_beam_enabled: bool = True,
+        adaptive_beam_min: int = 1,
+        adaptive_beam_max: Optional[int] = None,  # default -> beam_size
     ):
         self.tap_q = tap_queue
         self.project_root = project_root
@@ -212,12 +283,26 @@ class ASRPipeline:
         self._diar_last_run_ts: Dict[str, float] = {}
         self._timeline: Dict[str, List[DiarSegment]] = {}
 
-        # NEW: per-stream AGC-lite
         self._agc_enabled = bool(agc_enabled)
         self._agc_target_rms = float(agc_target_rms)
         self._agc_max_gain = float(agc_max_gain)
         self._agc_alpha = float(agc_alpha)
         self._agc: Dict[str, _PreGainAGC] = {}
+
+        # Step 3: overlap text dedup state (per stream)
+        self._text_dedup_enabled = bool(text_dedup_enabled)
+        self._text_dedup_window = int(text_dedup_window)
+        self._last_text: Dict[str, str] = {}
+
+        # Step 3: adaptive beam controller
+        self._adaptive_beam_enabled = bool(adaptive_beam_enabled)
+        maxb = int(adaptive_beam_max) if adaptive_beam_max is not None else int(self.beam_size)
+        maxb = max(1, maxb)
+        self._beam_ctl = _AdaptiveBeam(
+            min_beam=max(1, int(adaptive_beam_min)),
+            max_beam=maxb,
+            cur_beam=max(1, min(int(self.beam_size), maxb)),
+        )
 
         self.session_id = f"sess_{int(time.time())}"
         self.logger = ASRLogger(root=self.project_root, session_id=self.session_id, language=language)
@@ -253,8 +338,13 @@ class ASRPipeline:
                 "diarization_enabled": self._diar_enabled,
                 "diar_backend": self._diar_backend,
                 "agc_enabled": self._agc_enabled,
-                "agc_target_rms": self._agc_target_rms,
-                "agc_max_gain": self._agc_max_gain,
+                "text_dedup_enabled": self._text_dedup_enabled,
+                "adaptive_beam_enabled": self._adaptive_beam_enabled,
+                "adaptive_beam": {
+                    "min": self._beam_ctl.min_beam,
+                    "max": self._beam_ctl.max_beam,
+                    "cur": self._beam_ctl.cur_beam,
+                },
                 "ts": time.time(),
             }
         )
@@ -343,6 +433,8 @@ class ASRPipeline:
                 "noise_rms": vad.noise_rms(),
                 "agc_gain": float(agc.gain) if agc is not None else None,
                 "agc_in_rms": float(agc.last_in_rms) if agc is not None else None,
+                "beam_cur": int(self._beam_ctl.cur_beam),
+                "seg_qsize": int(self._seg_q.qsize()),
                 "ts": now,
             }
         )
@@ -377,7 +469,6 @@ class ASRPipeline:
         mono = stereo_to_mono(block_48k)
         x16 = resample_linear(mono, sample_rate, 16000)
 
-        # NEW: AGC-lite before VAD
         if self._agc_enabled:
             agc = self._agc.get(stream)
             if agc is not None:
@@ -590,43 +681,74 @@ class ASRPipeline:
                         diar = self._diarizers.get(seg.stream)
                         if diar is not None:
                             speaker, nsp, best_sim, created = diar.assign_with_debug(seg.audio_16k, ts=time.time())
-
                             if str(speaker).startswith("S_ERR"):
                                 derr = None
                                 try:
                                     derr = diar.last_error()
                                 except Exception:
                                     derr = None
-                                self._log_event(
-                                    {"type": "error", "where": "diar_embed", "stream": seg.stream, "error": derr or "unknown", "ts": time.time()}
-                                )
-
-                            self._log_event(
-                                {
-                                    "type": "diar_debug",
-                                    "stream": seg.stream,
-                                    "speaker": speaker,
-                                    "best_sim": best_sim,
-                                    "created_new": bool(created),
-                                    "n_speakers_window": nsp,
-                                    "seg_dur_s": float(seg.audio_16k.shape[0]) / 16000.0,
-                                    "ts": time.time(),
-                                }
-                            )
+                                self._log_event({"type": "error", "where": "diar_embed", "stream": seg.stream, "error": derr or "unknown", "ts": time.time()})
+                            self._log_event({"type": "diar_debug", "stream": seg.stream, "speaker": speaker, "best_sim": best_sim, "created_new": bool(created), "n_speakers_window": nsp, "seg_dur_s": float(seg.audio_16k.shape[0]) / 16000.0, "ts": time.time()})
                     except Exception as e:
                         self._log_event({"type": "error", "where": "diar_assign", "error": str(e), "ts": time.time()})
                         speaker = "S?"
 
+            seg_dur_s = max(1e-6, float(seg.audio_16k.shape[0]) / 16000.0)
+
+            # Adaptive beam selection based on backlog + recent latency ratio
+            beam_to_use = int(self._beam_ctl.cur_beam)
+
             t0 = time.time()
             try:
-                res = self._asr.transcribe(seg.audio_16k)
+                res = self._asr.transcribe(seg.audio_16k, beam_size=beam_to_use)
                 text = (res.get("text") or "").strip()
             except Exception as e:
-                self._log_event(
-                    {"type": "segment", "stream": seg.stream, "speaker": speaker, "t_start": seg.t_start, "t_end": seg.t_end, "text": "", "error": str(e), "ts": time.time()}
-                )
+                self._log_event({"type": "segment", "stream": seg.stream, "speaker": speaker, "t_start": seg.t_start, "t_end": seg.t_end, "text": "", "error": str(e), "ts": time.time()})
                 continue
 
+            latency_s = time.time() - t0
+
+            # Step 3: overlap text dedup
+            removed = 0
+            if self._text_dedup_enabled:
+                prev = self._last_text.get(seg.stream, "")
+                trimmed, removed = _trim_overlap(prev, text, max_window=self._text_dedup_window, min_match=8)
+                text = trimmed
+                if text:
+                    self._last_text[seg.stream] = _norm_text(prev + " " + text).strip()
+                else:
+                    # if we removed everything, keep prev as-is
+                    pass
+            else:
+                if text:
+                    self._last_text[seg.stream] = _norm_text(text)
+
+            # Step 3: adaptive beam update AFTER we know latency
+            if self._adaptive_beam_enabled:
+                now = time.time()
+                qsz = int(self._seg_q.qsize())
+                new_beam, reason = self._beam_ctl.maybe_update(
+                    seg_qsize=qsz,
+                    last_latency_s=float(latency_s),
+                    last_dur_s=float(seg_dur_s),
+                    now=now,
+                )
+                if reason:
+                    self._log_event({"type": "asr_beam_update", "beam": int(new_beam), "reason": reason, "ts": now})
+
             self._log_event(
-                {"type": "segment", "stream": seg.stream, "speaker": speaker, "t_start": seg.t_start, "t_end": seg.t_end, "text": text, "latency_s": time.time() - t0, "ts": time.time()}
+                {
+                    "type": "segment",
+                    "stream": seg.stream,
+                    "speaker": speaker,
+                    "t_start": seg.t_start,
+                    "t_end": seg.t_end,
+                    "text": text,
+                    "latency_s": float(latency_s),
+                    "seg_dur_s": float(seg_dur_s),
+                    "beam_used": int(beam_to_use),
+                    "dedup_removed_chars": int(removed),
+                    "seg_qsize": int(self._seg_q.qsize()),
+                    "ts": time.time(),
+                }
             )
