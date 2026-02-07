@@ -5,16 +5,17 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
-from typing import Dict, Optional, Literal, List, Any
+from typing import Dict, Optional, Literal, List, Any, Tuple
 
 import numpy as np
 
 from asr.logger import ASRLogger
 from asr.utils_audio import stereo_to_mono, resample_linear
 from asr.vad import EnergyVAD
-from asr.diarizer import OnlineDiarizer
+from asr.diarizer import OnlineDiarizer  # legacy fallback (resemblyzer-based)
 
 Mode = Literal["mix", "split"]
+DiarBackend = Literal["pyannote", "online"]
 
 
 @dataclass
@@ -22,16 +23,109 @@ class Segment:
     stream: str
     t_start: float
     t_end: float
-    audio_16k: np.ndarray  # mono float32
+    audio_16k: np.ndarray  # mono float32 @ 16k
+
+
+@dataclass
+class DiarSegment:
+    t0: float
+    t1: float
+    speaker: str
+
+
+def _pick_speaker(timeline: List[DiarSegment], t0: float, t1: float) -> str:
+    """
+    Pick speaker label by maximum overlap with [t0, t1].
+    """
+    best_label = "S?"
+    best_ov = 0.0
+    for s in timeline:
+        a = max(float(t0), float(s.t0))
+        b = min(float(t1), float(s.t1))
+        ov = b - a
+        if ov > best_ov:
+            best_ov = ov
+            best_label = str(s.speaker)
+    return best_label if best_ov > 0 else "S?"
+
+
+class _PyannoteBackend:
+    """
+    Optional diarization backend using pyannote.audio.
+
+    IMPORTANT:
+      - In many setups, pyannote requires downloading pretrained pipelines (often via HF).
+      - This class is loaded lazily; if import/model load fails, we disable pyannote diarization.
+    """
+
+    def __init__(self, device: str = "cuda") -> None:
+        try:
+            from pyannote.audio import Pipeline  # type: ignore
+        except Exception as e:
+            raise RuntimeError(
+                "pyannote.audio is not installed or failed to import.\n"
+                "Install example:\n"
+                "  pip install pyannote.audio\n"
+                f"Import error: {type(e).__name__}: {e}"
+            )
+
+        # torch is required by pyannote
+        try:
+            import torch  # type: ignore
+        except Exception as e:
+            raise RuntimeError(
+                "pyannote.audio requires torch.\n"
+                "Install torch compatible with your CUDA.\n"
+                f"Import error: {type(e).__name__}: {e}"
+            )
+
+        # Choose device
+        self._torch = torch
+        self._device = torch.device("cuda" if device == "cuda" and torch.cuda.is_available() else "cpu")
+
+        # NOTE: the pipeline id may differ depending on your installation / availability.
+        # This is the common pretrained diarization pipeline name.
+        self._pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization")
+        try:
+            self._pipeline.to(self._device)
+        except Exception:
+            # some versions don’t expose .to(); pipeline may still work on CPU
+            pass
+
+    def diarize(self, audio_16k: np.ndarray, *, t_offset: float = 0.0) -> List[DiarSegment]:
+        x = np.asarray(audio_16k, dtype=np.float32).reshape(-1)
+        if x.size == 0:
+            return []
+
+        # pyannote expects torch waveform
+        wav = self._torch.from_numpy(x).unsqueeze(0)  # (1, n)
+        sample_rate = 16000
+
+        diar = self._pipeline({"waveform": wav, "sample_rate": sample_rate})
+
+        out: List[DiarSegment] = []
+        # itertracks(yield_label=True) yields (turn, track, label)
+        for turn, _, label in diar.itertracks(yield_label=True):
+            out.append(
+                DiarSegment(
+                    t0=float(t_offset) + float(turn.start),
+                    t1=float(t_offset) + float(turn.end),
+                    speaker=str(label),
+                )
+            )
+        return out
 
 
 class ASRPipeline:
     """
     Consumes AudioEngine tap_queue packets and produces ASR events (+ optional diarization).
 
-    - VAD segments speech
-    - Faster-Whisper transcribes each segment
-    - Online diarizer assigns speaker labels per segment (per stream)
+    Pipeline:
+      - VAD segments speech on 16k mono
+      - Faster-Whisper transcribes each segment
+      - Diarization (optional):
+          * backend="pyannote": runs diarization on rolling audio window and assigns speaker by time overlap
+          * backend="online": legacy OnlineDiarizer (resemblyzer clustering) per segment
     """
 
     def __init__(
@@ -56,9 +150,14 @@ class ASRPipeline:
         vad_min_speech_ms: int = 350,
         # ---- diarization ----
         diarization_enabled: bool = True,
+        diar_backend: DiarBackend = "pyannote",
+        # (legacy online diarizer knobs; used only when diar_backend="online")
         diar_sim_threshold: float = 0.74,
         diar_min_segment_s: float = 1.0,
         diar_window_s: float = 120.0,
+        # (pyannote rolling window knobs; used only when diar_backend="pyannote")
+        diar_chunk_s: float = 30.0,
+        diar_step_s: float = 10.0,
     ):
         self.tap_q = tap_queue
         self.project_root = project_root
@@ -93,13 +192,27 @@ class ASRPipeline:
         self._vad_hangover_ms = int(vad_hangover_ms)
         self._vad_min_speech_ms = int(vad_min_speech_ms)
 
-        # diarization per stream
+        # diarization config
         self._diar_enabled = bool(diarization_enabled)
+        self._diar_backend: DiarBackend = diar_backend
+
+        # online diarizer params
         self._diar_sim_threshold = float(diar_sim_threshold)
         self._diar_min_segment_s = float(diar_min_segment_s)
         self._diar_window_s = float(diar_window_s)
-        self._diarizers: Dict[str, OnlineDiarizer] = {}
-        self._last_speaker_estimate_ts: float = 0.0
+
+        # pyannote rolling params
+        self._diar_chunk_s = float(diar_chunk_s)
+        self._diar_step_s = float(diar_step_s)
+
+        # diarization state
+        self._diarizers: Dict[str, OnlineDiarizer] = {}  # legacy per stream
+        self._pyannote: Optional[_PyannoteBackend] = None
+
+        self._ring16: Dict[str, np.ndarray] = {}         # rolling audio (16k)
+        self._ring_t0: Dict[str, float] = {}             # ring start time
+        self._diar_last_run_ts: Dict[str, float] = {}    # wall-clock gate for diarization recompute
+        self._timeline: Dict[str, List[DiarSegment]] = {}  # per stream
 
         self.session_id = f"sess_{int(time.time())}"
         self.logger = ASRLogger(
@@ -137,9 +250,12 @@ class ASRPipeline:
             "vad_hangover_ms": self._vad_hangover_ms,
             "vad_min_speech_ms": self._vad_min_speech_ms,
             "diarization_enabled": self._diar_enabled,
+            "diar_backend": self._diar_backend,
             "diar_sim_threshold": self._diar_sim_threshold,
             "diar_min_segment_s": self._diar_min_segment_s,
             "diar_window_s": self._diar_window_s,
+            "diar_chunk_s": self._diar_chunk_s,
+            "diar_step_s": self._diar_step_s,
             "ts": time.time(),
         })
 
@@ -195,12 +311,21 @@ class ASRPipeline:
             self._buf_t0[name] = None
             self._residual_16k[name] = np.zeros((0,), dtype=np.float32)
 
-        if self._diar_enabled and name not in self._diarizers:
+        # legacy online diarizer per stream
+        if self._diar_enabled and self._diar_backend == "online" and name not in self._diarizers:
             self._diarizers[name] = OnlineDiarizer(
                 similarity_threshold=self._diar_sim_threshold,
                 min_segment_s=self._diar_min_segment_s,
                 window_s=self._diar_window_s,
             )
+
+        # pyannote rolling buffers per stream
+        if self._diar_enabled and self._diar_backend == "pyannote":
+            if name not in self._ring16:
+                self._ring16[name] = np.zeros((0,), dtype=np.float32)
+                self._ring_t0[name] = 0.0
+                self._diar_last_run_ts[name] = 0.0
+                self._timeline[name] = []
 
     def _heartbeat(self, stream: str, vad: EnergyVAD) -> None:
         now = time.time()
@@ -218,6 +343,35 @@ class ASRPipeline:
 
     # ================= ingest =================
 
+    def _update_ring(self, stream: str, t0: float, t1: float, x16: np.ndarray) -> None:
+        """
+        Maintain a rolling 16k mono buffer per stream for pyannote diarization.
+        Uses engine time t0/t1 as approximation.
+        """
+        if not self._diar_enabled or self._diar_backend != "pyannote":
+            return
+
+        self._ensure_stream(stream)
+
+        x16 = np.asarray(x16, dtype=np.float32).reshape(-1)
+        if x16.size == 0:
+            return
+
+        ring = self._ring16.get(stream, np.zeros((0,), dtype=np.float32))
+        ring = np.concatenate([ring, x16]) if ring.size else x16
+
+        # ring time anchor: keep last chunk_s seconds and set ring_t0 accordingly
+        max_len = int(max(1.0, self._diar_chunk_s) * 16000)
+        if ring.size > max_len:
+            cut = ring.size - max_len
+            ring = ring[cut:]
+
+        # tie ring start to packet end time (t1) and ring length
+        ring_t0 = float(t1) - (ring.size / 16000.0)
+
+        self._ring16[stream] = ring
+        self._ring_t0[stream] = ring_t0
+
     def _feed_stream(
         self,
         stream: str,
@@ -231,6 +385,9 @@ class ASRPipeline:
 
         mono = stereo_to_mono(block_48k)
         x16 = resample_linear(mono, sample_rate, 16000)
+
+        # update rolling buffer for pyannote (uses full x16, not frame-chopped residual)
+        self._update_ring(stream, t0, t1, x16)
 
         frame_len = vad.frame_len
         res = self._residual_16k[stream]
@@ -298,7 +455,7 @@ class ASRPipeline:
         })
 
         try:
-            self._seg_q.put_nowait(Segment(stream, t_start, t_end, audio))
+            self._seg_q.put_nowait(Segment(stream, float(t_start), float(t_end), audio))
         except queue.Full:
             self._log_event({
                 "type": "segment_dropped",
@@ -356,6 +513,51 @@ class ASRPipeline:
                     if isinstance(blk, np.ndarray):
                         self._feed_stream(str(n), t0, t1, blk)
 
+    # ================= diarization helpers =================
+
+    def _init_diarization_backend(self) -> None:
+        if not self._diar_enabled:
+            return
+
+        if self._diar_backend == "pyannote":
+            try:
+                self._pyannote = _PyannoteBackend(device=self.device)
+                self._log_event({"type": "diar_init_ok", "backend": "pyannote", "ts": time.time()})
+                return
+            except Exception as e:
+                self._log_event({"type": "error", "where": "diar_init", "error": str(e), "ts": time.time()})
+                # fallback to legacy online diarizer
+                self._diar_backend = "online"
+                self._pyannote = None
+                self._log_event({"type": "diar_fallback", "backend": "online", "ts": time.time()})
+
+        if self._diar_backend == "online":
+            # OnlineDiarizer backends are per-stream and lazily created in _ensure_stream.
+            self._log_event({"type": "diar_init_ok", "backend": "online", "ts": time.time()})
+
+    def _maybe_update_pyannote_timeline(self, stream: str) -> None:
+        if not self._diar_enabled or self._diar_backend != "pyannote" or self._pyannote is None:
+            return
+
+        now = time.time()
+        last = float(self._diar_last_run_ts.get(stream, 0.0))
+        if (now - last) < max(0.5, float(self._diar_step_s)):
+            return
+
+        ring = self._ring16.get(stream)
+        if ring is None or ring.size < int(6.0 * 16000):  # avoid too-short diarization
+            return
+
+        t0 = float(self._ring_t0.get(stream, 0.0))
+        try:
+            tl = self._pyannote.diarize(ring, t_offset=t0)
+            self._timeline[stream] = tl
+            self._diar_last_run_ts[stream] = now
+        except Exception as e:
+            self._log_event({"type": "error", "where": "diar_run", "error": str(e), "ts": time.time()})
+            # disable to avoid spamming
+            self._diar_enabled = False
+
     # ================= ASR worker =================
 
     def _worker_loop_safe(self) -> None:
@@ -363,21 +565,6 @@ class ASRPipeline:
             self._worker_loop()
         except Exception as e:
             self._log_event({"type": "error", "where": "worker", "error": str(e), "ts": time.time()})
-
-    def _maybe_emit_speaker_estimate(self, stream: str, n_est: Optional[int]) -> None:
-        now = time.time()
-        if now - self._last_speaker_estimate_ts < 2.0:
-            return
-        self._last_speaker_estimate_ts = now
-        if n_est is None:
-            return
-        self._log_event({
-            "type": "speaker_estimate",
-            "stream": stream,
-            "n_speakers": int(n_est),
-            "window_s": float(self._diar_window_s),
-            "ts": now,
-        })
 
     def _worker_loop(self) -> None:
         self._log_event({
@@ -403,16 +590,8 @@ class ASRPipeline:
             self._log_event({"type": "error", "where": "asr_init", "error": str(e), "ts": time.time()})
             return
 
-        # ---- init diarization ONCE (not per segment) ----
-        if self._diar_enabled:
-            try:
-                # constructs encoder; will fail fast if torch/resemblyzer broken
-                from asr.diarizer import _ResemblyzerBackend  # noqa
-                _ResemblyzerBackend()
-                self._log_event({"type": "diar_init_ok", "ts": time.time()})
-            except Exception as e:
-                self._log_event({"type": "error", "where": "diar_init", "error": str(e), "ts": time.time()})
-                self._diar_enabled = False
+        # init diarization backend (pyannote or online fallback)
+        self._init_diarization_backend()
 
         while not self._stop.is_set():
             try:
@@ -420,20 +599,27 @@ class ASRPipeline:
             except queue.Empty:
                 continue
 
-            # ---- diarization per segment ----
             speaker = "S?"
-            n_est: Optional[int] = None
-            if self._diar_enabled:
-                try:
-                    diar = self._diarizers.get(seg.stream)
-                    if diar is not None:
-                        speaker, n_est = diar.assign(seg.audio_16k, ts=time.time())
-                        self._maybe_emit_speaker_estimate(seg.stream, n_est)
-                except Exception as e:
-                    self._log_event({"type": "error", "where": "diar_assign", "error": str(e), "ts": time.time()})
-                    speaker = "S?"
-                    n_est = None
 
+            # diarization
+            if self._diar_enabled:
+                if self._diar_backend == "pyannote":
+                    # update rolling diarization timeline and pick speaker by overlap
+                    self._maybe_update_pyannote_timeline(seg.stream)
+                    tl = self._timeline.get(seg.stream, [])
+                    speaker = _pick_speaker(tl, seg.t_start, seg.t_end)
+
+                else:
+                    # legacy online per-segment diarizer (resemblyzer)
+                    try:
+                        diar = self._diarizers.get(seg.stream)
+                        if diar is not None:
+                            speaker, _ = diar.assign(seg.audio_16k, ts=time.time())
+                    except Exception as e:
+                        self._log_event({"type": "error", "where": "diar_assign", "error": str(e), "ts": time.time()})
+                        speaker = "S?"
+
+            # ASR
             t0 = time.time()
             try:
                 res = self._asr.transcribe(seg.audio_16k)
