@@ -652,25 +652,27 @@ class MainWindow(QWidget):
                     project_root=self.project_root,
                     language="ru",
                     mode=mode,
-                    source_names=None,
                     asr_model_name=model_name,
                     device="cuda",
-                    compute_type="float16",  # <-- максимум качества на RTX 4060
-                    beam_size=5,  # <-- качество/скорость баланс
+                    compute_type="float16",
+                    beam_size=5,
 
-                    # ---- сегментация под спикеров (важнее, чем “красиво для ASR”) ----
                     endpoint_silence_ms=650.0,
                     max_segment_s=7.0,
                     overlap_ms=200.0,
 
-                    # ---- VAD ----
                     vad_energy_threshold=0.0055,
                     vad_hangover_ms=350,
                     vad_min_speech_ms=350,
 
-                    # ---- diarization ----
                     diarization_enabled=True,
-                    diar_sim_threshold=0.78,  # было 0.74 → слишком “липко”
+                    diar_backend="online",  # <--- ДОБАВИТЬ ЯВНО
+                    diar_chunk_s=30.0,  # <--- ДОБАВИТЬ
+                    diar_step_s=10.0,  # <--- ДОБАВИТЬ
+
+                    # эти параметры имеют смысл ТОЛЬКО для online backend;
+                    # если используешь pyannote, можешь их убрать чтобы не путали
+                    diar_sim_threshold=0.78,
                     diar_min_segment_s=1.6,
                     diar_window_s=120.0,
 
