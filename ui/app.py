@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
 
 from PySide6.QtGui import QTextCursor
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal, QObject
 from PySide6.QtWidgets import (
     QApplication,
     QWidget,
@@ -28,7 +28,6 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QDialogButtonBox,
     QTextEdit,
-    QSizePolicy,
 )
 
 import numpy as np
@@ -39,6 +38,7 @@ from audio.engine import AudioEngine, AudioFormat
 from audio.sources.wasapi_loopback import WasapiLoopbackSource
 from audio.sources.microphone import MicrophoneSource
 from asr.pipeline import ASRPipeline
+from asr.offline_runner import OfflineRunner, OfflineProfile
 
 try:
     import soundfile as sf
@@ -117,6 +117,10 @@ class WriterThread(threading.Thread):
     def is_recording(self) -> bool:
         with self._lock:
             return bool(self._recording)
+
+    def target_path(self) -> Optional[Path]:
+        with self._lock:
+            return self._target_path
 
     def last_error(self) -> Optional[str]:
         with self._lock:
@@ -276,6 +280,11 @@ class DevicePickerDialog(QDialog):
         return t, token
 
 
+class _UiSignals(QObject):
+    offline_done = Signal(str)   # message to append
+    offline_error = Signal(str)  # error to append
+
+
 class MainWindow(QWidget):
     PROFILE_REALTIME = "Realtime"
     PROFILE_BALANCED = "Balanced"
@@ -285,7 +294,7 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Voice2TextTest — Audio Mixer + ASR")
-        self.resize(1180, 820)
+        self.resize(1180, 860)
 
         self.project_root = Path(__file__).resolve().parents[1]
         self.config_path = self.project_root / "config.json"
@@ -305,12 +314,16 @@ class MainWindow(QWidget):
         self.asr: Optional[ASRPipeline] = None
         self.asr_running: bool = False
 
+        # Step 6: always keep a master WAV for the session (for offline pass)
+        self._session_master_wav: Optional[Path] = None
+        self._session_id_for_files: str = f"sess_{int(time.time())}"
+
         self.output_name = "capture_mix.wav"
 
         self._asr_overload_active: bool = False
         self._last_warn_ts: float = 0.0
 
-        # ===== NEW: session metrics mirror (UI side) =====
+        # metrics mirror
         self._tap_dropped_total: int = 0
         self._seg_dropped_total: int = 0
         self._seg_skipped_total: int = 0
@@ -318,10 +331,18 @@ class MainWindow(QWidget):
         self._p95_latency_s: float = 0.0
         self._lag_s: float = 0.0
 
-        # ===== NEW: silence alert tracking =====
+        # silence alert tracking
         self._silence_eps = 1e-4
         self._silence_alert_s = 15.0
         self._desktop_silence_since_mono: Optional[float] = None
+
+        # UI filtering / long-run
+        self._longrun_interval_ms = 250
+
+        self._sig = _UiSignals()
+        self._sig.offline_done.connect(self._on_offline_done)
+        self._sig.offline_error.connect(self._on_offline_error)
+        self._offline_thread: Optional[threading.Thread] = None
 
         # ===== UI =====
         root = QVBoxLayout(self)
@@ -329,6 +350,11 @@ class MainWindow(QWidget):
         top = QHBoxLayout()
         self.btn_add = QPushButton("Add device…")
         top.addWidget(self.btn_add)
+
+        self.chk_longrun = QCheckBox("Long-run mode (lighter UI)")
+        self.chk_longrun.setChecked(True)
+        top.addWidget(self.chk_longrun)
+
         top.addStretch(1)
         root.addLayout(top)
 
@@ -365,7 +391,7 @@ class MainWindow(QWidget):
         asr_row.addStretch(1)
         root.addLayout(asr_row)
 
-        # ===== NEW: profile settings group =====
+        # ===== profile settings group =====
         self.grp_asr_cfg = QGroupBox("ASR settings (Profile)")
         cfg_layout = QVBoxLayout(self.grp_asr_cfg)
         form = QFormLayout()
@@ -409,10 +435,23 @@ class MainWindow(QWidget):
         cfg_layout.addLayout(form)
         root.addWidget(self.grp_asr_cfg)
 
+        # ===== Offline pass row (Step 6) =====
+        off_row = QHBoxLayout()
+        self.chk_offline = QCheckBox("Offline pass on Stop (quality)")
+        self.chk_offline.setChecked(True)
+        off_row.addWidget(self.chk_offline)
+
+        self.chk_transcript_file = QCheckBox("Also write realtime transcript to file")
+        self.chk_transcript_file.setChecked(True)
+        off_row.addWidget(self.chk_transcript_file)
+
+        off_row.addStretch(1)
+        root.addLayout(off_row)
+
         # ===== WAV row =====
         wav_row = QHBoxLayout()
         self.chk_wav = QCheckBox("Write WAV (master mix)")
-        self.chk_wav.setChecked(False)
+        self.chk_wav.setChecked(True)
         wav_row.addWidget(self.chk_wav)
 
         wav_row.addWidget(QLabel("Output file (project root):"))
@@ -457,7 +496,6 @@ class MainWindow(QWidget):
         drops_row.addWidget(self.lbl_drops, 1)
         root.addLayout(drops_row)
 
-        # ===== NEW: completeness row =====
         comp_row = QHBoxLayout()
         self.lbl_completeness = QLabel("Completeness: OK")
         self.lbl_completeness.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -471,7 +509,7 @@ class MainWindow(QWidget):
         root.addLayout(status_row)
 
         # ===== transcript =====
-        self.grp_tr = QGroupBox("Transcript")
+        self.grp_tr = QGroupBox("Transcript (utterances + important events)")
         tr_layout = QVBoxLayout(self.grp_tr)
         self.txt_tr = QTextEdit()
         self.txt_tr.setReadOnly(True)
@@ -499,7 +537,6 @@ class MainWindow(QWidget):
 
         self.cmb_profile.currentIndexChanged.connect(self._on_profile_changed)
 
-        # config widgets -> autosave
         for w in [
             self.chk_asr,
             self.cmb_lang,
@@ -520,12 +557,17 @@ class MainWindow(QWidget):
             self.txt_over_overlap,
             self.chk_wav,
             self.txt_output,
+            self.chk_longrun,
+            self.chk_offline,
+            self.chk_transcript_file,
         ]:
             self._wire_config_change(w)
 
         if sf is None:
             self.chk_wav.setEnabled(False)
             self.chk_wav.setChecked(False)
+            self.chk_offline.setEnabled(False)
+            self.chk_offline.setChecked(False)
 
         # ===== load config + apply profile =====
         self._load_config_into_ui()
@@ -535,7 +577,6 @@ class MainWindow(QWidget):
     # ---------------- config ----------------
 
     def _wire_config_change(self, w) -> None:
-        # Best-effort connect (Qt widgets differ)
         try:
             if isinstance(w, QLineEdit):
                 w.textChanged.connect(lambda _t: self._mark_config_dirty())
@@ -576,6 +617,9 @@ class MainWindow(QWidget):
                 "profile": str(self.cmb_profile.currentText()),
                 "wav_enabled": bool(self.chk_wav.isChecked()),
                 "output_file": str(self.txt_output.text() or "").strip(),
+                "longrun": bool(self.chk_longrun.isChecked()),
+                "offline_on_stop": bool(self.chk_offline.isChecked()),
+                "realtime_transcript_file": bool(self.chk_transcript_file.isChecked()),
             },
             "asr": {
                 "compute_type": str(self.cmb_compute.currentText()),
@@ -625,6 +669,12 @@ class MainWindow(QWidget):
                 val = str(ui.get("output_file") or "").strip()
                 if val:
                     self.txt_output.setText(val)
+            if "longrun" in ui:
+                self.chk_longrun.setChecked(bool(ui.get("longrun")))
+            if "offline_on_stop" in ui and sf is not None:
+                self.chk_offline.setChecked(bool(ui.get("offline_on_stop")))
+            if "realtime_transcript_file" in ui:
+                self.chk_transcript_file.setChecked(bool(ui.get("realtime_transcript_file")))
         except Exception:
             pass
 
@@ -665,8 +715,6 @@ class MainWindow(QWidget):
 
     def _profile_defaults(self, profile: str) -> Dict[str, Any]:
         p = (profile or "").strip().lower()
-
-        # These are tuned to your current baseline (float16, no diarization)
         if p == self.PROFILE_REALTIME.lower():
             return {
                 "compute_type": "int8_float16",
@@ -683,7 +731,6 @@ class MainWindow(QWidget):
                 "overload_max_segment_s": 3.5,
                 "overload_overlap_ms": 80.0,
             }
-
         if p == self.PROFILE_QUALITY.lower():
             return {
                 "compute_type": "float16",
@@ -700,8 +747,6 @@ class MainWindow(QWidget):
                 "overload_max_segment_s": 6.0,
                 "overload_overlap_ms": 160.0,
             }
-
-        # Balanced (default)
         return {
             "compute_type": "float16",
             "beam_size": 5,
@@ -719,7 +764,6 @@ class MainWindow(QWidget):
         }
 
     def _apply_profile_to_fields(self, profile: str, *, force: bool = False) -> None:
-        # For non-custom profiles, overwrite fields with profile defaults.
         if (profile or "") != self.PROFILE_CUSTOM:
             d = self._profile_defaults(profile)
             self.cmb_compute.setCurrentText(str(d["compute_type"]))
@@ -741,13 +785,11 @@ class MainWindow(QWidget):
             self._mark_config_dirty()
             return
 
-        # Custom: keep current, just enable editing
         self._set_custom_enabled(True)
         if force:
             self._mark_config_dirty()
 
     def _set_custom_enabled(self, enabled: bool) -> None:
-        # keep profile dropdown always enabled
         for w in [
             self.cmb_compute,
             self.txt_beam,
@@ -795,6 +837,18 @@ class MainWindow(QWidget):
         self.txt_tr.moveCursor(QTextCursor.End)
         self.txt_tr.ensureCursorVisible()
 
+        # Step 5: optional separate realtime transcript log
+        if self.chk_transcript_file.isChecked():
+            try:
+                p = self._realtime_transcript_path()
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(self.txt_tr.toPlainText() + "\n", encoding="utf-8")
+            except Exception:
+                pass
+
+    def _realtime_transcript_path(self) -> Path:
+        return self.project_root / "logs" / f"realtime_{self._session_id_for_files}.txt"
+
     def _warn_throttle(self, msg: str, *, min_interval_s: float = 1.2) -> None:
         now = time.time()
         if (now - float(self._last_warn_ts)) < float(min_interval_s):
@@ -817,6 +871,12 @@ class MainWindow(QWidget):
         if not name.lower().endswith(".wav"):
             name += ".wav"
         return self.project_root / name
+
+    def _session_master_wav_path(self) -> Path:
+        # Step 6: always write a master WAV under recordings/ for offline quality
+        rec_dir = self.project_root / "recordings"
+        rec_dir.mkdir(parents=True, exist_ok=True)
+        return rec_dir / f"master_{self._session_id_for_files}.wav"
 
     def _on_output_changed(self, _text: str) -> None:
         if self._is_running() and self.chk_wav.isChecked():
@@ -933,7 +993,7 @@ class MainWindow(QWidget):
 
     # ---------------- ASR/UI event drain ----------------
 
-    def _drain_asr_ui_events(self, limit: int = 120) -> None:
+    def _drain_asr_ui_events(self, limit: int = 140) -> None:
         n = 0
         while n < limit:
             try:
@@ -946,6 +1006,7 @@ class MainWindow(QWidget):
             ts = float(ev.get("ts", time.time()))
             tss = self._fmt_ts(ts)
 
+            # Step 5: keep QTextEdit minimal: utterance + key lifecycle/errors/overload.
             if typ == "utterance":
                 text = (ev.get("text") or "").strip()
                 if not text:
@@ -986,9 +1047,7 @@ class MainWindow(QWidget):
                 self._avg_latency_s = float(ev.get("avg_latency_s", self._avg_latency_s))
                 self._p95_latency_s = float(ev.get("p95_latency_s", self._p95_latency_s))
                 self._lag_s = float(ev.get("lag_s", self._lag_s))
-
-            elif typ == "segment":
-                continue
+                # do not print
 
             elif typ == "asr_init_start":
                 model = ev.get("model", "")
@@ -1015,7 +1074,61 @@ class MainWindow(QWidget):
                 self._append_transcript_line(f"[{tss}] ASR stopped")
 
             else:
+                # drop everything else from QTextEdit (segment, audio_seen, diar_debug, etc.)
                 continue
+
+    # ---------------- offline pass ----------------
+
+    def _start_offline_pass(self, wav_path: Path) -> None:
+        if not self.chk_offline.isChecked():
+            return
+        if sf is None:
+            return
+        if not wav_path.exists():
+            self._append_transcript_line(f"[{self._fmt_ts(time.time())}] Offline pass skipped: WAV not found: {wav_path}")
+            return
+
+        # avoid stacking multiple offline runs
+        if self._offline_thread is not None and self._offline_thread.is_alive():
+            self._append_transcript_line(f"[{self._fmt_ts(time.time())}] Offline pass already running.")
+            return
+
+        # quality profile (independent from realtime profile)
+        lang_ui = self._get_asr_lang()
+        asr_lang = None if lang_ui == "auto" else lang_ui
+        prompt = self._get_asr_prompt(lang_ui)
+
+        profile = OfflineProfile(
+            model_name="large-v3",
+            device="cuda",
+            compute_type="float16",
+            beam_size=6,
+            language=asr_lang,
+            initial_prompt=prompt,
+            vad_filter=True,
+            condition_on_previous_text=True,
+        )
+
+        out_txt = self.project_root / "logs" / f"offline_{self._session_id_for_files}.txt"
+        out_jsonl = self.project_root / "logs" / f"offline_{self._session_id_for_files}.jsonl"
+
+        def _run() -> None:
+            try:
+                runner = OfflineRunner(project_root=self.project_root)
+                p = runner.run(wav_path, out_txt=out_txt, out_jsonl=out_jsonl, profile=profile)
+                self._sig.offline_done.emit(f"Offline transcript saved: {p}")
+            except Exception as e:
+                self._sig.offline_error.emit(f"Offline pass failed: {type(e).__name__}: {e}")
+
+        self._append_transcript_line(f"[{self._fmt_ts(time.time())}] Offline pass started (quality)…")
+        self._offline_thread = threading.Thread(target=_run, name="offline-asr", daemon=True)
+        self._offline_thread.start()
+
+    def _on_offline_done(self, msg: str) -> None:
+        self._append_transcript_line(f"[{self._fmt_ts(time.time())}] {msg}")
+
+    def _on_offline_error(self, msg: str) -> None:
+        self._append_transcript_line(f"[{self._fmt_ts(time.time())}] {msg}")
 
     # ---------------- start/stop ----------------
 
@@ -1025,6 +1138,9 @@ class MainWindow(QWidget):
         if len(self.rows) == 0:
             self._set_status("Add at least one device first.")
             return
+
+        self._session_id_for_files = f"sess_{int(time.time())}"
+        self._session_master_wav = None
 
         self._asr_overload_active = False
         self._last_warn_ts = 0.0
@@ -1044,7 +1160,6 @@ class MainWindow(QWidget):
             except queue.Empty:
                 break
 
-        # apply delays from UI
         for n in list(self.rows.keys()):
             self._apply_delay_from_ui(n)
 
@@ -1052,7 +1167,6 @@ class MainWindow(QWidget):
 
         if self.chk_asr.isChecked():
             self.engine.set_tap_queue(self.tap_q)
-
             mode = "split" if self.cmb_asr_mode.currentIndex() == 1 else "mix"
             if mode == "mix":
                 self.engine.set_tap_config(mode="mix", sources=None, drop_threshold=0.85)
@@ -1067,6 +1181,9 @@ class MainWindow(QWidget):
             self._set_status(f"Engine start failed: {e}")
             return
 
+        # Step 5: lighter timer in long-run
+        self.ui_timer.setInterval(self._longrun_interval_ms if self.chk_longrun.isChecked() else 120)
+
         self.asr_running = False
         self.asr = None
 
@@ -1078,7 +1195,6 @@ class MainWindow(QWidget):
             asr_lang = None if lang_ui == "auto" else lang_ui
             prompt = self._get_asr_prompt(lang_ui)
 
-            # read profile settings (even if not editable, they’re already set by profile)
             compute_type = str(self.cmb_compute.currentText() or "float16")
             beam_size = self._safe_int(self.txt_beam.text(), 5, 1, 20)
             endpoint_silence_ms = self._safe_float(self.txt_endpoint.text(), 650.0, 50.0, 5000.0)
@@ -1110,10 +1226,8 @@ class MainWindow(QWidget):
                     vad_energy_threshold=vad_thr,
                     vad_hangover_ms=350,
                     vad_min_speech_ms=350,
-
                     diarization_enabled=False,
                     log_speaker_labels=False,
-
                     overload_strategy="keep_all" if overload_strategy == "keep_all" else "drop_old",
                     overload_enter_qsize=overload_enter,
                     overload_exit_qsize=overload_exit,
@@ -1122,7 +1236,6 @@ class MainWindow(QWidget):
                     overload_beam_cap=overload_beamcap,
                     overload_overlap_ms=overload_overlap,
                     overload_max_segment_s=overload_maxseg,
-
                     utterance_enabled=True,
                     utterance_gap_s=0.85,
                     utterance_max_s=18.0,
@@ -1130,10 +1243,8 @@ class MainWindow(QWidget):
                     log_max_bytes=25 * 1024 * 1024,
                     log_backup_count=5,
                     ui_queue=self.asr_ui_q,
-
                     asr_language=asr_lang,
                     asr_initial_prompt=prompt,
-
                     metrics_emit_interval_s=1.0,
                     metrics_latency_window=200,
                 )
@@ -1142,17 +1253,19 @@ class MainWindow(QWidget):
             except Exception as e:
                 self._set_status(f"ASR start failed: {e}")
 
-        if self.chk_wav.isChecked():
-            if sf is None:
-                self._set_status("WAV disabled: install soundfile.")
-            else:
-                out_path = self._current_output_path()
-                self.output_name = out_path.name
-                try:
-                    self.writer.start_recording(out_path, self.fmt)
-                except Exception as e:
-                    self._set_status(f"WAV start failed: {e}")
+        # Step 6: Always write a master WAV (needed for offline pass)
+        if sf is not None:
+            try:
+                self._session_master_wav = self._session_master_wav_path()
+                self.writer.start_recording(self._session_master_wav, self.fmt)
+            except Exception as e:
+                self._set_status(f"Master WAV start failed: {e}")
+                self._session_master_wav = None
 
+        # Optional: also write user-named WAV in project root (legacy behavior)
+        # (To keep single writer thread simple: we only do master WAV. If user wants it in root,
+        #  we copy on Stop when possible.)
+        # We keep the checkbox for compatibility but it now controls "copy to root name on stop".
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
 
@@ -1163,14 +1276,20 @@ class MainWindow(QWidget):
         self.cmb_asr_mode.setEnabled(False)
         self.cmb_model.setEnabled(False)
         self.grp_asr_cfg.setEnabled(False)
+        self.chk_longrun.setEnabled(False)
+        self.chk_offline.setEnabled(False)
+        self.chk_transcript_file.setEnabled(False)
 
         self.chk_wav.setEnabled(False)
         self.txt_output.setEnabled(False)
 
         self.ui_timer.start()
-        self._set_status(f"running: ASR={'on' if self.asr_running else 'off'}, WAV={'on' if self.writer.is_recording() else 'off'}")
+        self._set_status(
+            f"running: ASR={'on' if self.asr_running else 'off'}, masterWAV={'on' if self.writer.is_recording() else 'off'}"
+        )
 
     def _stop_all(self) -> None:
+        # stop audio capture first (so WAV is complete)
         if self.writer.is_recording():
             self.writer.stop_recording()
 
@@ -1195,6 +1314,27 @@ class MainWindow(QWidget):
 
         self.ui_timer.stop()
 
+        # flush remaining UI events
+        self._drain_asr_ui_events(limit=300)
+
+        # If user checkbox enabled: copy master WAV to requested output name in project root
+        master_wav = self._session_master_wav
+        if self.chk_wav.isChecked() and master_wav is not None and master_wav.exists():
+            try:
+                out_path = self._current_output_path()
+                self.output_name = out_path.name
+                if out_path.resolve() != master_wav.resolve():
+                    import shutil
+
+                    shutil.copy2(master_wav, out_path)
+                    self._append_transcript_line(f"[{self._fmt_ts(time.time())}] WAV saved: {out_path}")
+            except Exception as e:
+                self._append_transcript_line(f"[{self._fmt_ts(time.time())}] WAV copy failed: {type(e).__name__}: {e}")
+
+        # Step 6: offline pass after stop (quality)
+        if master_wav is not None and master_wav.exists():
+            self._start_offline_pass(master_wav)
+
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
 
@@ -1206,6 +1346,9 @@ class MainWindow(QWidget):
         self.cmb_model.setEnabled(True)
         self.grp_asr_cfg.setEnabled(True)
         self._set_custom_enabled(self.cmb_profile.currentText() == self.PROFILE_CUSTOM)
+        self.chk_longrun.setEnabled(True)
+        self.chk_offline.setEnabled(sf is not None)
+        self.chk_transcript_file.setEnabled(True)
 
         self.chk_wav.setEnabled(sf is not None)
         self.txt_output.setEnabled(True)
@@ -1216,8 +1359,6 @@ class MainWindow(QWidget):
         for r in self.rows.values():
             r.meter.setValue(0)
             r.status.setText("stopped")
-
-        self._drain_asr_ui_events(limit=300)
 
         werr = self.writer.last_error()
         if werr:
@@ -1233,7 +1374,6 @@ class MainWindow(QWidget):
         meters = self.engine.get_meters()
         now_mono = time.monotonic()
 
-        # master
         mrms = float(meters["master"]["rms"])
         mlast = float(meters["master"]["last_ts"])
         self.master_meter.setValue(self._rms_to_pct(mrms))
@@ -1250,7 +1390,6 @@ class MainWindow(QWidget):
         if dropped_out > 0 or dropped_tap > 0:
             self._warn_throttle(f"Engine drops detected: out={dropped_out} tap={dropped_tap}", min_interval_s=2.0)
 
-        # sources
         srcs = meters.get("sources", {})
         desktop_any_active = False
         desktop_any_present = False
@@ -1285,16 +1424,13 @@ class MainWindow(QWidget):
             state = "active" if active else "silence"
             r.status.setText(f"{state} buf={buf_frames} miss={miss_out} drop_in={drop_in} delay={int(round(delay_ms))}ms{rate_warn}")
 
-            # silence alert target: any loopback named desktop_audio*
             if str(name).startswith("desktop_audio"):
                 desktop_any_present = True
                 if rms > float(self._silence_eps):
                     desktop_any_active = True
 
-        # drain ASR events and update metrics
         self._drain_asr_ui_events(limit=140)
 
-        # completeness label
         ok = (self._tap_dropped_total <= 0) and (self._seg_dropped_total <= 0) and (self._seg_skipped_total <= 0)
         status = "OK" if ok else "DROPS"
         self.lbl_completeness.setText(
@@ -1303,7 +1439,6 @@ class MainWindow(QWidget):
             f"lag={self._lag_s:.2f}s"
         )
 
-        # desktop silence alert
         if self._is_running() and desktop_any_present:
             if desktop_any_active:
                 self._desktop_silence_since_mono = None
@@ -1313,7 +1448,10 @@ class MainWindow(QWidget):
                 else:
                     dur = float(now_mono - float(self._desktop_silence_since_mono))
                     if dur >= float(self._silence_alert_s):
-                        self._warn_throttle(f"desktop_audio silence for {dur:.1f}s (rms<{self._silence_eps})", min_interval_s=4.0)
+                        self._warn_throttle(
+                            f"desktop_audio silence for {dur:.1f}s (rms<{self._silence_eps})",
+                            min_interval_s=4.0,
+                        )
 
         if self._is_running() and self._asr_overload_active:
             self.lbl_status.setText("running (ASR overload: degraded mode)")
