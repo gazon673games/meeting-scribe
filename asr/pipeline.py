@@ -404,7 +404,8 @@ class ASRPipeline:
         t_start = self._buf_t0[stream]
         frames = self._buffers[stream]
 
-        if not t_start or not frames:
+        # FIX: t_start can be 0.0 (valid) – do not treat it as falsy.
+        if t_start is None or not frames:
             self._buf_t0[stream] = None
             self._buffers[stream] = []
             return
@@ -580,7 +581,6 @@ class ASRPipeline:
                         if diar is not None:
                             speaker, nsp, best_sim, created = diar.assign_with_debug(seg.audio_16k, ts=time.time())
 
-                            # NEW: if diarization produced S_ERR:* log the real message
                             if str(speaker).startswith("S_ERR"):
                                 derr = None
                                 try:

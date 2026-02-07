@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
+
 from PySide6.QtGui import QTextCursor
 import numpy as np
 import sounddevice as sd
@@ -282,7 +283,7 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Voice2TextTest — Audio Mixer + ASR")
-        self.resize(1120, 720)  # taller for transcript
+        self.resize(1120, 720)
 
         self.project_root = Path(__file__).resolve().parents[1]
         self.fmt = AudioFormat(sample_rate=48000, channels=2, dtype="float32", blocksize=1024)
@@ -290,10 +291,10 @@ class MainWindow(QWidget):
         self.out_q: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=400)
         self.tap_q: "queue.Queue[dict]" = queue.Queue(maxsize=200)
 
-        # UI events from ASR
         self.asr_ui_q: "queue.Queue[dict]" = queue.Queue(maxsize=400)
 
-        self.engine = AudioEngine(format=self.fmt, output_queue=self.out_q, tap_queue=self.tap_q)
+        # NOTE: we will enable/disable tap_queue dynamically depending on ASR checkbox.
+        self.engine = AudioEngine(format=self.fmt, output_queue=self.out_q, tap_queue=None)
 
         self.rows: dict[str, SourceRow] = {}
 
@@ -351,7 +352,6 @@ class MainWindow(QWidget):
         ctrl.addWidget(self.btn_start)
         ctrl.addWidget(self.btn_stop)
 
-        # clear transcript
         self.btn_clear = QPushButton("Clear transcript")
         ctrl.addWidget(self.btn_clear)
 
@@ -385,7 +385,6 @@ class MainWindow(QWidget):
         status_row.addWidget(self.lbl_status, 1)
         root.addLayout(status_row)
 
-        # transcript box (chat-like)
         self.grp_tr = QGroupBox("Transcript")
         tr_layout = QVBoxLayout(self.grp_tr)
         self.txt_tr = QTextEdit()
@@ -398,7 +397,6 @@ class MainWindow(QWidget):
         self.ui_timer.setInterval(100)
         self.ui_timer.timeout.connect(self._tick_ui)
 
-        # Wiring
         self.btn_add.clicked.connect(self._add_device_dialog)
         self.txt_output.textChanged.connect(self._on_output_changed)
         self.btn_start.clicked.connect(self._start_all)
@@ -476,10 +474,6 @@ class MainWindow(QWidget):
             elif typ == "asr_stopped":
                 self._append_transcript_line(f"[{tss}] ASR stopped")
 
-            # deliberately ignored:
-            # - "segment_ready" (UI noise)
-            # - "speaker_estimate" (temporary disabled)
-            # - "diar_debug" (debug only)
             else:
                 continue
 
@@ -609,7 +603,6 @@ class MainWindow(QWidget):
             self._set_status("Add at least one device first.")
             return
 
-        # clear stale UI events
         while True:
             try:
                 self.asr_ui_q.get_nowait()
@@ -618,6 +611,9 @@ class MainWindow(QWidget):
 
         for n in list(self.rows.keys()):
             self._apply_delay_from_ui(n)
+
+        # FIX: enable tap only when ASR is enabled (saves copies + avoids meaningless tap drops)
+        self.engine.set_tap_queue(self.tap_q if self.chk_asr.isChecked() else None)
 
         try:
             self.engine.start()
@@ -640,26 +636,19 @@ class MainWindow(QWidget):
                     device="cuda",
                     compute_type="float16",
                     beam_size=5,
-
                     endpoint_silence_ms=650.0,
                     max_segment_s=7.0,
                     overlap_ms=200.0,
-
                     vad_energy_threshold=0.0055,
                     vad_hangover_ms=350,
                     vad_min_speech_ms=350,
-
                     diarization_enabled=True,
-                    diar_backend="online",  # <--- ДОБАВИТЬ ЯВНО
-                    diar_chunk_s=30.0,  # <--- ДОБАВИТЬ
-                    diar_step_s=10.0,  # <--- ДОБАВИТЬ
-
-                    # эти параметры имеют смысл ТОЛЬКО для online backend;
-                    # если используешь pyannote, можешь их убрать чтобы не путали
+                    diar_backend="online",
+                    diar_chunk_s=30.0,
+                    diar_step_s=10.0,
                     diar_sim_threshold=0.72,
                     diar_min_segment_s=2.0,
                     diar_window_s=180.0,
-
                     ui_queue=self.asr_ui_q,
                 )
                 self.asr.start()
@@ -712,6 +701,9 @@ class MainWindow(QWidget):
             except Exception as e:
                 self._set_status(f"Engine stop error: {e}")
 
+        # disable tap when stopped
+        self.engine.set_tap_queue(None)
+
         self.ui_timer.stop()
 
         self.btn_start.setEnabled(True)
@@ -732,7 +724,6 @@ class MainWindow(QWidget):
             r.meter.setValue(0)
             r.status.setText("stopped")
 
-        # final drain (show "ASR stopped" if it came)
         self._drain_asr_ui_events(limit=200)
 
         werr = self.writer.last_error()
@@ -742,7 +733,6 @@ class MainWindow(QWidget):
             self._set_status("stopped")
 
     def _tick_ui(self) -> None:
-        # 1) update meters
         meters = self.engine.get_meters()
         now = time.monotonic()
 
@@ -790,7 +780,6 @@ class MainWindow(QWidget):
                 f"{state} buf={buf_frames} miss={miss_out} drop_in={drop_in} delay={int(round(delay_ms))}ms{rate_warn}"
             )
 
-        # 2) drain ASR events to transcript (limit per tick to keep UI smooth)
         self._drain_asr_ui_events(limit=50)
 
     @staticmethod
