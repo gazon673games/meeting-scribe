@@ -257,6 +257,7 @@ class AudioEngine:
                     "mode": str(self._tap_mode),
                     "filter": sorted(list(self._tap_sources_filter)) if self._tap_sources_filter else None,
                     "drop_threshold": float(self._tap_drop_threshold),
+                    "tap_queue_max": int(self._tap_q_max),  # NEW: for UI/metrics if needed
                 },
                 "autosync": {
                     "enabled": bool(self._autosync_enabled),

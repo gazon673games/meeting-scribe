@@ -5,7 +5,8 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
-from typing import Dict, Optional, Literal, List, Any, Tuple
+from typing import Dict, Optional, Literal, List, Any, Tuple, Deque
+from collections import deque
 
 import numpy as np
 
@@ -16,6 +17,7 @@ from asr.diarizer import OnlineDiarizer
 
 Mode = Literal["mix", "split"]
 DiarBackend = Literal["pyannote", "online", "nemo"]
+OverloadStrategy = Literal["drop_old", "keep_all"]
 
 
 @dataclass
@@ -24,6 +26,7 @@ class Segment:
     t_start: float
     t_end: float
     audio_16k: np.ndarray
+    enqueue_ts: float  # NEW: for lag metrics
 
 
 @dataclass
@@ -199,6 +202,13 @@ class ASRPipeline:
 
     Step 3: VAD (band ratio + voicedness + preroll) + min segment duration.
     Step 4: overload/degraded mode + utterance aggregation + log rotation.
+
+    Step 5 (NEW in this patch): profiles/metrics support:
+      - overload_strategy: drop_old | keep_all
+      - session counters: seg_dropped_total, seg_skipped_total
+      - latency stats: avg/p95 over sliding window
+      - lag_s: queue wait + asr latency (approx)
+      - emits periodic "asr_metrics" events to UI
     """
 
     def __init__(
@@ -248,7 +258,7 @@ class ASRPipeline:
         adaptive_beam_min: int = 1,
         adaptive_beam_max: Optional[int] = None,
 
-        # Step 4: overload control (UI already passes these)
+        # Step 4: overload control
         overload_enter_qsize: int = 18,
         overload_exit_qsize: int = 6,
         overload_hard_drop_qsize: int = 28,
@@ -256,6 +266,9 @@ class ASRPipeline:
         overload_beam_cap: int = 2,
         overload_overlap_ms: float = 120.0,
         overload_max_segment_s: float = 5.0,
+
+        # Step 4: overload strategy (NEW)
+        overload_strategy: OverloadStrategy = "drop_old",
 
         # Step 4: utterance aggregation
         utterance_enabled: bool = True,
@@ -267,19 +280,20 @@ class ASRPipeline:
         log_max_bytes: int = 25 * 1024 * 1024,
         log_backup_count: int = 5,
 
-        # Optional: stop writing speaker labels into events (useful if diarization is unreliable)
+        # Optional: stop writing speaker labels into events
         log_speaker_labels: bool = True,
 
-        # ===== NEW: faster-whisper language/prompt =====
-        asr_language: Optional[str] = "ru",          # None -> auto-detect in faster-whisper
-        asr_initial_prompt: Optional[str] = None,    # passed to faster-whisper
+        # faster-whisper language/prompt
+        asr_language: Optional[str] = "ru",
+        asr_initial_prompt: Optional[str] = None,
+
+        # Step 5: metrics emission
+        metrics_emit_interval_s: float = 1.0,
+        metrics_latency_window: int = 200,
     ):
         self.tap_q = tap_queue
         self.project_root = project_root
-
-        # UI/log language marker (can be "auto")
         self.language = language
-
         self.mode = mode
         self.source_names = source_names
 
@@ -359,9 +373,20 @@ class ASRPipeline:
         self._over_exit = int(overload_exit_qsize)
         self._over_hard = int(overload_hard_drop_qsize)
         self._over_hold_s = float(overload_hold_s)
-        self._over_beam_cap = max(1, int(overload_beam_cap))
-        self._over_overlap_ms = float(overload_overlap_ms)
-        self._over_max_segment_s = float(overload_max_segment_s)
+        self._over_beam_cap_base = max(1, int(overload_beam_cap))
+        self._over_overlap_ms_base = float(overload_overlap_ms)
+        self._over_max_segment_s_base = float(overload_max_segment_s)
+
+        # NEW: keep_all vs drop_old
+        osx = str(overload_strategy).strip().lower()
+        self._over_strategy: OverloadStrategy = "keep_all" if osx == "keep_all" else "drop_old"
+
+        # NEW: hard-overload extra degrade (only for keep_all)
+        self._hard_over_active: bool = False
+        self._hard_over_since: float = 0.0
+        self._hard_over_beam_cap: int = 1
+        self._hard_over_overlap_ms: float = 80.0
+        self._hard_over_max_segment_s: float = 3.5
 
         self._over_active: bool = False
         self._over_since: float = 0.0
@@ -392,6 +417,14 @@ class ASRPipeline:
         self._last_heartbeat = 0.0
         self._last_utt_flush_check = 0.0
 
+        # ===== NEW: metrics/counters =====
+        self._seg_dropped_total: int = 0
+        self._seg_skipped_total: int = 0
+        self._lat_samples: Deque[float] = deque(maxlen=max(20, int(metrics_latency_window)))
+        self._last_lag_s: float = 0.0
+        self._last_metrics_emit_ts: float = 0.0
+        self._metrics_emit_interval_s = max(0.25, float(metrics_emit_interval_s))
+
     # ================= lifecycle =================
 
     def start(self) -> None:
@@ -401,12 +434,20 @@ class ASRPipeline:
         self._over_active = False
         self._over_since = 0.0
         self._over_last_event_ts = 0.0
+        self._hard_over_active = False
+        self._hard_over_since = 0.0
+
+        self._seg_dropped_total = 0
+        self._seg_skipped_total = 0
+        self._lat_samples.clear()
+        self._last_lag_s = 0.0
+        self._last_metrics_emit_ts = 0.0
 
         self._log_event(
             {
                 "type": "asr_started",
                 "session_id": self.session_id,
-                "language": self.language,  # UI/log marker ("ru"/"en"/"auto")
+                "language": self.language,
                 "mode": self.mode,
                 "model": self.asr_model_name,
                 "device": self.device,
@@ -415,6 +456,7 @@ class ASRPipeline:
                 "endpoint_silence_ms": self._endpoint_silence_ms_base,
                 "max_segment_s": self._max_segment_s_base,
                 "overlap_ms": self._overlap_ms_base,
+                "overload_strategy": self._over_strategy,
                 "vad": {
                     "energy_threshold": self._vad_energy_threshold,
                     "hangover_ms": self._vad_hangover_ms,
@@ -430,9 +472,9 @@ class ASRPipeline:
                     "exit_qsize": self._over_exit,
                     "hard_drop_qsize": self._over_hard,
                     "hold_s": self._over_hold_s,
-                    "beam_cap": self._over_beam_cap,
-                    "overlap_ms": self._over_overlap_ms,
-                    "max_segment_s": self._over_max_segment_s,
+                    "beam_cap": self._over_beam_cap_base,
+                    "overlap_ms": self._over_overlap_ms_base,
+                    "max_segment_s": self._over_max_segment_s_base,
                 },
                 "diarization_enabled": self._diar_enabled,
                 "diar_backend": self._diar_backend,
@@ -468,6 +510,8 @@ class ASRPipeline:
         except Exception:
             pass
 
+        self._emit_metrics(force=True)
+
         self._log_event({"type": "asr_stopped", "ts": time.time()})
         self.logger.close()
 
@@ -501,6 +545,7 @@ class ASRPipeline:
                 "reason": str(reason),
                 "seg_qsize": int(self._seg_q.qsize()),
                 "beam_cur": int(self._beam_ctl.cur_beam),
+                "lag_s": float(self._last_lag_s),
                 "ts": now,
             }
         )
@@ -522,9 +567,58 @@ class ASRPipeline:
             self._over_since = 0.0
             self._maybe_emit_overload_event(False, f"exit: qsize<={self._over_exit}")
 
+    def _update_hard_overload_state_keep_all(self) -> None:
+        if self._over_strategy != "keep_all":
+            self._hard_over_active = False
+            self._hard_over_since = 0.0
+            return
+
+        qsz = int(self._seg_q.qsize())
+        now = time.time()
+
+        if not self._hard_over_active:
+            if qsz >= int(self._over_hard):
+                self._hard_over_active = True
+                self._hard_over_since = now
+                self._log_event(
+                    {
+                        "type": "asr_overload",
+                        "active": True,
+                        "reason": f"hard_overload_keep_all: qsize>={self._over_hard}",
+                        "seg_qsize": qsz,
+                        "beam_cur": int(self._beam_ctl.cur_beam),
+                        "lag_s": float(self._last_lag_s),
+                        "ts": now,
+                    }
+                )
+            return
+
+        # exit hard-overload when backlog goes low
+        if qsz <= int(self._over_exit):
+            self._hard_over_active = False
+            self._hard_over_since = 0.0
+            self._log_event(
+                {
+                    "type": "asr_overload",
+                    "active": True,
+                    "reason": f"hard_overload_keep_all_recover: qsize<={self._over_exit}",
+                    "seg_qsize": qsz,
+                    "beam_cur": int(self._beam_ctl.cur_beam),
+                    "lag_s": float(self._last_lag_s),
+                    "ts": now,
+                }
+            )
+
     def _segmentation_params(self) -> Tuple[float, float, float]:
+        # returns: endpoint_silence_ms, max_segment_s, overlap_ms
         if self._over_active:
-            return (self._endpoint_silence_ms_base, self._over_max_segment_s, self._over_overlap_ms)
+            if self._hard_over_active and self._over_strategy == "keep_all":
+                return (
+                    self._endpoint_silence_ms_base,
+                    float(min(self._over_max_segment_s_base, self._hard_over_max_segment_s)),
+                    float(min(self._over_overlap_ms_base, self._hard_over_overlap_ms)),
+                )
+            return (self._endpoint_silence_ms_base, self._over_max_segment_s_base, self._over_overlap_ms_base)
         return (self._endpoint_silence_ms_base, self._max_segment_s_base, self._overlap_ms_base)
 
     def _ensure_stream(self, name: str) -> None:
@@ -594,6 +688,40 @@ class ASRPipeline:
                 "beam_cur": int(self._beam_ctl.cur_beam),
                 "seg_qsize": int(self._seg_q.qsize()),
                 "overload": bool(self._over_active),
+                "overload_strategy": self._over_strategy,
+                "hard_overload": bool(self._hard_over_active),
+                "ts": now,
+            }
+        )
+
+    def _emit_metrics(self, *, force: bool = False) -> None:
+        now = time.time()
+        if not force:
+            if (now - float(self._last_metrics_emit_ts)) < float(self._metrics_emit_interval_s):
+                return
+        self._last_metrics_emit_ts = now
+
+        lat_list = list(self._lat_samples)
+        avg_lat = float(sum(lat_list) / max(1, len(lat_list))) if lat_list else 0.0
+        p95 = 0.0
+        if lat_list:
+            lat_sorted = sorted(lat_list)
+            idx = int(round(0.95 * (len(lat_sorted) - 1)))
+            idx = max(0, min(len(lat_sorted) - 1, idx))
+            p95 = float(lat_sorted[idx])
+
+        self._log_event(
+            {
+                "type": "asr_metrics",
+                "seg_dropped_total": int(self._seg_dropped_total),
+                "seg_skipped_total": int(self._seg_skipped_total),
+                "avg_latency_s": float(avg_lat),
+                "p95_latency_s": float(p95),
+                "lag_s": float(self._last_lag_s),
+                "seg_qsize": int(self._seg_q.qsize()),
+                "overload": bool(self._over_active),
+                "overload_strategy": self._over_strategy,
+                "hard_overload": bool(self._hard_over_active),
                 "ts": now,
             }
         )
@@ -684,6 +812,9 @@ class ASRPipeline:
         self._residual_16k[stream] = merged[used:]
         self._heartbeat(stream, vad)
 
+        # opportunistic metrics emission
+        self._emit_metrics(force=False)
+
     def _finalize_segment(self, stream: str, t_end: float) -> None:
         t_start = self._buf_t0[stream]
         frames = self._buffers[stream]
@@ -721,8 +852,9 @@ class ASRPipeline:
         )
 
         try:
-            self._seg_q.put_nowait(Segment(stream, float(t_start), float(t_end), audio))
+            self._seg_q.put_nowait(Segment(stream, float(t_start), float(t_end), audio, enqueue_ts=time.time()))
         except queue.Full:
+            self._seg_dropped_total += 1
             self._log_event(
                 {
                     "type": "segment_dropped",
@@ -914,13 +1046,16 @@ class ASRPipeline:
             self._log_event({"type": "error", "where": "worker", "error": str(e), "ts": time.time()})
 
     def _drain_old_segments_if_hard_overload(self) -> None:
+        # Only for overload_strategy == drop_old
+        if self._over_strategy != "drop_old":
+            return
+
         qsz = int(self._seg_q.qsize())
         if qsz < int(self._over_hard):
             return
 
         keep = max(1, int(self._over_exit))
         drop_cnt = max(0, qsz - keep)
-
         if drop_cnt <= 0:
             return
 
@@ -933,6 +1068,7 @@ class ASRPipeline:
                 break
 
         if dropped > 0:
+            self._seg_skipped_total += int(dropped)
             self._log_event(
                 {
                     "type": "segment_skipped_overload",
@@ -954,7 +1090,7 @@ class ASRPipeline:
                 device=self.device,
                 compute_type=self.compute_type,
                 beam_size=self.beam_size,
-                initial_prompt=self.asr_initial_prompt,  # NEW
+                initial_prompt=self.asr_initial_prompt,
             )
             self._log_event({"type": "asr_init_ok", "model": self.asr_model_name, "ts": time.time()})
         except Exception as e:
@@ -966,6 +1102,7 @@ class ASRPipeline:
 
         while not self._stop.is_set():
             self._update_overload_state()
+            self._update_hard_overload_state_keep_all()
             self._drain_old_segments_if_hard_overload()
 
             try:
@@ -976,9 +1113,11 @@ class ASRPipeline:
                         self._flush_all_utterances(force=False)
                     except Exception:
                         pass
+                self._emit_metrics(force=False)
                 continue
 
             self._update_overload_state()
+            self._update_hard_overload_state_keep_all()
 
             speaker = "S?"
 
@@ -1025,9 +1164,15 @@ class ASRPipeline:
 
             seg_dur_s = max(1e-6, float(seg.audio_16k.shape[0]) / 16000.0)
 
+            # queue wait lag
+            now0 = time.time()
+            queue_wait_s = max(0.0, float(now0) - float(seg.enqueue_ts))
+
             beam_to_use = int(self._beam_ctl.cur_beam)
             if self._over_active:
-                beam_to_use = min(beam_to_use, int(self._over_beam_cap))
+                beam_to_use = min(beam_to_use, int(self._over_beam_cap_base))
+            if self._hard_over_active and self._over_strategy == "keep_all":
+                beam_to_use = min(beam_to_use, int(self._hard_over_beam_cap))
             beam_to_use = max(1, beam_to_use)
 
             t0 = time.time()
@@ -1048,9 +1193,12 @@ class ASRPipeline:
                         "ts": time.time(),
                     }
                 )
+                self._emit_metrics(force=False)
                 continue
 
-            latency_s = time.time() - t0
+            asr_latency_s = time.time() - t0
+            total_lag_s = float(queue_wait_s) + float(asr_latency_s)
+            self._last_lag_s = float(total_lag_s)
 
             removed = 0
             if self._text_dedup_enabled:
@@ -1063,12 +1211,15 @@ class ASRPipeline:
                 if text:
                     self._last_text[seg.stream] = _norm_text(text)
 
+            # latency stats over ASR-only latency (not queue wait), per spec
+            self._lat_samples.append(float(asr_latency_s))
+
             if self._adaptive_beam_enabled:
                 now = time.time()
                 qsz = int(self._seg_q.qsize())
                 new_beam, reason = self._beam_ctl.maybe_update(
                     seg_qsize=qsz,
-                    last_latency_s=float(latency_s),
+                    last_latency_s=float(asr_latency_s),
                     last_dur_s=float(seg_dur_s),
                     now=now,
                 )
@@ -1083,12 +1234,15 @@ class ASRPipeline:
                     "t_start": seg.t_start,
                     "t_end": seg.t_end,
                     "text": _norm_text(text),
-                    "latency_s": float(latency_s),
+                    "latency_s": float(asr_latency_s),
                     "seg_dur_s": float(seg_dur_s),
                     "beam_used": int(beam_to_use),
                     "dedup_removed_chars": int(removed),
                     "seg_qsize": int(self._seg_q.qsize()),
                     "overload": bool(self._over_active),
+                    "overload_strategy": self._over_strategy,
+                    "hard_overload": bool(self._hard_over_active),
+                    "lag_s": float(self._last_lag_s),
                     "ts": time.time(),
                 }
             )
@@ -1101,3 +1255,5 @@ class ASRPipeline:
                     t_end=float(seg.t_end),
                     text=str(text),
                 )
+
+            self._emit_metrics(force=False)
