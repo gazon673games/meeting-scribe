@@ -450,40 +450,12 @@ class MainWindow(QWidget):
                 if not text:
                     continue
                 stream = str(ev.get("stream", ""))
-                spk = str(ev.get("speaker", "") or "")
-                if spk == "S?":
-                    spk = ""
-                spk_part = f" {spk}" if spk else ""
-                self._append_transcript_line(f"[{tss}] {stream}{spk_part}: {text}")
-
-            elif typ == "speaker_estimate":
-                stream = str(ev.get("stream", ""))
-                nsp = ev.get("n_speakers", None)
-                win = ev.get("window_s", None)
-                if nsp is not None:
-                    if win is not None:
-                        self._append_transcript_line(f"[{tss}] {stream}: ~{int(nsp)} speaker(s) in last {int(win)}s")
-                    else:
-                        self._append_transcript_line(f"[{tss}] {stream}: ~{int(nsp)} speaker(s)")
+                self._append_transcript_line(f"[{tss}] {stream}: {text}")
 
             elif typ == "asr_init_start":
                 model = ev.get("model", "")
                 device = ev.get("device", "")
                 self._append_transcript_line(f"[{tss}] ASR init start ({model}, {device})")
-
-            elif typ == "segment_ready":
-                stream = ev.get("stream", "")
-                samples = ev.get("samples", 0)
-                dur_s = ev.get("dur_s", None)
-                if dur_s is not None:
-                    self._append_transcript_line(f"[{tss}] segment ready ({stream}, {float(dur_s):.2f}s)")
-                else:
-                    self._append_transcript_line(f"[{tss}] segment ready ({stream}, samples={samples})")
-
-            elif typ == "error":
-                where = ev.get("where", "")
-                err = ev.get("error", "")
-                self._append_transcript_line(f"[{tss}] ERROR {where}: {err}")
 
             elif typ == "asr_started":
                 model = ev.get("model", "")
@@ -496,8 +468,20 @@ class MainWindow(QWidget):
                 model = ev.get("model", "")
                 self._append_transcript_line(f"[{tss}] ASR init OK ({model})")
 
+            elif typ == "error":
+                where = ev.get("where", "")
+                err = ev.get("error", "")
+                self._append_transcript_line(f"[{tss}] ERROR {where}: {err}")
+
             elif typ == "asr_stopped":
                 self._append_transcript_line(f"[{tss}] ASR stopped")
+
+            # deliberately ignored:
+            # - "segment_ready" (UI noise)
+            # - "speaker_estimate" (temporary disabled)
+            # - "diar_debug" (debug only)
+            else:
+                continue
 
     # ---------------- helpers ----------------
 
@@ -672,9 +656,9 @@ class MainWindow(QWidget):
 
                     # эти параметры имеют смысл ТОЛЬКО для online backend;
                     # если используешь pyannote, можешь их убрать чтобы не путали
-                    diar_sim_threshold=0.78,
-                    diar_min_segment_s=1.6,
-                    diar_window_s=120.0,
+                    diar_sim_threshold=0.72,
+                    diar_min_segment_s=2.0,
+                    diar_window_s=180.0,
 
                     ui_queue=self.asr_ui_q,
                 )
