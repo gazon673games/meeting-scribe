@@ -69,7 +69,6 @@ class _PyannoteBackend:
 
         self._torch = torch
         self._device = torch.device("cuda" if device == "cuda" and torch.cuda.is_available() else "cpu")
-
         self._pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization")
         try:
             self._pipeline.to(self._device)
@@ -82,7 +81,6 @@ class _PyannoteBackend:
             return []
         wav = self._torch.from_numpy(x).unsqueeze(0)
         diar = self._pipeline({"waveform": wav, "sample_rate": 16000})
-
         out: List[DiarSegment] = []
         for turn, _, label in diar.itertracks(yield_label=True):
             out.append(DiarSegment(t0=float(t_offset) + float(turn.start), t1=float(t_offset) + float(turn.end), speaker=str(label)))
@@ -108,66 +106,49 @@ class _PreGainAGC:
         x = np.asarray(x, dtype=np.float32).reshape(-1)
         r = self._rms(x)
         self.last_in_rms = r
-
         if r > 1e-7:
             desired = self.target_rms / r
             desired = max(1.0 / self.max_gain, min(self.max_gain, desired))
             self.gain = (1.0 - self.alpha) * self.gain + self.alpha * desired
-
         y = x * float(self.gain)
         return np.clip(y, -1.0, 1.0).astype(np.float32, copy=False)
 
 
 def _norm_text(s: str) -> str:
     s = (s or "").strip()
-    # normalize whitespace; keep punctuation as-is
     s = " ".join(s.split())
     return s
 
 
 def _trim_overlap(prev_text: str, cur_text: str, *, max_window: int = 80, min_match: int = 8) -> Tuple[str, int]:
-    """
-    Removes duplicated prefix from cur_text if it matches a suffix of prev_text.
-    Returns: (trimmed_text, removed_chars_count)
-    """
     p = _norm_text(prev_text)
     c = _norm_text(cur_text)
-
     if not p or not c:
         return (c, 0)
 
-    # compare on normalized, but we will trim on normalized too (fine for UI/logs)
     ps = p[-max_window:]
     best = 0
-    # find longest k such that ps[-k:] == c[:k]
     max_k = min(len(ps), len(c))
     for k in range(min(max_k, max_window), min_match - 1, -1):
         if ps[-k:] == c[:k]:
             best = k
             break
-
     if best > 0:
         trimmed = c[best:].lstrip()
         return (trimmed, best)
-
     return (c, 0)
 
 
 @dataclass
 class _AdaptiveBeam:
-    """
-    Simple global adaptive beam controller.
-      - If backlog or latency ratio high -> decrease beam
-      - If stable/idle -> slowly increase beam
-    """
     min_beam: int = 1
     max_beam: int = 5
     cur_beam: int = 5
 
-    backlog_hi: int = 12          # seg queue size to trigger downshift
-    backlog_lo: int = 2           # seg queue size to allow upshift
-    latency_ratio_hi: float = 1.1 # latency > dur * ratio -> downshift
-    latency_ratio_lo: float = 0.7 # latency < dur * ratio -> upshift
+    backlog_hi: int = 12
+    backlog_lo: int = 2
+    latency_ratio_hi: float = 1.1
+    latency_ratio_lo: float = 0.7
 
     cool_down_s: float = 2.0
     last_change_ts: float = 0.0
@@ -180,7 +161,6 @@ class _AdaptiveBeam:
         ratio = float(last_latency_s) / dur
 
         reason = None
-
         if seg_qsize >= int(self.backlog_hi) or ratio >= float(self.latency_ratio_hi):
             if self.cur_beam > self.min_beam:
                 self.cur_beam -= 1
@@ -195,7 +175,22 @@ class _AdaptiveBeam:
         return (int(self.cur_beam), reason)
 
 
+@dataclass
+class _UtteranceState:
+    stream: str
+    speaker: str
+    t_start: float
+    t_end: float
+    text: str
+    last_emit_ts: float
+
+
 class ASRPipeline:
+    """
+    Consumes AudioEngine tap_queue packets and produces ASR events (+ optional diarization).
+    Step 4 adds "utterance" aggregation for human-readable transcript.
+    """
+
     def __init__(
         self,
         *,
@@ -226,12 +221,19 @@ class ASRPipeline:
         agc_target_rms: float = 0.06,
         agc_max_gain: float = 6.0,
         agc_alpha: float = 0.02,
-        # NEW (Step 3): overlap text dedup + adaptive beam
         text_dedup_enabled: bool = True,
         text_dedup_window: int = 80,
         adaptive_beam_enabled: bool = True,
         adaptive_beam_min: int = 1,
-        adaptive_beam_max: Optional[int] = None,  # default -> beam_size
+        adaptive_beam_max: Optional[int] = None,
+        # NEW (Step 4): utterance aggregation
+        utterance_enabled: bool = True,
+        utterance_gap_s: float = 0.85,
+        utterance_max_s: float = 18.0,
+        utterance_flush_s: float = 2.5,  # flush if no continuation for this long
+        # NEW (Step 4): log rotation
+        log_max_bytes: int = 25 * 1024 * 1024,
+        log_backup_count: int = 5,
     ):
         self.tap_q = tap_queue
         self.project_root = project_root
@@ -289,12 +291,10 @@ class ASRPipeline:
         self._agc_alpha = float(agc_alpha)
         self._agc: Dict[str, _PreGainAGC] = {}
 
-        # Step 3: overlap text dedup state (per stream)
         self._text_dedup_enabled = bool(text_dedup_enabled)
         self._text_dedup_window = int(text_dedup_window)
         self._last_text: Dict[str, str] = {}
 
-        # Step 3: adaptive beam controller
         self._adaptive_beam_enabled = bool(adaptive_beam_enabled)
         maxb = int(adaptive_beam_max) if adaptive_beam_max is not None else int(self.beam_size)
         maxb = max(1, maxb)
@@ -304,14 +304,30 @@ class ASRPipeline:
             cur_beam=max(1, min(int(self.beam_size), maxb)),
         )
 
+        # Step 4 utterances
+        self._utt_enabled = bool(utterance_enabled)
+        self._utt_gap_s = float(utterance_gap_s)
+        self._utt_max_s = float(utterance_max_s)
+        self._utt_flush_s = float(utterance_flush_s)
+        self._utt_state: Dict[Tuple[str, str], _UtteranceState] = {}  # key=(stream,speaker)
+
         self.session_id = f"sess_{int(time.time())}"
-        self.logger = ASRLogger(root=self.project_root, session_id=self.session_id, language=language)
+        self.logger = ASRLogger(
+            root=self.project_root,
+            session_id=self.session_id,
+            language=language,
+            max_bytes=int(log_max_bytes),
+            backup_count=int(log_backup_count),
+        )
 
         self._asr = None
         self._asr_init_error: Optional[str] = None
 
         self._pkt_count = 0
         self._last_heartbeat = 0.0
+        self._last_utt_flush_check = 0.0
+
+    # ================= lifecycle =================
 
     def start(self) -> None:
         self._stop.clear()
@@ -334,17 +350,16 @@ class ASRPipeline:
                 "vad_energy_threshold": self._vad_energy_threshold,
                 "vad_hangover_ms": self._vad_hangover_ms,
                 "vad_min_speech_ms": self._vad_min_speech_ms,
-                "vad_adaptive": True,
                 "diarization_enabled": self._diar_enabled,
                 "diar_backend": self._diar_backend,
                 "agc_enabled": self._agc_enabled,
                 "text_dedup_enabled": self._text_dedup_enabled,
                 "adaptive_beam_enabled": self._adaptive_beam_enabled,
-                "adaptive_beam": {
-                    "min": self._beam_ctl.min_beam,
-                    "max": self._beam_ctl.max_beam,
-                    "cur": self._beam_ctl.cur_beam,
-                },
+                "utterance_enabled": self._utt_enabled,
+                "utterance_gap_s": self._utt_gap_s,
+                "utterance_max_s": self._utt_max_s,
+                "utterance_flush_s": self._utt_flush_s,
+                "log_rotation": {"max_bytes": self.logger.max_bytes, "backup_count": self.logger.backup_count},
                 "ts": time.time(),
             }
         )
@@ -360,8 +375,17 @@ class ASRPipeline:
             self._ingest_thread.join(timeout=2.0)
         if self._worker_thread:
             self._worker_thread.join(timeout=2.0)
+
+        # flush all pending utterances
+        try:
+            self._flush_all_utterances(force=True)
+        except Exception:
+            pass
+
         self._log_event({"type": "asr_stopped", "ts": time.time()})
         self.logger.close()
+
+    # ================= helpers =================
 
     def _push_ui(self, rec: Dict[str, Any]) -> None:
         if not self.ui_q:
@@ -438,6 +462,8 @@ class ASRPipeline:
                 "ts": now,
             }
         )
+
+    # ================= ingest =================
 
     def _update_ring(self, stream: str, t0: float, t1: float, x16: np.ndarray) -> None:
         if not self._diar_enabled or self._diar_backend != "pyannote":
@@ -591,6 +617,8 @@ class ASRPipeline:
                     if isinstance(blk, np.ndarray):
                         self._feed_stream(str(n), t0, t1, blk)
 
+    # ================= diarization helpers =================
+
     def _init_diarization_backend(self) -> None:
         if not self._diar_enabled:
             return
@@ -636,6 +664,89 @@ class ASRPipeline:
             self._log_event({"type": "error", "where": "diar_run", "error": str(e), "ts": time.time()})
             self._diar_enabled = False
 
+    # ================= utterance aggregation (Step 4) =================
+
+    def _flush_all_utterances(self, *, force: bool = False) -> None:
+        now = time.time()
+        for key in list(self._utt_state.keys()):
+            self._flush_utterance(key, now=now, force=force)
+
+    def _flush_utterance(self, key: Tuple[str, str], *, now: float, force: bool) -> None:
+        st = self._utt_state.get(key)
+        if st is None:
+            return
+        if not st.text.strip():
+            self._utt_state.pop(key, None)
+            return
+
+        # flush if forced or stale
+        if force or (now - float(st.last_emit_ts)) >= float(self._utt_flush_s):
+            self._log_event(
+                {
+                    "type": "utterance",
+                    "stream": st.stream,
+                    "speaker": st.speaker,
+                    "t_start": float(st.t_start),
+                    "t_end": float(st.t_end),
+                    "text": _norm_text(st.text),
+                    "ts": now,
+                }
+            )
+            self._utt_state.pop(key, None)
+
+    def _update_utterance(self, *, stream: str, speaker: str, t_start: float, t_end: float, text: str) -> None:
+        if not self._utt_enabled:
+            return
+        txt = _norm_text(text)
+        if not txt:
+            return
+
+        now = time.time()
+        key = (str(stream), str(speaker))
+        st = self._utt_state.get(key)
+
+        # periodic flush of stale states (cheap)
+        if (now - self._last_utt_flush_check) > 0.5:
+            self._last_utt_flush_check = now
+            for k in list(self._utt_state.keys()):
+                self._flush_utterance(k, now=now, force=False)
+
+        if st is None:
+            self._utt_state[key] = _UtteranceState(
+                stream=str(stream),
+                speaker=str(speaker),
+                t_start=float(t_start),
+                t_end=float(t_end),
+                text=txt,
+                last_emit_ts=now,
+            )
+            return
+
+        # can we append?
+        gap = float(t_start) - float(st.t_end)
+        new_len = float(t_end) - float(st.t_start)
+
+        if gap <= float(self._utt_gap_s) and new_len <= float(self._utt_max_s):
+            # append
+            st.t_end = float(t_end)
+            st.text = (st.text + " " + txt).strip()
+            st.last_emit_ts = now
+            self._utt_state[key] = st
+            return
+
+        # otherwise flush old and start new
+        self._flush_utterance(key, now=now, force=True)
+        self._utt_state[key] = _UtteranceState(
+            stream=str(stream),
+            speaker=str(speaker),
+            t_start=float(t_start),
+            t_end=float(t_end),
+            text=txt,
+            last_emit_ts=now,
+        )
+
+    # ================= ASR worker =================
+
     def _worker_loop_safe(self) -> None:
         try:
             self._worker_loop()
@@ -667,6 +778,12 @@ class ASRPipeline:
             try:
                 seg = self._seg_q.get(timeout=0.2)
             except queue.Empty:
+                # flush stale utterances while idle
+                if self._utt_enabled:
+                    try:
+                        self._flush_all_utterances(force=False)
+                    except Exception:
+                        pass
                 continue
 
             speaker = "S?"
@@ -694,8 +811,6 @@ class ASRPipeline:
                         speaker = "S?"
 
             seg_dur_s = max(1e-6, float(seg.audio_16k.shape[0]) / 16000.0)
-
-            # Adaptive beam selection based on backlog + recent latency ratio
             beam_to_use = int(self._beam_ctl.cur_beam)
 
             t0 = time.time()
@@ -708,7 +823,6 @@ class ASRPipeline:
 
             latency_s = time.time() - t0
 
-            # Step 3: overlap text dedup
             removed = 0
             if self._text_dedup_enabled:
                 prev = self._last_text.get(seg.stream, "")
@@ -716,26 +830,18 @@ class ASRPipeline:
                 text = trimmed
                 if text:
                     self._last_text[seg.stream] = _norm_text(prev + " " + text).strip()
-                else:
-                    # if we removed everything, keep prev as-is
-                    pass
             else:
                 if text:
                     self._last_text[seg.stream] = _norm_text(text)
 
-            # Step 3: adaptive beam update AFTER we know latency
             if self._adaptive_beam_enabled:
                 now = time.time()
                 qsz = int(self._seg_q.qsize())
-                new_beam, reason = self._beam_ctl.maybe_update(
-                    seg_qsize=qsz,
-                    last_latency_s=float(latency_s),
-                    last_dur_s=float(seg_dur_s),
-                    now=now,
-                )
+                new_beam, reason = self._beam_ctl.maybe_update(seg_qsize=qsz, last_latency_s=float(latency_s), last_dur_s=float(seg_dur_s), now=now)
                 if reason:
                     self._log_event({"type": "asr_beam_update", "beam": int(new_beam), "reason": reason, "ts": now})
 
+            # keep segment event (debug/telemetry)
             self._log_event(
                 {
                     "type": "segment",
@@ -743,7 +849,7 @@ class ASRPipeline:
                     "speaker": speaker,
                     "t_start": seg.t_start,
                     "t_end": seg.t_end,
-                    "text": text,
+                    "text": _norm_text(text),
                     "latency_s": float(latency_s),
                     "seg_dur_s": float(seg_dur_s),
                     "beam_used": int(beam_to_use),
@@ -752,3 +858,7 @@ class ASRPipeline:
                     "ts": time.time(),
                 }
             )
+
+            # Step 4: aggregate into utterance for UI
+            if self._utt_enabled and text.strip():
+                self._update_utterance(stream=str(seg.stream), speaker=str(speaker), t_start=float(seg.t_start), t_end=float(seg.t_end), text=str(text))

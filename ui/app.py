@@ -8,7 +8,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
-
 from PySide6.QtGui import QTextCursor
 import numpy as np
 import sounddevice as sd
@@ -55,13 +54,6 @@ class SourceRow:
 
 
 class WriterThread(threading.Thread):
-    """
-    Critical: ALWAYS drains engine output queue to avoid queue.Full -> dropped_out_blocks.
-
-    - If recording=True -> write WAV
-    - else -> discard frames
-    """
-
     def __init__(self, out_q: "queue.Queue[np.ndarray]"):
         super().__init__(name="wav-writer", daemon=True)
         self._q = out_q
@@ -69,7 +61,7 @@ class WriterThread(threading.Thread):
 
         self._lock = threading.RLock()
         self._recording = False
-        self._wav_file = None  # soundfile.SoundFile
+        self._wav_file = None
         self._target_path: Optional[Path] = None
 
         self._last_error: Optional[str] = None
@@ -293,8 +285,7 @@ class MainWindow(QWidget):
 
         self.asr_ui_q: "queue.Queue[dict]" = queue.Queue(maxsize=400)
 
-        # NOTE: we will enable/disable tap_queue dynamically depending on ASR checkbox.
-        self.engine = AudioEngine(format=self.fmt, output_queue=self.out_q, tap_queue=None)
+        self.engine = AudioEngine(format=self.fmt, output_queue=self.out_q, tap_queue=self.tap_q)
 
         self.rows: dict[str, SourceRow] = {}
 
@@ -407,8 +398,6 @@ class MainWindow(QWidget):
             self.chk_wav.setEnabled(False)
             self.chk_wav.setChecked(False)
 
-    # ---------------- transcript ----------------
-
     def _clear_transcript(self) -> None:
         self.txt_tr.clear()
 
@@ -443,12 +432,19 @@ class MainWindow(QWidget):
             ts = float(ev.get("ts", time.time()))
             tss = self._fmt_ts(ts)
 
-            if typ == "segment":
+            # Step 4: UI prefers "utterance"
+            if typ == "utterance":
                 text = (ev.get("text") or "").strip()
                 if not text:
                     continue
                 stream = str(ev.get("stream", ""))
-                self._append_transcript_line(f"[{tss}] {stream}: {text}")
+                speaker = str(ev.get("speaker", "S?"))
+                self._append_transcript_line(f"[{tss}] {stream} {speaker}: {text}")
+
+            # keep segment support (optional, if you ever want it)
+            elif typ == "segment":
+                # ignore segments by default to avoid spam
+                continue
 
             elif typ == "asr_init_start":
                 model = ev.get("model", "")
@@ -476,8 +472,6 @@ class MainWindow(QWidget):
 
             else:
                 continue
-
-    # ---------------- helpers ----------------
 
     def _set_status(self, text: str) -> None:
         self.lbl_status.setText(text)
@@ -563,8 +557,6 @@ class MainWindow(QWidget):
         r.delay_ms.setText(str(int(round(v))) if abs(v - round(v)) < 1e-6 else f"{v:.2f}")
         self.engine.set_source_delay_ms(name, v)
 
-    # ---------------- actions ----------------
-
     def _add_device_dialog(self) -> None:
         if self._is_running():
             self._set_status("Stop before adding devices.")
@@ -612,9 +604,6 @@ class MainWindow(QWidget):
         for n in list(self.rows.keys()):
             self._apply_delay_from_ui(n)
 
-        # FIX: enable tap only when ASR is enabled (saves copies + avoids meaningless tap drops)
-        self.engine.set_tap_queue(self.tap_q if self.chk_asr.isChecked() else None)
-
         try:
             self.engine.start()
         except Exception as e:
@@ -636,19 +625,31 @@ class MainWindow(QWidget):
                     device="cuda",
                     compute_type="float16",
                     beam_size=5,
+
                     endpoint_silence_ms=650.0,
                     max_segment_s=7.0,
                     overlap_ms=200.0,
+
                     vad_energy_threshold=0.0055,
                     vad_hangover_ms=350,
                     vad_min_speech_ms=350,
+
                     diarization_enabled=True,
                     diar_backend="online",
-                    diar_chunk_s=30.0,
-                    diar_step_s=10.0,
+
                     diar_sim_threshold=0.72,
                     diar_min_segment_s=2.0,
                     diar_window_s=180.0,
+
+                    # Step 4: utterances + log rotation
+                    utterance_enabled=True,
+                    utterance_gap_s=0.85,
+                    utterance_max_s=18.0,
+                    utterance_flush_s=2.5,
+
+                    log_max_bytes=25 * 1024 * 1024,
+                    log_backup_count=5,
+
                     ui_queue=self.asr_ui_q,
                 )
                 self.asr.start()
@@ -679,9 +680,7 @@ class MainWindow(QWidget):
         self.txt_output.setEnabled(False)
 
         self.ui_timer.start()
-        self._set_status(
-            f"running: ASR={'on' if self.asr_running else 'off'}, WAV={'on' if self.writer.is_recording() else 'off'}"
-        )
+        self._set_status(f"running: ASR={'on' if self.asr_running else 'off'}, WAV={'on' if self.writer.is_recording() else 'off'}")
 
     def _stop_all(self) -> None:
         if self.writer.is_recording():
@@ -700,9 +699,6 @@ class MainWindow(QWidget):
                 self.engine.stop()
             except Exception as e:
                 self._set_status(f"Engine stop error: {e}")
-
-        # disable tap when stopped
-        self.engine.set_tap_queue(None)
 
         self.ui_timer.stop()
 
@@ -776,9 +772,7 @@ class MainWindow(QWidget):
                 rate_warn = f" SR={src_rate}!"
 
             state = "active" if active else "silence"
-            r.status.setText(
-                f"{state} buf={buf_frames} miss={miss_out} drop_in={drop_in} delay={int(round(delay_ms))}ms{rate_warn}"
-            )
+            r.status.setText(f"{state} buf={buf_frames} miss={miss_out} drop_in={drop_in} delay={int(round(delay_ms))}ms{rate_warn}")
 
         self._drain_asr_ui_events(limit=50)
 
@@ -790,11 +784,7 @@ class MainWindow(QWidget):
         if x > 1.0:
             x = 1.0
         pct = int((x ** 0.5) * 100.0)
-        if pct < 0:
-            return 0
-        if pct > 100:
-            return 100
-        return pct
+        return max(0, min(100, pct))
 
     def closeEvent(self, event) -> None:
         try:
