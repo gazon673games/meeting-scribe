@@ -29,7 +29,8 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QTextEdit,
     QSizePolicy,
-    QSplitter,  # NEW
+    QSplitter,
+    QScrollArea,
 )
 
 import numpy as np
@@ -46,8 +47,20 @@ try:
 except ImportError:
     sf = None
 
+# Optional resource telemetry
+try:
+    import psutil  # type: ignore
+except Exception:
+    psutil = None
 
-CONFIG_VERSION = 2  # bumped
+# Optional offline runner (Step 6). If you haven't created it yet – it's fine, checkbox will be disabled.
+try:
+    from asr.offline_runner import OfflineASRRunner  # type: ignore
+except Exception:
+    OfflineASRRunner = None  # type: ignore
+
+
+CONFIG_VERSION = 2
 
 
 @dataclass
@@ -164,6 +177,10 @@ class WriterThread(threading.Thread):
                     pass
             self._wav_file = None
             self._target_path = None
+
+    def target_path(self) -> Optional[Path]:
+        with self._lock:
+            return self._target_path
 
 
 class DevicePickerDialog(QDialog):
@@ -311,7 +328,7 @@ class MainWindow(QWidget):
         self._asr_overload_active: bool = False
         self._last_warn_ts: float = 0.0
 
-        # ===== session metrics mirror (UI side) =====
+        # session metrics mirror (UI side)
         self._tap_dropped_total: int = 0
         self._seg_dropped_total: int = 0
         self._seg_skipped_total: int = 0
@@ -319,45 +336,54 @@ class MainWindow(QWidget):
         self._p95_latency_s: float = 0.0
         self._lag_s: float = 0.0
 
-        # ===== silence alert tracking =====
+        # silence alert tracking
         self._silence_eps = 1e-4
         self._silence_alert_s = 15.0
         self._desktop_silence_since_mono: Optional[float] = None
 
-        # ===== transcript file (optional) =====
-        self._tr_fh = None
-        self._tr_path: Optional[Path] = None
+        # UI modes
+        self._long_run_mode: bool = False
+        self._ui_interval_normal_ms: int = 120
+        self._ui_interval_long_ms: int = 260
 
-        # ===== offline pass (optional) =====
-        self._offline_thread: Optional[threading.Thread] = None
-        self._offline_running: bool = False
-        self._offline_last_msg: str = ""
+        # transcript file logging (optional)
+        self._rt_tr_to_file: bool = False
+        self._rt_tr_path: Optional[Path] = None
+        self._rt_tr_fh = None
 
-        # ===== UI =====
-        root = QVBoxLayout(self)
+        # resource telemetry (optional)
+        self._proc = psutil.Process() if psutil is not None else None
+        self._last_cpu_poll_mono: float = 0.0
+        self._cpu_pct: float = 0.0
+        self._rss_mb: float = 0.0
 
-        # NEW: splitter for resizing transcript vs controls
-        self.splitter = QSplitter(Qt.Vertical)
-        root.addWidget(self.splitter, 1)
+        # ===================== UI ROOT =====================
+        outer = QVBoxLayout(self)
 
-        # -------- top pane --------
-        top_pane = QWidget()
-        top_layout = QVBoxLayout(top_pane)
-        top_layout.setContentsMargins(0, 0, 0, 0)
+        # Scroll area so you can scroll the whole window when ASR settings are expanded
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        outer.addWidget(self.scroll, 1)
 
+        content = QWidget()
+        self.scroll.setWidget(content)
+
+        root = QVBoxLayout(content)
+        root.setContentsMargins(8, 8, 8, 8)
+
+        # top row
         top = QHBoxLayout()
         self.btn_add = QPushButton("Add device…")
         top.addWidget(self.btn_add)
 
-        # NEW: long-run mode toggle (lighter UI)
         self.chk_longrun = QCheckBox("Long-run mode (lighter UI)")
         self.chk_longrun.setChecked(False)
         top.addWidget(self.chk_longrun)
 
         top.addStretch(1)
-        top_layout.addLayout(top)
+        root.addLayout(top)
 
-        # ===== ASR row =====
+        # ASR row
         asr_row = QHBoxLayout()
         self.chk_asr = QCheckBox("Enable ASR")
         self.chk_asr.setChecked(True)
@@ -388,9 +414,18 @@ class MainWindow(QWidget):
         asr_row.addWidget(self.cmb_model)
 
         asr_row.addStretch(1)
-        top_layout.addLayout(asr_row)
+        root.addLayout(asr_row)
 
-        # ===== profile settings group =====
+        # ASR settings: collapsible header + body
+        hdr = QHBoxLayout()
+        self.btn_asr_toggle = QPushButton("Hide ASR settings")
+        self.btn_asr_toggle.setCheckable(True)
+        self.btn_asr_toggle.setChecked(True)  # checked => expanded
+        hdr.addWidget(self.btn_asr_toggle)
+
+        hdr.addStretch(1)
+        root.addLayout(hdr)
+
         self.grp_asr_cfg = QGroupBox("ASR settings (Profile)")
         cfg_layout = QVBoxLayout(self.grp_asr_cfg)
         form = QFormLayout()
@@ -432,22 +467,18 @@ class MainWindow(QWidget):
         form.addRow("overload_overlap_ms:", self.txt_over_overlap)
 
         cfg_layout.addLayout(form)
-        top_layout.addWidget(self.grp_asr_cfg)
+        root.addWidget(self.grp_asr_cfg)
 
-        # ===== Step 6 options row =====
+        # Step 6 / transcript options row
         opt_row = QHBoxLayout()
         self.chk_offline_on_stop = QCheckBox("Offline pass on Stop (quality)")
-        self.chk_offline_on_stop.setChecked(False)
+        self.chk_rt_transcript_file = QCheckBox("Also write realtime transcript to file")
         opt_row.addWidget(self.chk_offline_on_stop)
-
-        self.chk_tr_to_file = QCheckBox("Also write realtime transcript to file")
-        self.chk_tr_to_file.setChecked(False)
-        opt_row.addWidget(self.chk_tr_to_file)
-
+        opt_row.addWidget(self.chk_rt_transcript_file)
         opt_row.addStretch(1)
-        top_layout.addLayout(opt_row)
+        root.addLayout(opt_row)
 
-        # ===== WAV row =====
+        # WAV row
         wav_row = QHBoxLayout()
         self.chk_wav = QCheckBox("Write WAV (master mix)")
         self.chk_wav.setChecked(False)
@@ -457,9 +488,9 @@ class MainWindow(QWidget):
         self.txt_output = QLineEdit(self.output_name)
         self.txt_output.setPlaceholderText("capture_mix.wav")
         wav_row.addWidget(self.txt_output, 1)
-        top_layout.addLayout(wav_row)
+        root.addLayout(wav_row)
 
-        # ===== control row =====
+        # control row
         ctrl = QHBoxLayout()
         self.btn_start = QPushButton("Start")
         self.btn_stop = QPushButton("Stop")
@@ -471,12 +502,12 @@ class MainWindow(QWidget):
         ctrl.addWidget(self.btn_clear)
 
         ctrl.addStretch(1)
-        top_layout.addLayout(ctrl)
+        root.addLayout(ctrl)
 
-        # ===== sources group =====
+        # Sources group
         self.grp = QGroupBox("Sources")
         self.grp_layout = QVBoxLayout(self.grp)
-        top_layout.addWidget(self.grp)
+        root.addWidget(self.grp)
 
         master = QHBoxLayout()
         master.addWidget(QLabel("MASTER"))
@@ -487,49 +518,56 @@ class MainWindow(QWidget):
         self.master_status.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         master.addWidget(self.master_meter, 1)
         master.addWidget(self.master_status)
-        top_layout.addLayout(master)
+        root.addLayout(master)
 
+        # drops/completeness + resource usage
         drops_row = QHBoxLayout()
         self.lbl_drops = QLabel("drops: 0")
         self.lbl_drops.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        drops_row.addWidget(self.lbl_drops, 1)
-        top_layout.addLayout(drops_row)
+        drops_row.addWidget(self.lbl_drops, 2)
+
+        self.lbl_resources = QLabel("resources: n/a")
+        self.lbl_resources.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        drops_row.addWidget(self.lbl_resources, 1)
+
+        root.addLayout(drops_row)
 
         comp_row = QHBoxLayout()
         self.lbl_completeness = QLabel("Completeness: OK")
         self.lbl_completeness.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         comp_row.addWidget(self.lbl_completeness, 1)
-        top_layout.addLayout(comp_row)
+        root.addLayout(comp_row)
 
         status_row = QHBoxLayout()
         self.lbl_status = QLabel("ready")
         self.lbl_status.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         status_row.addWidget(self.lbl_status, 1)
-        top_layout.addLayout(status_row)
+        root.addLayout(status_row)
 
-        self.splitter.addWidget(top_pane)
+        # Splitter: transcript should be resizable vertically without breaking scrolling
+        self.splitter = QSplitter(Qt.Vertical)
+        self.splitter.setChildrenCollapsible(False)
 
-        # -------- transcript pane (resizable) --------
-        self.grp_tr = QGroupBox("Transcript")
+        # transcript panel
+        self.grp_tr = QGroupBox("Transcript (utterances + important events)")
         tr_layout = QVBoxLayout(self.grp_tr)
         self.txt_tr = QTextEdit()
         self.txt_tr.setReadOnly(True)
         self.txt_tr.setPlaceholderText("ASR output will appear here…")
-        self.txt_tr.setLineWrapMode(QTextEdit.WidgetWidth)  # easier reading
-        tr_layout.addWidget(self.txt_tr)
+        self.txt_tr.setLineWrapMode(QTextEdit.WidgetWidth)
+
+        # Ensure it can grow and has its own scrollbar
+        self.txt_tr.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.grp_tr.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        tr_layout.addWidget(self.txt_tr, 1)
         self.splitter.addWidget(self.grp_tr)
 
-        # make transcript pane grow
-        self.splitter.setStretchFactor(0, 0)
-        self.splitter.setStretchFactor(1, 1)
-        try:
-            self.splitter.setSizes([520, 300])
-        except Exception:
-            pass
+        root.addWidget(self.splitter, 1)
 
-        # ===== timers =====
+        # timers
         self.ui_timer = QTimer(self)
-        self.ui_timer.setInterval(120)  # will be adjusted by long-run mode
+        self.ui_timer.setInterval(self._ui_interval_normal_ms)
         self.ui_timer.timeout.connect(self._tick_ui)
 
         # autosave debounce
@@ -538,7 +576,7 @@ class MainWindow(QWidget):
         self._cfg_save_timer.setInterval(350)
         self._cfg_save_timer.timeout.connect(self._flush_config_if_dirty)
 
-        # ===== signals =====
+        # signals
         self.btn_add.clicked.connect(self._add_device_dialog)
         self.txt_output.textChanged.connect(self._on_output_changed)
         self.btn_start.clicked.connect(self._start_all)
@@ -546,10 +584,9 @@ class MainWindow(QWidget):
         self.btn_clear.clicked.connect(self._clear_transcript)
 
         self.cmb_profile.currentIndexChanged.connect(self._on_profile_changed)
+        self.chk_longrun.stateChanged.connect(self._on_longrun_changed)
 
-        self.chk_longrun.stateChanged.connect(lambda _s: self._apply_ui_mode_settings())
-        self.chk_tr_to_file.stateChanged.connect(lambda _s: self._mark_config_dirty())
-        self.chk_offline_on_stop.stateChanged.connect(lambda _s: self._mark_config_dirty())
+        self.btn_asr_toggle.clicked.connect(self._toggle_asr_settings)
 
         # config widgets -> autosave
         for w in [
@@ -557,6 +594,7 @@ class MainWindow(QWidget):
             self.cmb_lang,
             self.cmb_asr_mode,
             self.cmb_model,
+            self.cmb_profile,
             self.cmb_compute,
             self.txt_beam,
             self.txt_endpoint,
@@ -573,7 +611,7 @@ class MainWindow(QWidget):
             self.chk_wav,
             self.txt_output,
             self.chk_longrun,
-            self.chk_tr_to_file,
+            self.chk_rt_transcript_file,
             self.chk_offline_on_stop,
         ]:
             self._wire_config_change(w)
@@ -582,11 +620,19 @@ class MainWindow(QWidget):
             self.chk_wav.setEnabled(False)
             self.chk_wav.setChecked(False)
 
-        # ===== load config + apply profile + apply UI mode =====
+        if OfflineASRRunner is None:
+            self.chk_offline_on_stop.setEnabled(False)
+            self.chk_offline_on_stop.setToolTip("Offline runner module not found (asr/offline_runner.py).")
+        else:
+            self.chk_offline_on_stop.setEnabled(True)
+
+        # load config + apply profile
         self._load_config_into_ui()
         self._apply_profile_to_fields(self.cmb_profile.currentText(), force=True)
         self._set_custom_enabled(self.cmb_profile.currentText() == self.PROFILE_CUSTOM)
-        self._apply_ui_mode_settings()
+
+        # initial asr settings visibility
+        self._apply_asr_settings_visibility(expanded=True)
 
     # ---------------- config ----------------
 
@@ -631,9 +677,10 @@ class MainWindow(QWidget):
                 "profile": str(self.cmb_profile.currentText()),
                 "wav_enabled": bool(self.chk_wav.isChecked()),
                 "output_file": str(self.txt_output.text() or "").strip(),
-                "longrun": bool(self.chk_longrun.isChecked()),
-                "realtime_transcript_to_file": bool(self.chk_tr_to_file.isChecked()),
-                "offline_pass_on_stop": bool(self.chk_offline_on_stop.isChecked()),
+                "long_run": bool(self.chk_longrun.isChecked()),
+                "rt_transcript_to_file": bool(self.chk_rt_transcript_file.isChecked()),
+                "offline_on_stop": bool(self.chk_offline_on_stop.isChecked()),
+                "asr_settings_expanded": bool(self.btn_asr_toggle.isChecked()),
             },
             "asr": {
                 "compute_type": str(self.cmb_compute.currentText()),
@@ -683,13 +730,16 @@ class MainWindow(QWidget):
                 val = str(ui.get("output_file") or "").strip()
                 if val:
                     self.txt_output.setText(val)
-
-            if "longrun" in ui:
-                self.chk_longrun.setChecked(bool(ui.get("longrun")))
-            if "realtime_transcript_to_file" in ui:
-                self.chk_tr_to_file.setChecked(bool(ui.get("realtime_transcript_to_file")))
-            if "offline_pass_on_stop" in ui:
-                self.chk_offline_on_stop.setChecked(bool(ui.get("offline_pass_on_stop")))
+            if "long_run" in ui:
+                self.chk_longrun.setChecked(bool(ui.get("long_run")))
+            if "rt_transcript_to_file" in ui:
+                self.chk_rt_transcript_file.setChecked(bool(ui.get("rt_transcript_to_file")))
+            if "offline_on_stop" in ui and self.chk_offline_on_stop.isEnabled():
+                self.chk_offline_on_stop.setChecked(bool(ui.get("offline_on_stop")))
+            if "asr_settings_expanded" in ui:
+                exp = bool(ui.get("asr_settings_expanded"))
+                self.btn_asr_toggle.setChecked(exp)
+                self._apply_asr_settings_visibility(expanded=exp)
         except Exception:
             pass
 
@@ -726,11 +776,13 @@ class MainWindow(QWidget):
         except Exception:
             pass
 
+        # apply long-run interval immediately
+        self._on_longrun_changed()
+
     # ---------------- profiles ----------------
 
     def _profile_defaults(self, profile: str) -> Dict[str, Any]:
         p = (profile or "").strip().lower()
-
         if p == self.PROFILE_REALTIME.lower():
             return {
                 "compute_type": "int8_float16",
@@ -747,7 +799,6 @@ class MainWindow(QWidget):
                 "overload_max_segment_s": 3.5,
                 "overload_overlap_ms": 80.0,
             }
-
         if p == self.PROFILE_QUALITY.lower():
             return {
                 "compute_type": "float16",
@@ -764,7 +815,6 @@ class MainWindow(QWidget):
                 "overload_max_segment_s": 6.0,
                 "overload_overlap_ms": 160.0,
             }
-
         return {
             "compute_type": "float16",
             "beam_size": 5,
@@ -832,14 +882,22 @@ class MainWindow(QWidget):
         prof = self.cmb_profile.currentText()
         self._apply_profile_to_fields(prof, force=True)
 
-    # ---------------- UI mode ----------------
+    # ---------------- UI toggles ----------------
 
-    def _apply_ui_mode_settings(self) -> None:
-        # Step 5: long-run mode => slower UI tick (200–300ms) and reduced transcript spam
-        if bool(self.chk_longrun.isChecked()):
-            self.ui_timer.setInterval(250)
-        else:
-            self.ui_timer.setInterval(120)
+    def _apply_asr_settings_visibility(self, *, expanded: bool) -> None:
+        self.grp_asr_cfg.setVisible(bool(expanded))
+        self.btn_asr_toggle.setText("Hide ASR settings" if expanded else "Show ASR settings")
+
+    def _toggle_asr_settings(self) -> None:
+        expanded = bool(self.btn_asr_toggle.isChecked())
+        self._apply_asr_settings_visibility(expanded=expanded)
+        self._mark_config_dirty()
+
+    def _on_longrun_changed(self) -> None:
+        self._long_run_mode = bool(self.chk_longrun.isChecked())
+        interval = self._ui_interval_long_ms if self._long_run_mode else self._ui_interval_normal_ms
+        self.ui_timer.setInterval(int(interval))
+        self._mark_config_dirty()
 
     # ---------------- transcript/UI helpers ----------------
 
@@ -854,27 +912,26 @@ class MainWindow(QWidget):
         except Exception:
             return "??:??:??"
 
+    def _is_at_bottom(self, margin_px: int = 6) -> bool:
+        sb = self.txt_tr.verticalScrollBar()
+        return int(sb.value()) >= int(sb.maximum()) - int(margin_px)
+
     def _append_transcript_line(self, line: str) -> None:
-        # Do not force-scroll unless user is already at bottom
         max_chars = 260_000
         if self.txt_tr.document().characterCount() > max_chars:
             self.txt_tr.clear()
             self.txt_tr.append("[transcript cleared: too large]")
 
-        sb = self.txt_tr.verticalScrollBar()
-        at_bottom = (sb.value() >= (sb.maximum() - 2))
+        stick = self._is_at_bottom()
 
         self.txt_tr.append(line)
 
-        if at_bottom:
-            sb.setValue(sb.maximum())
+        if stick:
+            self.txt_tr.moveCursor(QTextCursor.End)
+            self.txt_tr.ensureCursorVisible()
 
-        # optional: also write to transcript file
-        if self._tr_fh is not None:
-            try:
-                self._tr_fh.write(line + "\n")
-            except Exception:
-                pass
+        if self._rt_tr_to_file:
+            self._rt_write_line(line)
 
     def _warn_throttle(self, msg: str, *, min_interval_s: float = 1.2) -> None:
         now = time.time()
@@ -898,44 +955,6 @@ class MainWindow(QWidget):
         if not name.lower().endswith(".wav"):
             name += ".wav"
         return self.project_root / name
-
-    def _transcript_output_path(self) -> Path:
-        out_dir = self.project_root / "logs"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        return out_dir / f"transcript_{ts}.txt"
-
-    def _open_transcript_file_if_enabled(self) -> None:
-        self._close_transcript_file()
-        if not bool(self.chk_tr_to_file.isChecked()):
-            return
-        try:
-            p = self._transcript_output_path()
-            self._tr_path = p
-            self._tr_fh = p.open("a", encoding="utf-8")
-            self._tr_fh.write(f"# transcript start {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-            self._tr_fh.flush()
-        except Exception:
-            self._tr_fh = None
-            self._tr_path = None
-
-    def _close_transcript_file(self) -> None:
-        try:
-            if self._tr_fh is not None:
-                try:
-                    self._tr_fh.write(f"# transcript stop {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                except Exception:
-                    pass
-                try:
-                    self._tr_fh.flush()
-                except Exception:
-                    pass
-                try:
-                    self._tr_fh.close()
-                except Exception:
-                    pass
-        finally:
-            self._tr_fh = None
 
     def _on_output_changed(self, _text: str) -> None:
         if self._is_running() and self.chk_wav.isChecked():
@@ -1050,13 +1069,45 @@ class MainWindow(QWidget):
         except Exception as e:
             self._set_status(f"Failed to add device: {e}")
 
+    # ---------------- transcript file logging ----------------
+
+    def _rt_open_if_needed(self) -> None:
+        if not self._rt_tr_to_file:
+            return
+        if self._rt_tr_fh is not None:
+            return
+        try:
+            d = self.project_root / "logs"
+            d.mkdir(parents=True, exist_ok=True)
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            self._rt_tr_path = d / f"transcript_{ts}.txt"
+            self._rt_tr_fh = self._rt_tr_path.open("a", encoding="utf-8")
+        except Exception:
+            self._rt_tr_fh = None
+            self._rt_tr_path = None
+
+    def _rt_close(self) -> None:
+        try:
+            if self._rt_tr_fh is not None:
+                self._rt_tr_fh.flush()
+                self._rt_tr_fh.close()
+        except Exception:
+            pass
+        self._rt_tr_fh = None
+        self._rt_tr_path = None
+
+    def _rt_write_line(self, line: str) -> None:
+        self._rt_open_if_needed()
+        if self._rt_tr_fh is None:
+            return
+        try:
+            self._rt_tr_fh.write(line + "\n")
+        except Exception:
+            pass
+
     # ---------------- ASR/UI event drain ----------------
 
-    def _drain_asr_ui_events(self, limit: int = 120) -> None:
-        # Step 5: in long-run mode, drain less per tick (less UI work)
-        if bool(self.chk_longrun.isChecked()):
-            limit = min(limit, 60)
-
+    def _drain_asr_ui_events(self, limit: int = 140) -> None:
         n = 0
         while n < limit:
             try:
@@ -1069,8 +1120,8 @@ class MainWindow(QWidget):
             ts = float(ev.get("ts", time.time()))
             tss = self._fmt_ts(ts)
 
-            # Step 5: show only utterance + important warnings in transcript in long-run mode
-            longrun = bool(self.chk_longrun.isChecked())
+            # long-run mode: show only utterance + critical signals
+            lite = bool(self._long_run_mode)
 
             if typ == "utterance":
                 text = (ev.get("text") or "").strip()
@@ -1090,12 +1141,10 @@ class MainWindow(QWidget):
                 lag = ev.get("lag_s", None)
                 if bool(active):
                     self._asr_overload_active = True
-                    if not longrun:
-                        self._append_transcript_line(f"[{tss}] OVERLOAD: {reason} q={qsz} beam={beam} lag={lag}")
+                    self._append_transcript_line(f"[{tss}] OVERLOAD: {reason} q={qsz} beam={beam} lag={lag}")
                 else:
                     self._asr_overload_active = False
-                    if not longrun:
-                        self._append_transcript_line(f"[{tss}] OVERLOAD OFF: {reason} q={qsz}")
+                    self._append_transcript_line(f"[{tss}] OVERLOAD OFF: {reason} q={qsz}")
 
             elif typ == "segment_dropped":
                 stream = str(ev.get("stream", ""))
@@ -1115,33 +1164,37 @@ class MainWindow(QWidget):
                 self._p95_latency_s = float(ev.get("p95_latency_s", self._p95_latency_s))
                 self._lag_s = float(ev.get("lag_s", self._lag_s))
 
-            elif typ == "segment":
-                # never show raw segments in UI
-                continue
-
-            elif typ in ("asr_init_start", "asr_init_ok", "asr_started", "asr_stopped"):
-                if longrun:
+            elif typ in ("segment", "segment_ready", "diar_debug", "asr_beam_update"):
+                if lite:
                     continue
-                if typ == "asr_init_start":
-                    model = ev.get("model", "")
-                    device = ev.get("device", "")
-                    self._append_transcript_line(f"[{tss}] ASR init start ({model}, {device})")
-                elif typ == "asr_started":
-                    model = ev.get("model", "")
-                    mode = ev.get("mode", "")
-                    lang = ev.get("language", "")
-                    osx = ev.get("overload_strategy", "")
-                    self._append_transcript_line(f"[{tss}] ASR started (lang={lang}, mode={mode}, model={model}, overload={osx})")
-                elif typ == "asr_init_ok":
-                    model = ev.get("model", "")
-                    self._append_transcript_line(f"[{tss}] ASR init OK ({model})")
-                elif typ == "asr_stopped":
-                    self._append_transcript_line(f"[{tss}] ASR stopped")
+
+            elif typ == "asr_init_start":
+                if lite:
+                    continue
+                model = ev.get("model", "")
+                device = ev.get("device", "")
+                self._append_transcript_line(f"[{tss}] ASR init start ({model}, {device})")
+
+            elif typ == "asr_started":
+                model = ev.get("model", "")
+                mode = ev.get("mode", "")
+                lang = ev.get("language", "")
+                osx = ev.get("overload_strategy", "")
+                self._append_transcript_line(f"[{tss}] ASR started (lang={lang}, mode={mode}, model={model}, overload={osx})")
+
+            elif typ == "asr_init_ok":
+                if lite:
+                    continue
+                model = ev.get("model", "")
+                self._append_transcript_line(f"[{tss}] ASR init OK ({model})")
 
             elif typ == "error":
                 where = ev.get("where", "")
                 err = ev.get("error", "")
                 self._append_transcript_line(f"[{tss}] ERROR {where}: {err}")
+
+            elif typ == "asr_stopped":
+                self._append_transcript_line(f"[{tss}] ASR stopped")
 
             else:
                 continue
@@ -1154,8 +1207,6 @@ class MainWindow(QWidget):
         if len(self.rows) == 0:
             self._set_status("Add at least one device first.")
             return
-
-        self._apply_ui_mode_settings()
 
         self._asr_overload_active = False
         self._last_warn_ts = 0.0
@@ -1181,6 +1232,11 @@ class MainWindow(QWidget):
 
         enabled_sources: List[str] = [n for n, r in self.rows.items() if r.enabled.isChecked()]
 
+        # transcript to file flag
+        self._rt_tr_to_file = bool(self.chk_rt_transcript_file.isChecked())
+        if not self._rt_tr_to_file:
+            self._rt_close()
+
         if self.chk_asr.isChecked():
             self.engine.set_tap_queue(self.tap_q)
 
@@ -1192,10 +1248,6 @@ class MainWindow(QWidget):
         else:
             self.engine.set_tap_queue(None)
 
-        # Step 6: master WAV should be available for offline pass (best effort)
-        if self.chk_offline_on_stop.isChecked() and sf is not None:
-            self.chk_wav.setChecked(True)
-
         try:
             self.engine.start()
         except Exception as e:
@@ -1204,9 +1256,6 @@ class MainWindow(QWidget):
 
         self.asr_running = False
         self.asr = None
-
-        # open transcript file if enabled
-        self._open_transcript_file_if_enabled()
 
         if self.chk_asr.isChecked():
             mode = "split" if self.cmb_asr_mode.currentIndex() == 1 else "mix"
@@ -1247,10 +1296,8 @@ class MainWindow(QWidget):
                     vad_energy_threshold=vad_thr,
                     vad_hangover_ms=350,
                     vad_min_speech_ms=350,
-
                     diarization_enabled=False,
                     log_speaker_labels=False,
-
                     overload_strategy="keep_all" if overload_strategy == "keep_all" else "drop_old",
                     overload_enter_qsize=overload_enter,
                     overload_exit_qsize=overload_exit,
@@ -1259,7 +1306,6 @@ class MainWindow(QWidget):
                     overload_beam_cap=overload_beamcap,
                     overload_overlap_ms=overload_overlap,
                     overload_max_segment_s=overload_maxseg,
-
                     utterance_enabled=True,
                     utterance_gap_s=0.85,
                     utterance_max_s=18.0,
@@ -1267,10 +1313,8 @@ class MainWindow(QWidget):
                     log_max_bytes=25 * 1024 * 1024,
                     log_backup_count=5,
                     ui_queue=self.asr_ui_q,
-
                     asr_language=asr_lang,
                     asr_initial_prompt=prompt,
-
                     metrics_emit_interval_s=1.0,
                     metrics_latency_window=200,
                 )
@@ -1295,61 +1339,31 @@ class MainWindow(QWidget):
 
         self.btn_add.setEnabled(False)
         self.chk_asr.setEnabled(False)
-        self.chk_longrun.setEnabled(False)
-
         self.cmb_profile.setEnabled(False)
         self.cmb_lang.setEnabled(False)
         self.cmb_asr_mode.setEnabled(False)
         self.cmb_model.setEnabled(False)
         self.grp_asr_cfg.setEnabled(False)
+        self.btn_asr_toggle.setEnabled(False)
+        self.chk_longrun.setEnabled(False)
 
         self.chk_offline_on_stop.setEnabled(False)
-        self.chk_tr_to_file.setEnabled(False)
+        self.chk_rt_transcript_file.setEnabled(False)
 
         self.chk_wav.setEnabled(False)
         self.txt_output.setEnabled(False)
 
         self.ui_timer.start()
-        wav_on = "on" if self.writer.is_recording() else "off"
-        self._set_status(f"running: ASR={'on' if self.asr_running else 'off'}, masterWAV={wav_on}")
-
-    def _run_offline_pass_async(self, wav_path: Path) -> None:
-        if self._offline_running:
-            return
-
-        def _job():
-            self._offline_running = True
-            try:
-                # Lazy import so app works even if module not present yet
-                from asr.offline_runner import OfflineRunner  # type: ignore
-
-                out_dir = self.project_root / "logs"
-                out_dir.mkdir(parents=True, exist_ok=True)
-                ts = time.strftime("%Y%m%d_%H%M%S")
-                out_txt = out_dir / f"transcript_offline_{ts}.txt"
-
-                runner = OfflineRunner(project_root=self.project_root)
-                runner.run_quality(
-                    wav_path=wav_path,
-                    out_path=out_txt,
-                    lang=str(self.cmb_lang.currentText() or "ru"),
-                    model=str(self.cmb_model.currentText() or "large-v3"),
-                )
-                self._offline_last_msg = f"offline transcript saved: {out_txt.name}"
-            except Exception as e:
-                self._offline_last_msg = f"offline pass failed: {type(e).__name__}: {e}"
-            finally:
-                self._offline_running = False
-
-        self._offline_thread = threading.Thread(target=_job, name="offline-pass", daemon=True)
-        self._offline_thread.start()
+        self._set_status(f"running: ASR={'on' if self.asr_running else 'off'}, WAV={'on' if self.writer.is_recording() else 'off'}")
 
     def _stop_all(self) -> None:
-        # capture wav path for offline pass (before disabling UI)
-        wav_path = self._current_output_path()
-
+        # stop writer first (ensures wav finalized)
         if self.writer.is_recording():
             self.writer.stop_recording()
+
+        wav_path = self._current_output_path()
+        if self.writer.target_path() is not None:
+            wav_path = self.writer.target_path() or wav_path
 
         if self.asr is not None:
             try:
@@ -1372,29 +1386,23 @@ class MainWindow(QWidget):
 
         self.ui_timer.stop()
 
-        # close transcript file
-        self._close_transcript_file()
-
-        # Step 6: offline pass on stop (quality)
-        if bool(self.chk_offline_on_stop.isChecked()) and wav_path.exists():
-            self._run_offline_pass_async(wav_path)
-
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
 
         self.btn_add.setEnabled(True)
         self.chk_asr.setEnabled(True)
-        self.chk_longrun.setEnabled(True)
-
         self.cmb_profile.setEnabled(True)
         self.cmb_lang.setEnabled(True)
         self.cmb_asr_mode.setEnabled(True)
         self.cmb_model.setEnabled(True)
         self.grp_asr_cfg.setEnabled(True)
-        self._set_custom_enabled(self.cmb_profile.currentText() == self.PROFILE_CUSTOM)
+        self.btn_asr_toggle.setEnabled(True)
+        self.chk_longrun.setEnabled(True)
 
-        self.chk_offline_on_stop.setEnabled(True)
-        self.chk_tr_to_file.setEnabled(True)
+        self.chk_offline_on_stop.setEnabled(OfflineASRRunner is not None)
+        self.chk_rt_transcript_file.setEnabled(True)
+
+        self._set_custom_enabled(self.cmb_profile.currentText() == self.PROFILE_CUSTOM)
 
         self.chk_wav.setEnabled(sf is not None)
         self.txt_output.setEnabled(True)
@@ -1406,24 +1414,64 @@ class MainWindow(QWidget):
             r.meter.setValue(0)
             r.status.setText("stopped")
 
-        self._drain_asr_ui_events(limit=300)
+        self._drain_asr_ui_events(limit=500)
+
+        # close transcript file
+        self._rt_close()
 
         werr = self.writer.last_error()
         if werr:
             self._set_status(f"stopped (wav error: {werr})")
         else:
-            msg = "stopped"
-            if self._offline_last_msg:
-                msg += f" | {self._offline_last_msg}"
-            self._set_status(msg)
+            self._set_status("stopped")
 
         self._flush_config_if_dirty()
 
+        # Optional offline pass after stop
+        if (
+            OfflineASRRunner is not None
+            and bool(self.chk_offline_on_stop.isChecked())
+            and sf is not None
+            and wav_path is not None
+            and Path(wav_path).exists()
+        ):
+            try:
+                self._append_transcript_line(f"[{self._fmt_ts(time.time())}] offline pass: starting…")
+                runner = OfflineASRRunner(project_root=self.project_root)
+                out_txt = runner.run(
+                    wav_path=Path(wav_path),
+                    model_name=str(self.cmb_model.currentText() or "large-v3"),
+                    language=str(self._get_asr_lang() or "ru"),
+                )
+                self._append_transcript_line(f"[{self._fmt_ts(time.time())}] offline pass: done -> {out_txt}")
+            except Exception as e:
+                self._append_transcript_line(f"[{self._fmt_ts(time.time())}] offline pass: ERROR {e}")
+
     # ---------------- tick UI ----------------
+
+    def _poll_resources(self) -> None:
+        if self._proc is None:
+            self.lbl_resources.setText("resources: n/a")
+            return
+        now = time.monotonic()
+        if (now - self._last_cpu_poll_mono) < 0.8:
+            # don't hammer cpu_percent
+            return
+        self._last_cpu_poll_mono = now
+        try:
+            self._cpu_pct = float(self._proc.cpu_percent(interval=None))  # since last call
+            mem = self._proc.memory_info()
+            self._rss_mb = float(mem.rss) / (1024.0 * 1024.0)
+            self.lbl_resources.setText(f"resources: cpu={self._cpu_pct:.0f}% rss={self._rss_mb:.0f}MB")
+        except Exception:
+            self.lbl_resources.setText("resources: n/a")
 
     def _tick_ui(self) -> None:
         meters = self.engine.get_meters()
         now_mono = time.monotonic()
+
+        # resource line
+        self._poll_resources()
 
         # master
         mrms = float(meters["master"]["rms"])
@@ -1483,7 +1531,7 @@ class MainWindow(QWidget):
                     desktop_any_active = True
 
         # drain ASR events and update metrics
-        self._drain_asr_ui_events(limit=140)
+        self._drain_asr_ui_events(limit=160 if not self._long_run_mode else 120)
 
         # completeness label
         ok = (self._tap_dropped_total <= 0) and (self._seg_dropped_total <= 0) and (self._seg_skipped_total <= 0)
@@ -1508,10 +1556,6 @@ class MainWindow(QWidget):
 
         if self._is_running() and self._asr_overload_active:
             self.lbl_status.setText("running (ASR overload: degraded mode)")
-
-        # show offline pass status (if running)
-        if self._offline_running:
-            self.lbl_status.setText("running offline pass (quality) ...")
 
     # ---------------- utils ----------------
 
@@ -1551,6 +1595,7 @@ class MainWindow(QWidget):
                 self.writer.stop()
             except Exception:
                 pass
+            self._rt_close()
         event.accept()
 
 
