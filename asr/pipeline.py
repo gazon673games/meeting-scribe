@@ -12,7 +12,7 @@ import numpy as np
 from asr.logger import ASRLogger
 from asr.utils_audio import stereo_to_mono, resample_linear
 from asr.vad import EnergyVAD
-from asr.diarizer import OnlineDiarizer  # resemblyzer/nemo embeddings + clustering
+from asr.diarizer import OnlineDiarizer
 
 Mode = Literal["mix", "split"]
 DiarBackend = Literal["pyannote", "online", "nemo"]
@@ -23,7 +23,7 @@ class Segment:
     stream: str
     t_start: float
     t_end: float
-    audio_16k: np.ndarray  # mono float32 @ 16k
+    audio_16k: np.ndarray
 
 
 @dataclass
@@ -47,11 +47,6 @@ def _pick_speaker(timeline: List[DiarSegment], t0: float, t1: float) -> str:
 
 
 class _PyannoteBackend:
-    """
-    Optional diarization backend using pyannote.audio.
-    May require HF token for gated models.
-    """
-
     def __init__(self, device: str = "cuda") -> None:
         try:
             from pyannote.audio import Pipeline  # type: ignore
@@ -86,26 +81,55 @@ class _PyannoteBackend:
         if x.size == 0:
             return []
 
-        wav = self._torch.from_numpy(x).unsqueeze(0)  # (1, n)
+        wav = self._torch.from_numpy(x).unsqueeze(0)
         diar = self._pipeline({"waveform": wav, "sample_rate": 16000})
 
         out: List[DiarSegment] = []
         for turn, _, label in diar.itertracks(yield_label=True):
-            out.append(
-                DiarSegment(
-                    t0=float(t_offset) + float(turn.start),
-                    t1=float(t_offset) + float(turn.end),
-                    speaker=str(label),
-                )
-            )
+            out.append(DiarSegment(t0=float(t_offset) + float(turn.start), t1=float(t_offset) + float(turn.end), speaker=str(label)))
         return out
 
 
-class ASRPipeline:
+class _PreGainAGC:
     """
-    Consumes AudioEngine tap_queue packets and produces ASR events (+ optional diarization).
-    """
+    Very simple AGC-lite to stabilize level before VAD.
+    Not a compressor; just slow gain toward target RMS with clamps.
 
+    target_rms: desirable RMS for speech-ish audio (0.04..0.08 typical in float32 [-1,1]).
+    max_gain: cap, to avoid amplifying noise too much.
+    alpha: how fast gain moves (smaller -> slower).
+    """
+    def __init__(self, target_rms: float = 0.06, max_gain: float = 6.0, alpha: float = 0.02):
+        self.target_rms = float(target_rms)
+        self.max_gain = float(max_gain)
+        self.alpha = float(alpha)
+        self.gain = 1.0
+        self.last_in_rms = 0.0
+
+    @staticmethod
+    def _rms(x: np.ndarray) -> float:
+        if x.size == 0:
+            return 0.0
+        xf = x.astype(np.float32, copy=False)
+        return float(np.sqrt(np.mean(xf * xf)))
+
+    def process(self, x: np.ndarray) -> np.ndarray:
+        x = np.asarray(x, dtype=np.float32).reshape(-1)
+        r = self._rms(x)
+        self.last_in_rms = r
+
+        if r > 1e-7:
+            desired = self.target_rms / r
+            desired = max(1.0 / self.max_gain, min(self.max_gain, desired))
+            # smooth gain
+            self.gain = (1.0 - self.alpha) * self.gain + self.alpha * desired
+
+        y = x * float(self.gain)
+        # keep within range
+        return np.clip(y, -1.0, 1.0).astype(np.float32, copy=False)
+
+
+class ASRPipeline:
     def __init__(
         self,
         *,
@@ -119,23 +143,24 @@ class ASRPipeline:
         compute_type: str = "int8_float16",
         beam_size: int = 5,
         ui_queue: Optional["queue.Queue[dict]"] = None,
-        # ---- ASR/VAD quality tuning knobs ----
         endpoint_silence_ms: float = 800.0,
         max_segment_s: float = 12.0,
         overlap_ms: float = 300.0,
         vad_energy_threshold: float = 0.006,
         vad_hangover_ms: int = 400,
         vad_min_speech_ms: int = 350,
-        # ---- diarization ----
         diarization_enabled: bool = True,
         diar_backend: DiarBackend = "pyannote",
-        # (online/nemo diarizer knobs)
         diar_sim_threshold: float = 0.74,
         diar_min_segment_s: float = 1.0,
         diar_window_s: float = 120.0,
-        # (pyannote rolling window knobs)
         diar_chunk_s: float = 30.0,
         diar_step_s: float = 10.0,
+        # NEW: AGC-lite knobs
+        agc_enabled: bool = True,
+        agc_target_rms: float = 0.06,
+        agc_max_gain: float = 6.0,
+        agc_alpha: float = 0.02,
     ):
         self.tap_q = tap_queue
         self.project_root = project_root
@@ -161,7 +186,6 @@ class ASRPipeline:
         self._buf_t0: Dict[str, Optional[float]] = {}
         self._residual_16k: Dict[str, np.ndarray] = {}
 
-        # quality tuning
         self._endpoint_silence_ms = float(endpoint_silence_ms)
         self._max_segment_s = float(max_segment_s)
         self._overlap_ms = float(overlap_ms)
@@ -170,21 +194,17 @@ class ASRPipeline:
         self._vad_hangover_ms = int(vad_hangover_ms)
         self._vad_min_speech_ms = int(vad_min_speech_ms)
 
-        # diarization config
         self._diar_enabled = bool(diarization_enabled)
         self._diar_backend: DiarBackend = diar_backend
 
-        # online/nemo diarizer params
         self._diar_sim_threshold = float(diar_sim_threshold)
         self._diar_min_segment_s = float(diar_min_segment_s)
         self._diar_window_s = float(diar_window_s)
 
-        # pyannote rolling params
         self._diar_chunk_s = float(diar_chunk_s)
         self._diar_step_s = float(diar_step_s)
 
-        # diarization state
-        self._diarizers: Dict[str, OnlineDiarizer] = {}  # per stream for online/nemo
+        self._diarizers: Dict[str, OnlineDiarizer] = {}
         self._pyannote: Optional[_PyannoteBackend] = None
 
         self._ring16: Dict[str, np.ndarray] = {}
@@ -192,20 +212,21 @@ class ASRPipeline:
         self._diar_last_run_ts: Dict[str, float] = {}
         self._timeline: Dict[str, List[DiarSegment]] = {}
 
+        # NEW: per-stream AGC-lite
+        self._agc_enabled = bool(agc_enabled)
+        self._agc_target_rms = float(agc_target_rms)
+        self._agc_max_gain = float(agc_max_gain)
+        self._agc_alpha = float(agc_alpha)
+        self._agc: Dict[str, _PreGainAGC] = {}
+
         self.session_id = f"sess_{int(time.time())}"
-        self.logger = ASRLogger(
-            root=self.project_root,
-            session_id=self.session_id,
-            language=language,
-        )
+        self.logger = ASRLogger(root=self.project_root, session_id=self.session_id, language=language)
 
         self._asr = None
         self._asr_init_error: Optional[str] = None
 
         self._pkt_count = 0
         self._last_heartbeat = 0.0
-
-    # ================= lifecycle =================
 
     def start(self) -> None:
         self._stop.clear()
@@ -228,27 +249,18 @@ class ASRPipeline:
                 "vad_energy_threshold": self._vad_energy_threshold,
                 "vad_hangover_ms": self._vad_hangover_ms,
                 "vad_min_speech_ms": self._vad_min_speech_ms,
+                "vad_adaptive": True,
                 "diarization_enabled": self._diar_enabled,
                 "diar_backend": self._diar_backend,
-                "diar_sim_threshold": self._diar_sim_threshold,
-                "diar_min_segment_s": self._diar_min_segment_s,
-                "diar_window_s": self._diar_window_s,
-                "diar_chunk_s": self._diar_chunk_s,
-                "diar_step_s": self._diar_step_s,
+                "agc_enabled": self._agc_enabled,
+                "agc_target_rms": self._agc_target_rms,
+                "agc_max_gain": self._agc_max_gain,
                 "ts": time.time(),
             }
         )
 
-        self._ingest_thread = threading.Thread(
-            target=self._ingest_loop_safe,
-            name="asr-ingest",
-            daemon=True,
-        )
-        self._worker_thread = threading.Thread(
-            target=self._worker_loop_safe,
-            name="asr-worker",
-            daemon=True,
-        )
+        self._ingest_thread = threading.Thread(target=self._ingest_loop_safe, name="asr-ingest", daemon=True)
+        self._worker_thread = threading.Thread(target=self._worker_loop_safe, name="asr-worker", daemon=True)
         self._ingest_thread.start()
         self._worker_thread.start()
 
@@ -258,11 +270,8 @@ class ASRPipeline:
             self._ingest_thread.join(timeout=2.0)
         if self._worker_thread:
             self._worker_thread.join(timeout=2.0)
-
         self._log_event({"type": "asr_stopped", "ts": time.time()})
         self.logger.close()
-
-    # ================= helpers =================
 
     def _push_ui(self, rec: Dict[str, Any]) -> None:
         if not self.ui_q:
@@ -286,10 +295,20 @@ class ASRPipeline:
                 energy_threshold=self._vad_energy_threshold,
                 hangover_ms=self._vad_hangover_ms,
                 min_speech_ms=self._vad_min_speech_ms,
+                adaptive=True,
+                noise_mult=3.0,
+                noise_alpha=0.05,
             )
             self._buffers[name] = []
             self._buf_t0[name] = None
             self._residual_16k[name] = np.zeros((0,), dtype=np.float32)
+
+        if self._agc_enabled and name not in self._agc:
+            self._agc[name] = _PreGainAGC(
+                target_rms=self._agc_target_rms,
+                max_gain=self._agc_max_gain,
+                alpha=self._agc_alpha,
+            )
 
         if self._diar_enabled and self._diar_backend in ("online", "nemo") and name not in self._diarizers:
             self._diarizers[name] = OnlineDiarizer(
@@ -312,6 +331,8 @@ class ASRPipeline:
         if now - self._last_heartbeat < 2.0:
             return
         self._last_heartbeat = now
+
+        agc = self._agc.get(stream)
         self._log_event(
             {
                 "type": "audio_seen",
@@ -319,11 +340,12 @@ class ASRPipeline:
                 "pkts": self._pkt_count,
                 "last_rms": vad.last_rms(),
                 "thr": vad.last_threshold(),
+                "noise_rms": vad.noise_rms(),
+                "agc_gain": float(agc.gain) if agc is not None else None,
+                "agc_in_rms": float(agc.last_in_rms) if agc is not None else None,
                 "ts": now,
             }
         )
-
-    # ================= ingest =================
 
     def _update_ring(self, stream: str, t0: float, t1: float, x16: np.ndarray) -> None:
         if not self._diar_enabled or self._diar_backend != "pyannote":
@@ -348,19 +370,18 @@ class ASRPipeline:
         self._ring16[stream] = ring
         self._ring_t0[stream] = ring_t0
 
-    def _feed_stream(
-        self,
-        stream: str,
-        t0: float,
-        t1: float,
-        block_48k: np.ndarray,
-        sample_rate: int = 48000,
-    ) -> None:
+    def _feed_stream(self, stream: str, t0: float, t1: float, block_48k: np.ndarray, sample_rate: int = 48000) -> None:
         self._ensure_stream(stream)
         vad = self._vads[stream]
 
         mono = stereo_to_mono(block_48k)
         x16 = resample_linear(mono, sample_rate, 16000)
+
+        # NEW: AGC-lite before VAD
+        if self._agc_enabled:
+            agc = self._agc.get(stream)
+            if agc is not None:
+                x16 = agc.process(x16)
 
         self._update_ring(stream, t0, t1, x16)
 
@@ -404,7 +425,6 @@ class ASRPipeline:
         t_start = self._buf_t0[stream]
         frames = self._buffers[stream]
 
-        # FIX: t_start can be 0.0 (valid) – do not treat it as falsy.
         if t_start is None or not frames:
             self._buf_t0[stream] = None
             self._buffers[stream] = []
@@ -432,13 +452,7 @@ class ASRPipeline:
         try:
             self._seg_q.put_nowait(Segment(stream, float(t_start), float(t_end), audio))
         except queue.Full:
-            self._log_event(
-                {
-                    "type": "segment_dropped",
-                    "stream": stream,
-                    "ts": time.time(),
-                }
-            )
+            self._log_event({"type": "segment_dropped", "stream": stream, "ts": time.time()})
 
         overlap_samples = int(round((self._overlap_ms / 1000.0) * 16000.0))
         overlap_samples = max(0, min(overlap_samples, int(audio.shape[0])))
@@ -486,8 +500,6 @@ class ASRPipeline:
                     if isinstance(blk, np.ndarray):
                         self._feed_stream(str(n), t0, t1, blk)
 
-    # ================= diarization helpers =================
-
     def _init_diarization_backend(self) -> None:
         if not self._diar_enabled:
             return
@@ -532,8 +544,6 @@ class ASRPipeline:
         except Exception as e:
             self._log_event({"type": "error", "where": "diar_run", "error": str(e), "ts": time.time()})
             self._diar_enabled = False
-
-    # ================= ASR worker =================
 
     def _worker_loop_safe(self) -> None:
         try:
@@ -588,13 +598,7 @@ class ASRPipeline:
                                 except Exception:
                                     derr = None
                                 self._log_event(
-                                    {
-                                        "type": "error",
-                                        "where": "diar_embed",
-                                        "stream": seg.stream,
-                                        "error": derr or "unknown diarization error",
-                                        "ts": time.time(),
-                                    }
+                                    {"type": "error", "where": "diar_embed", "stream": seg.stream, "error": derr or "unknown", "ts": time.time()}
                                 )
 
                             self._log_event(
@@ -609,16 +613,6 @@ class ASRPipeline:
                                     "ts": time.time(),
                                 }
                             )
-                            if nsp is not None:
-                                self._log_event(
-                                    {
-                                        "type": "speaker_estimate",
-                                        "stream": seg.stream,
-                                        "n_speakers": int(nsp),
-                                        "window_s": float(self._diar_window_s),
-                                        "ts": time.time(),
-                                    }
-                                )
                     except Exception as e:
                         self._log_event({"type": "error", "where": "diar_assign", "error": str(e), "ts": time.time()})
                         speaker = "S?"
@@ -629,28 +623,10 @@ class ASRPipeline:
                 text = (res.get("text") or "").strip()
             except Exception as e:
                 self._log_event(
-                    {
-                        "type": "segment",
-                        "stream": seg.stream,
-                        "speaker": speaker,
-                        "t_start": seg.t_start,
-                        "t_end": seg.t_end,
-                        "text": "",
-                        "error": str(e),
-                        "ts": time.time(),
-                    }
+                    {"type": "segment", "stream": seg.stream, "speaker": speaker, "t_start": seg.t_start, "t_end": seg.t_end, "text": "", "error": str(e), "ts": time.time()}
                 )
                 continue
 
             self._log_event(
-                {
-                    "type": "segment",
-                    "stream": seg.stream,
-                    "speaker": speaker,
-                    "t_start": seg.t_start,
-                    "t_end": seg.t_end,
-                    "text": text,
-                    "latency_s": time.time() - t0,
-                    "ts": time.time(),
-                }
+                {"type": "segment", "stream": seg.stream, "speaker": speaker, "t_start": seg.t_start, "t_end": seg.t_end, "text": text, "latency_s": time.time() - t0, "ts": time.time()}
             )
