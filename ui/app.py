@@ -7,7 +7,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, Tuple, List
 from PySide6.QtGui import QTextCursor
 import numpy as np
 import sounddevice as sd
@@ -282,11 +282,9 @@ class MainWindow(QWidget):
 
         self.out_q: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=400)
         self.tap_q: "queue.Queue[dict]" = queue.Queue(maxsize=200)
-
         self.asr_ui_q: "queue.Queue[dict]" = queue.Queue(maxsize=400)
 
         self.engine = AudioEngine(format=self.fmt, output_queue=self.out_q, tap_queue=self.tap_q)
-
         self.rows: dict[str, SourceRow] = {}
 
         self.writer = WriterThread(self.out_q)
@@ -432,18 +430,14 @@ class MainWindow(QWidget):
             ts = float(ev.get("ts", time.time()))
             tss = self._fmt_ts(ts)
 
-            # Step 4: UI prefers "utterance"
             if typ == "utterance":
                 text = (ev.get("text") or "").strip()
                 if not text:
                     continue
                 stream = str(ev.get("stream", ""))
-                speaker = str(ev.get("speaker", "S?"))
-                self._append_transcript_line(f"[{tss}] {stream} {speaker}: {text}")
+                self._append_transcript_line(f"[{tss}] {stream}: {text}")
 
-            # keep segment support (optional, if you ever want it)
             elif typ == "segment":
-                # ignore segments by default to avoid spam
                 continue
 
             elif typ == "asr_init_start":
@@ -454,9 +448,7 @@ class MainWindow(QWidget):
             elif typ == "asr_started":
                 model = ev.get("model", "")
                 mode = ev.get("mode", "")
-                diar = ev.get("diarization_enabled", None)
-                diar_s = "on" if diar else "off"
-                self._append_transcript_line(f"[{tss}] ASR started (mode={mode}, model={model}, diar={diar_s})")
+                self._append_transcript_line(f"[{tss}] ASR started (mode={mode}, model={model})")
 
             elif typ == "asr_init_ok":
                 model = ev.get("model", "")
@@ -625,31 +617,19 @@ class MainWindow(QWidget):
                     device="cuda",
                     compute_type="float16",
                     beam_size=5,
-
                     endpoint_silence_ms=650.0,
                     max_segment_s=7.0,
                     overlap_ms=200.0,
-
                     vad_energy_threshold=0.0055,
                     vad_hangover_ms=350,
                     vad_min_speech_ms=350,
-
-                    diarization_enabled=True,
-                    diar_backend="online",
-
-                    diar_sim_threshold=0.72,
-                    diar_min_segment_s=2.0,
-                    diar_window_s=180.0,
-
-                    # Step 4: utterances + log rotation
+                    # diarization deliberately removed/disabled in pipeline (step 1)
                     utterance_enabled=True,
                     utterance_gap_s=0.85,
                     utterance_max_s=18.0,
                     utterance_flush_s=2.5,
-
                     log_max_bytes=25 * 1024 * 1024,
                     log_backup_count=5,
-
                     ui_queue=self.asr_ui_q,
                 )
                 self.asr.start()

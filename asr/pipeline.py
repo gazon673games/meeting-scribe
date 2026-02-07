@@ -12,10 +12,8 @@ import numpy as np
 from asr.logger import ASRLogger
 from asr.utils_audio import stereo_to_mono, resample_linear
 from asr.vad import EnergyVAD
-from asr.diarizer import OnlineDiarizer
 
 Mode = Literal["mix", "split"]
-DiarBackend = Literal["pyannote", "online", "nemo"]
 
 
 @dataclass
@@ -24,94 +22,6 @@ class Segment:
     t_start: float
     t_end: float
     audio_16k: np.ndarray
-
-
-@dataclass
-class DiarSegment:
-    t0: float
-    t1: float
-    speaker: str
-
-
-def _pick_speaker(timeline: List[DiarSegment], t0: float, t1: float) -> str:
-    best_label = "S?"
-    best_ov = 0.0
-    for s in timeline:
-        a = max(float(t0), float(s.t0))
-        b = min(float(t1), float(s.t1))
-        ov = b - a
-        if ov > best_ov:
-            best_ov = ov
-            best_label = str(s.speaker)
-    return best_label if best_ov > 0 else "S?"
-
-
-class _PyannoteBackend:
-    def __init__(self, device: str = "cuda") -> None:
-        try:
-            from pyannote.audio import Pipeline  # type: ignore
-        except Exception as e:
-            raise RuntimeError(
-                "pyannote.audio is not installed or failed to import.\n"
-                "Install example:\n"
-                "  pip install pyannote.audio\n"
-                f"Import error: {type(e).__name__}: {e}"
-            )
-
-        try:
-            import torch  # type: ignore
-        except Exception as e:
-            raise RuntimeError(
-                "pyannote.audio requires torch.\n"
-                "Install torch compatible with your CUDA.\n"
-                f"Import error: {type(e).__name__}: {e}"
-            )
-
-        self._torch = torch
-        self._device = torch.device("cuda" if device == "cuda" and torch.cuda.is_available() else "cpu")
-        self._pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization")
-        try:
-            self._pipeline.to(self._device)
-        except Exception:
-            pass
-
-    def diarize(self, audio_16k: np.ndarray, *, t_offset: float = 0.0) -> List[DiarSegment]:
-        x = np.asarray(audio_16k, dtype=np.float32).reshape(-1)
-        if x.size == 0:
-            return []
-        wav = self._torch.from_numpy(x).unsqueeze(0)
-        diar = self._pipeline({"waveform": wav, "sample_rate": 16000})
-        out: List[DiarSegment] = []
-        for turn, _, label in diar.itertracks(yield_label=True):
-            out.append(DiarSegment(t0=float(t_offset) + float(turn.start), t1=float(t_offset) + float(turn.end), speaker=str(label)))
-        return out
-
-
-class _PreGainAGC:
-    def __init__(self, target_rms: float = 0.06, max_gain: float = 6.0, alpha: float = 0.02):
-        self.target_rms = float(target_rms)
-        self.max_gain = float(max_gain)
-        self.alpha = float(alpha)
-        self.gain = 1.0
-        self.last_in_rms = 0.0
-
-    @staticmethod
-    def _rms(x: np.ndarray) -> float:
-        if x.size == 0:
-            return 0.0
-        xf = x.astype(np.float32, copy=False)
-        return float(np.sqrt(np.mean(xf * xf)))
-
-    def process(self, x: np.ndarray) -> np.ndarray:
-        x = np.asarray(x, dtype=np.float32).reshape(-1)
-        r = self._rms(x)
-        self.last_in_rms = r
-        if r > 1e-7:
-            desired = self.target_rms / r
-            desired = max(1.0 / self.max_gain, min(self.max_gain, desired))
-            self.gain = (1.0 - self.alpha) * self.gain + self.alpha * desired
-        y = x * float(self.gain)
-        return np.clip(y, -1.0, 1.0).astype(np.float32, copy=False)
 
 
 def _norm_text(s: str) -> str:
@@ -178,17 +88,46 @@ class _AdaptiveBeam:
 @dataclass
 class _UtteranceState:
     stream: str
-    speaker: str
     t_start: float
     t_end: float
     text: str
     last_emit_ts: float
 
 
+class _PreGainAGC:
+    def __init__(self, target_rms: float = 0.06, max_gain: float = 6.0, alpha: float = 0.02):
+        self.target_rms = float(target_rms)
+        self.max_gain = float(max_gain)
+        self.alpha = float(alpha)
+        self.gain = 1.0
+        self.last_in_rms = 0.0
+
+    @staticmethod
+    def _rms(x: np.ndarray) -> float:
+        if x.size == 0:
+            return 0.0
+        xf = x.astype(np.float32, copy=False)
+        return float(np.sqrt(np.mean(xf * xf)))
+
+    def process(self, x: np.ndarray) -> np.ndarray:
+        x = np.asarray(x, dtype=np.float32).reshape(-1)
+        r = self._rms(x)
+        self.last_in_rms = r
+        if r > 1e-7:
+            desired = self.target_rms / r
+            desired = max(1.0 / self.max_gain, min(self.max_gain, desired))
+            self.gain = (1.0 - self.alpha) * self.gain + self.alpha * desired
+        y = x * float(self.gain)
+        return np.clip(y, -1.0, 1.0).astype(np.float32, copy=False)
+
+
 class ASRPipeline:
     """
-    Consumes AudioEngine tap_queue packets and produces ASR events (+ optional diarization).
-    Step 4 adds "utterance" aggregation for human-readable transcript.
+    Consumes AudioEngine tap_queue packets and produces ASR events.
+
+    Step 1 (this revision):
+      - diarization removed/disabled entirely (no speaker labeling)
+      - utterance aggregation keyed only by stream
     """
 
     def __init__(
@@ -210,13 +149,6 @@ class ASRPipeline:
         vad_energy_threshold: float = 0.006,
         vad_hangover_ms: int = 400,
         vad_min_speech_ms: int = 350,
-        diarization_enabled: bool = True,
-        diar_backend: DiarBackend = "pyannote",
-        diar_sim_threshold: float = 0.74,
-        diar_min_segment_s: float = 1.0,
-        diar_window_s: float = 120.0,
-        diar_chunk_s: float = 30.0,
-        diar_step_s: float = 10.0,
         agc_enabled: bool = True,
         agc_target_rms: float = 0.06,
         agc_max_gain: float = 6.0,
@@ -226,12 +158,12 @@ class ASRPipeline:
         adaptive_beam_enabled: bool = True,
         adaptive_beam_min: int = 1,
         adaptive_beam_max: Optional[int] = None,
-        # NEW (Step 4): utterance aggregation
+        # utterance aggregation
         utterance_enabled: bool = True,
         utterance_gap_s: float = 0.85,
         utterance_max_s: float = 18.0,
-        utterance_flush_s: float = 2.5,  # flush if no continuation for this long
-        # NEW (Step 4): log rotation
+        utterance_flush_s: float = 2.5,
+        # log rotation
         log_max_bytes: int = 25 * 1024 * 1024,
         log_backup_count: int = 5,
     ):
@@ -267,24 +199,6 @@ class ASRPipeline:
         self._vad_hangover_ms = int(vad_hangover_ms)
         self._vad_min_speech_ms = int(vad_min_speech_ms)
 
-        self._diar_enabled = bool(diarization_enabled)
-        self._diar_backend: DiarBackend = diar_backend
-
-        self._diar_sim_threshold = float(diar_sim_threshold)
-        self._diar_min_segment_s = float(diar_min_segment_s)
-        self._diar_window_s = float(diar_window_s)
-
-        self._diar_chunk_s = float(diar_chunk_s)
-        self._diar_step_s = float(diar_step_s)
-
-        self._diarizers: Dict[str, OnlineDiarizer] = {}
-        self._pyannote: Optional[_PyannoteBackend] = None
-
-        self._ring16: Dict[str, np.ndarray] = {}
-        self._ring_t0: Dict[str, float] = {}
-        self._diar_last_run_ts: Dict[str, float] = {}
-        self._timeline: Dict[str, List[DiarSegment]] = {}
-
         self._agc_enabled = bool(agc_enabled)
         self._agc_target_rms = float(agc_target_rms)
         self._agc_max_gain = float(agc_max_gain)
@@ -304,12 +218,12 @@ class ASRPipeline:
             cur_beam=max(1, min(int(self.beam_size), maxb)),
         )
 
-        # Step 4 utterances
         self._utt_enabled = bool(utterance_enabled)
         self._utt_gap_s = float(utterance_gap_s)
         self._utt_max_s = float(utterance_max_s)
         self._utt_flush_s = float(utterance_flush_s)
-        self._utt_state: Dict[Tuple[str, str], _UtteranceState] = {}  # key=(stream,speaker)
+        self._utt_state: Dict[str, _UtteranceState] = {}  # key=stream only
+        self._last_utt_flush_check = 0.0
 
         self.session_id = f"sess_{int(time.time())}"
         self.logger = ASRLogger(
@@ -325,7 +239,6 @@ class ASRPipeline:
 
         self._pkt_count = 0
         self._last_heartbeat = 0.0
-        self._last_utt_flush_check = 0.0
 
     # ================= lifecycle =================
 
@@ -350,8 +263,6 @@ class ASRPipeline:
                 "vad_energy_threshold": self._vad_energy_threshold,
                 "vad_hangover_ms": self._vad_hangover_ms,
                 "vad_min_speech_ms": self._vad_min_speech_ms,
-                "diarization_enabled": self._diar_enabled,
-                "diar_backend": self._diar_backend,
                 "agc_enabled": self._agc_enabled,
                 "text_dedup_enabled": self._text_dedup_enabled,
                 "adaptive_beam_enabled": self._adaptive_beam_enabled,
@@ -360,6 +271,7 @@ class ASRPipeline:
                 "utterance_max_s": self._utt_max_s,
                 "utterance_flush_s": self._utt_flush_s,
                 "log_rotation": {"max_bytes": self.logger.max_bytes, "backup_count": self.logger.backup_count},
+                "diarization_enabled": False,
                 "ts": time.time(),
             }
         )
@@ -376,7 +288,6 @@ class ASRPipeline:
         if self._worker_thread:
             self._worker_thread.join(timeout=2.0)
 
-        # flush all pending utterances
         try:
             self._flush_all_utterances(force=True)
         except Exception:
@@ -424,22 +335,6 @@ class ASRPipeline:
                 alpha=self._agc_alpha,
             )
 
-        if self._diar_enabled and self._diar_backend in ("online", "nemo") and name not in self._diarizers:
-            self._diarizers[name] = OnlineDiarizer(
-                similarity_threshold=self._diar_sim_threshold,
-                min_segment_s=self._diar_min_segment_s,
-                window_s=self._diar_window_s,
-                backend=("nemo" if self._diar_backend == "nemo" else "resemblyzer"),
-                device=self.device,
-            )
-
-        if self._diar_enabled and self._diar_backend == "pyannote":
-            if name not in self._ring16:
-                self._ring16[name] = np.zeros((0,), dtype=np.float32)
-                self._ring_t0[name] = 0.0
-                self._diar_last_run_ts[name] = 0.0
-                self._timeline[name] = []
-
     def _heartbeat(self, stream: str, vad: EnergyVAD) -> None:
         now = time.time()
         if now - self._last_heartbeat < 2.0:
@@ -465,29 +360,6 @@ class ASRPipeline:
 
     # ================= ingest =================
 
-    def _update_ring(self, stream: str, t0: float, t1: float, x16: np.ndarray) -> None:
-        if not self._diar_enabled or self._diar_backend != "pyannote":
-            return
-
-        self._ensure_stream(stream)
-
-        x16 = np.asarray(x16, dtype=np.float32).reshape(-1)
-        if x16.size == 0:
-            return
-
-        ring = self._ring16.get(stream, np.zeros((0,), dtype=np.float32))
-        ring = np.concatenate([ring, x16]) if ring.size else x16
-
-        max_len = int(max(1.0, self._diar_chunk_s) * 16000)
-        if ring.size > max_len:
-            cut = ring.size - max_len
-            ring = ring[cut:]
-
-        ring_t0 = float(t1) - (ring.size / 16000.0)
-
-        self._ring16[stream] = ring
-        self._ring_t0[stream] = ring_t0
-
     def _feed_stream(self, stream: str, t0: float, t1: float, block_48k: np.ndarray, sample_rate: int = 48000) -> None:
         self._ensure_stream(stream)
         vad = self._vads[stream]
@@ -499,8 +371,6 @@ class ASRPipeline:
             agc = self._agc.get(stream)
             if agc is not None:
                 x16 = agc.process(x16)
-
-        self._update_ring(stream, t0, t1, x16)
 
         frame_len = vad.frame_len
         res = self._residual_16k[stream]
@@ -617,84 +487,35 @@ class ASRPipeline:
                     if isinstance(blk, np.ndarray):
                         self._feed_stream(str(n), t0, t1, blk)
 
-    # ================= diarization helpers =================
-
-    def _init_diarization_backend(self) -> None:
-        if not self._diar_enabled:
-            return
-
-        if self._diar_backend == "pyannote":
-            try:
-                self._pyannote = _PyannoteBackend(device=self.device)
-                self._log_event({"type": "diar_init_ok", "backend": "pyannote", "ts": time.time()})
-                return
-            except Exception as e:
-                self._log_event({"type": "error", "where": "diar_init", "error": str(e), "ts": time.time()})
-                self._diar_backend = "nemo"
-                self._pyannote = None
-                self._log_event({"type": "diar_fallback", "backend": "nemo", "ts": time.time()})
-
-        if self._diar_backend == "online":
-            self._log_event({"type": "diar_init_ok", "backend": "online", "ts": time.time()})
-            return
-
-        if self._diar_backend == "nemo":
-            self._log_event({"type": "diar_init_ok", "backend": "nemo", "ts": time.time()})
-            return
-
-    def _maybe_update_pyannote_timeline(self, stream: str) -> None:
-        if not self._diar_enabled or self._diar_backend != "pyannote" or self._pyannote is None:
-            return
-
-        now = time.time()
-        last = float(self._diar_last_run_ts.get(stream, 0.0))
-        if (now - last) < max(0.5, float(self._diar_step_s)):
-            return
-
-        ring = self._ring16.get(stream)
-        if ring is None or ring.size < int(6.0 * 16000):
-            return
-
-        t0 = float(self._ring_t0.get(stream, 0.0))
-        try:
-            tl = self._pyannote.diarize(ring, t_offset=t0)
-            self._timeline[stream] = tl
-            self._diar_last_run_ts[stream] = now
-        except Exception as e:
-            self._log_event({"type": "error", "where": "diar_run", "error": str(e), "ts": time.time()})
-            self._diar_enabled = False
-
-    # ================= utterance aggregation (Step 4) =================
+    # ================= utterance aggregation =================
 
     def _flush_all_utterances(self, *, force: bool = False) -> None:
         now = time.time()
-        for key in list(self._utt_state.keys()):
-            self._flush_utterance(key, now=now, force=force)
+        for stream in list(self._utt_state.keys()):
+            self._flush_utterance(stream, now=now, force=force)
 
-    def _flush_utterance(self, key: Tuple[str, str], *, now: float, force: bool) -> None:
-        st = self._utt_state.get(key)
+    def _flush_utterance(self, stream: str, *, now: float, force: bool) -> None:
+        st = self._utt_state.get(stream)
         if st is None:
             return
         if not st.text.strip():
-            self._utt_state.pop(key, None)
+            self._utt_state.pop(stream, None)
             return
 
-        # flush if forced or stale
         if force or (now - float(st.last_emit_ts)) >= float(self._utt_flush_s):
             self._log_event(
                 {
                     "type": "utterance",
                     "stream": st.stream,
-                    "speaker": st.speaker,
                     "t_start": float(st.t_start),
                     "t_end": float(st.t_end),
                     "text": _norm_text(st.text),
                     "ts": now,
                 }
             )
-            self._utt_state.pop(key, None)
+            self._utt_state.pop(stream, None)
 
-    def _update_utterance(self, *, stream: str, speaker: str, t_start: float, t_end: float, text: str) -> None:
+    def _update_utterance(self, *, stream: str, t_start: float, t_end: float, text: str) -> None:
         if not self._utt_enabled:
             return
         txt = _norm_text(text)
@@ -702,10 +523,9 @@ class ASRPipeline:
             return
 
         now = time.time()
-        key = (str(stream), str(speaker))
+        key = str(stream)
         st = self._utt_state.get(key)
 
-        # periodic flush of stale states (cheap)
         if (now - self._last_utt_flush_check) > 0.5:
             self._last_utt_flush_check = now
             for k in list(self._utt_state.keys()):
@@ -714,7 +534,6 @@ class ASRPipeline:
         if st is None:
             self._utt_state[key] = _UtteranceState(
                 stream=str(stream),
-                speaker=str(speaker),
                 t_start=float(t_start),
                 t_end=float(t_end),
                 text=txt,
@@ -722,23 +541,19 @@ class ASRPipeline:
             )
             return
 
-        # can we append?
         gap = float(t_start) - float(st.t_end)
         new_len = float(t_end) - float(st.t_start)
 
         if gap <= float(self._utt_gap_s) and new_len <= float(self._utt_max_s):
-            # append
             st.t_end = float(t_end)
             st.text = (st.text + " " + txt).strip()
             st.last_emit_ts = now
             self._utt_state[key] = st
             return
 
-        # otherwise flush old and start new
         self._flush_utterance(key, now=now, force=True)
         self._utt_state[key] = _UtteranceState(
             stream=str(stream),
-            speaker=str(speaker),
             t_start=float(t_start),
             t_end=float(t_end),
             text=txt,
@@ -772,43 +587,16 @@ class ASRPipeline:
             self._log_event({"type": "error", "where": "asr_init", "error": str(e), "ts": time.time()})
             return
 
-        self._init_diarization_backend()
-
         while not self._stop.is_set():
             try:
                 seg = self._seg_q.get(timeout=0.2)
             except queue.Empty:
-                # flush stale utterances while idle
                 if self._utt_enabled:
                     try:
                         self._flush_all_utterances(force=False)
                     except Exception:
                         pass
                 continue
-
-            speaker = "S?"
-
-            if self._diar_enabled:
-                if self._diar_backend == "pyannote":
-                    self._maybe_update_pyannote_timeline(seg.stream)
-                    tl = self._timeline.get(seg.stream, [])
-                    speaker = _pick_speaker(tl, seg.t_start, seg.t_end)
-                else:
-                    try:
-                        diar = self._diarizers.get(seg.stream)
-                        if diar is not None:
-                            speaker, nsp, best_sim, created = diar.assign_with_debug(seg.audio_16k, ts=time.time())
-                            if str(speaker).startswith("S_ERR"):
-                                derr = None
-                                try:
-                                    derr = diar.last_error()
-                                except Exception:
-                                    derr = None
-                                self._log_event({"type": "error", "where": "diar_embed", "stream": seg.stream, "error": derr or "unknown", "ts": time.time()})
-                            self._log_event({"type": "diar_debug", "stream": seg.stream, "speaker": speaker, "best_sim": best_sim, "created_new": bool(created), "n_speakers_window": nsp, "seg_dur_s": float(seg.audio_16k.shape[0]) / 16000.0, "ts": time.time()})
-                    except Exception as e:
-                        self._log_event({"type": "error", "where": "diar_assign", "error": str(e), "ts": time.time()})
-                        speaker = "S?"
 
             seg_dur_s = max(1e-6, float(seg.audio_16k.shape[0]) / 16000.0)
             beam_to_use = int(self._beam_ctl.cur_beam)
@@ -818,7 +606,7 @@ class ASRPipeline:
                 res = self._asr.transcribe(seg.audio_16k, beam_size=beam_to_use)
                 text = (res.get("text") or "").strip()
             except Exception as e:
-                self._log_event({"type": "segment", "stream": seg.stream, "speaker": speaker, "t_start": seg.t_start, "t_end": seg.t_end, "text": "", "error": str(e), "ts": time.time()})
+                self._log_event({"type": "segment", "stream": seg.stream, "t_start": seg.t_start, "t_end": seg.t_end, "text": "", "error": str(e), "ts": time.time()})
                 continue
 
             latency_s = time.time() - t0
@@ -841,12 +629,10 @@ class ASRPipeline:
                 if reason:
                     self._log_event({"type": "asr_beam_update", "beam": int(new_beam), "reason": reason, "ts": now})
 
-            # keep segment event (debug/telemetry)
             self._log_event(
                 {
                     "type": "segment",
                     "stream": seg.stream,
-                    "speaker": speaker,
                     "t_start": seg.t_start,
                     "t_end": seg.t_end,
                     "text": _norm_text(text),
@@ -859,6 +645,5 @@ class ASRPipeline:
                 }
             )
 
-            # Step 4: aggregate into utterance for UI
             if self._utt_enabled and text.strip():
-                self._update_utterance(stream=str(seg.stream), speaker=str(speaker), t_start=float(seg.t_start), t_end=float(seg.t_end), text=str(text))
+                self._update_utterance(stream=str(seg.stream), t_start=float(seg.t_start), t_end=float(seg.t_end), text=str(text))
