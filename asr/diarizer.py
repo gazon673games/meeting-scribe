@@ -32,6 +32,7 @@ class _ResemblyzerBackend:
     """
     Lazy import wrapper. If resemblyzer isn't installed, we'll raise.
     """
+
     def __init__(self) -> None:
         try:
             from resemblyzer import VoiceEncoder  # type: ignore
@@ -48,9 +49,23 @@ class _ResemblyzerBackend:
         x = np.asarray(audio_16k, dtype=np.float32)
         if x.ndim != 1:
             x = x.reshape(-1).astype(np.float32, copy=False)
-        # VoiceEncoder.embed_utterance returns (d,)
         emb = self._enc.embed_utterance(x)
         return np.asarray(emb, dtype=np.float32)
+
+
+class _NeMoBackend:
+    """
+    NeMo TiTaNet embeddings backend.
+    Requires: asr/diar_backend_nemo.py
+    """
+
+    def __init__(self, device: str = "cuda") -> None:
+        from asr.diar_backend_nemo import NeMoTitaNetEmbedder
+
+        self._emb = NeMoTitaNetEmbedder(device=device)
+
+    def embed(self, audio_16k: np.ndarray) -> np.ndarray:
+        return self._emb.embed_16k(audio_16k, sample_rate=16000)
 
 
 @dataclass
@@ -63,22 +78,37 @@ class OnlineDiarizer:
       - periodic pruning by age is supported (optional)
 
     Notes:
-      - Works best when segments are >= 1s of clean speech.
+      - Works best when segments are >= 1.5-2.0s of clean speech.
       - Overlap (two speakers at once) will degrade quality.
     """
-    similarity_threshold: float = 0.74  # tune 0.70..0.80
+
+    similarity_threshold: float = 0.74  # tune ~0.70..0.80
     max_speakers: int = 8
     min_segment_s: float = 1.0
     prune_after_s: float = 300.0  # drop clusters not seen for 5 min (optional)
-    window_s: float = 120.0       # window for estimating n_speakers
+    window_s: float = 120.0  # window for estimating n_speakers
+
+    # backend selection
+    backend: str = "resemblyzer"  # "resemblyzer" | "nemo"
+    device: str = "cuda"
 
     def __post_init__(self) -> None:
-        self._backend: Optional[_ResemblyzerBackend] = None
+        self._backend: Optional[object] = None
         self._clusters: List[_Cluster] = []
         self._events: List[Tuple[float, str]] = []  # (ts, label) for window estimate
+        self._last_error: Optional[str] = None  # NEW: store last embed/init error text
 
-    def _lazy_backend(self) -> _ResemblyzerBackend:
-        if self._backend is None:
+    def last_error(self) -> Optional[str]:
+        return self._last_error
+
+    def _lazy_backend(self):
+        if self._backend is not None:
+            return self._backend
+
+        b = (self.backend or "resemblyzer").strip().lower()
+        if b == "nemo":
+            self._backend = _NeMoBackend(device=self.device)
+        else:
             self._backend = _ResemblyzerBackend()
         return self._backend
 
@@ -94,7 +124,6 @@ class OnlineDiarizer:
                 keep.append(c)
         self._clusters = keep
 
-        # also prune events buffer
         if self.window_s > 0:
             cutoff = now - self.window_s
             self._events = [(t, l) for (t, l) in self._events if t >= cutoff]
@@ -106,32 +135,29 @@ class OnlineDiarizer:
         """
         now = float(ts if ts is not None else time.time())
 
-        # segment length guard
         dur_s = float(np.asarray(audio_16k).shape[0]) / 16000.0
         if dur_s < float(self.min_segment_s):
-            # Not enough info; don't create clusters. Still update estimate window as unknown.
             self._prune(now)
             return ("S?", self.estimate_n_speakers(now))
 
-        # embedding
         try:
             emb = self._lazy_backend().embed(audio_16k)
-        except Exception:
+            self._last_error = None
+        except Exception as e:
+            self._last_error = f"{type(e).__name__}: {e}"
             self._prune(now)
-            return ("S?", self.estimate_n_speakers(now))
+            return (f"S_ERR:{type(e).__name__}", self.estimate_n_speakers(now))
 
-        emb = _l2norm(emb)
+        emb = _l2norm(np.asarray(emb, dtype=np.float32))
 
         self._prune(now)
 
-        # no clusters yet
         if not self._clusters:
             label = self._next_label()
             self._clusters.append(_Cluster(label=label, centroid=emb, n=1, last_ts=now))
             self._events.append((now, label))
             return (label, self.estimate_n_speakers(now))
 
-        # find best cluster
         best_i = -1
         best_sim = -1.0
         for i, c in enumerate(self._clusters):
@@ -142,7 +168,6 @@ class OnlineDiarizer:
 
         if best_i >= 0 and best_sim >= float(self.similarity_threshold):
             c = self._clusters[best_i]
-            # centroid update (running mean)
             new_centroid = _l2norm((c.centroid * float(c.n) + emb) / float(c.n + 1))
             c.centroid = new_centroid
             c.n += 1
@@ -153,16 +178,12 @@ class OnlineDiarizer:
                 label = self._next_label()
                 self._clusters.append(_Cluster(label=label, centroid=emb, n=1, last_ts=now))
             else:
-                # fallback to best even if below threshold
                 label = self._clusters[best_i].label if best_i >= 0 else "S?"
 
         self._events.append((now, label))
         return (label, self.estimate_n_speakers(now))
 
     def estimate_n_speakers(self, now: Optional[float] = None) -> Optional[int]:
-        """
-        Estimate number of distinct speakers seen in recent window.
-        """
         if self.window_s <= 0:
             return None
         t = float(now if now is not None else time.time())
@@ -171,3 +192,58 @@ class OnlineDiarizer:
         if not labels:
             return None
         return int(len(labels))
+
+    def assign_with_debug(
+        self, audio_16k: np.ndarray, ts: Optional[float] = None
+    ) -> tuple[str, Optional[int], float, bool]:
+        """
+        Returns: (label, n_speakers, best_sim, created_new_cluster)
+        """
+        now = float(ts if ts is not None else time.time())
+        dur_s = float(np.asarray(audio_16k).shape[0]) / 16000.0
+        if dur_s < float(self.min_segment_s):
+            self._prune(now)
+            return ("S?", self.estimate_n_speakers(now), -1.0, False)
+
+        try:
+            emb = self._lazy_backend().embed(audio_16k)  # type: ignore[attr-defined]
+            self._last_error = None
+        except Exception as e:
+            self._last_error = f"{type(e).__name__}: {e}"
+            self._prune(now)
+            return (f"S_ERR:{type(e).__name__}", self.estimate_n_speakers(now), -1.0, False)
+
+        emb = _l2norm(np.asarray(emb, dtype=np.float32))
+        self._prune(now)
+
+        if not self._clusters:
+            label = self._next_label()
+            self._clusters.append(_Cluster(label=label, centroid=emb, n=1, last_ts=now))
+            self._events.append((now, label))
+            return (label, self.estimate_n_speakers(now), 1.0, True)
+
+        best_i = -1
+        best_sim = -1.0
+        for i, c in enumerate(self._clusters):
+            sim = _cos_sim(emb, c.centroid)
+            if sim > best_sim:
+                best_sim = sim
+                best_i = i
+
+        created = False
+        if best_i >= 0 and best_sim >= float(self.similarity_threshold):
+            c = self._clusters[best_i]
+            c.centroid = _l2norm((c.centroid * float(c.n) + emb) / float(c.n + 1))
+            c.n += 1
+            c.last_ts = now
+            label = c.label
+        else:
+            if len(self._clusters) < int(self.max_speakers):
+                label = self._next_label()
+                self._clusters.append(_Cluster(label=label, centroid=emb, n=1, last_ts=now))
+                created = True
+            else:
+                label = self._clusters[best_i].label if best_i >= 0 else "S?"
+
+        self._events.append((now, label))
+        return (label, self.estimate_n_speakers(now), float(best_sim), created)
