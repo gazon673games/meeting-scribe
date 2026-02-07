@@ -295,6 +295,10 @@ class MainWindow(QWidget):
 
         self.output_name = "capture_mix.wav"
 
+        # Step2 UI: overload indicator
+        self._asr_overload_active: bool = False
+        self._last_warn_ts: float = 0.0
+
         root = QVBoxLayout(self)
 
         top = QHBoxLayout()
@@ -417,7 +421,15 @@ class MainWindow(QWidget):
         self.txt_tr.moveCursor(QTextCursor.End)
         self.txt_tr.ensureCursorVisible()
 
-    def _drain_asr_ui_events(self, limit: int = 50) -> None:
+    def _warn_throttle(self, msg: str, *, min_interval_s: float = 1.2) -> None:
+        now = time.time()
+        if (now - float(self._last_warn_ts)) < float(min_interval_s):
+            return
+        self._last_warn_ts = now
+        tss = self._fmt_ts(now)
+        self._append_transcript_line(f"[{tss}] WARNING: {msg}")
+
+    def _drain_asr_ui_events(self, limit: int = 80) -> None:
         n = 0
         while n < limit:
             try:
@@ -435,9 +447,35 @@ class MainWindow(QWidget):
                 if not text:
                     continue
                 stream = str(ev.get("stream", ""))
+                overload = bool(ev.get("overload", False))
+                if overload:
+                    self._asr_overload_active = True
                 self._append_transcript_line(f"[{tss}] {stream}: {text}")
 
+            elif typ == "asr_overload":
+                active = bool(ev.get("active", False))
+                reason = str(ev.get("reason", ""))
+                qsz = ev.get("seg_qsize", None)
+                beam = ev.get("beam_cur", None)
+                self._asr_overload_active = active
+                if active:
+                    self._append_transcript_line(f"[{tss}] OVERLOAD ON: {reason} q={qsz} beam={beam}")
+                else:
+                    self._append_transcript_line(f"[{tss}] OVERLOAD OFF: {reason} q={qsz}")
+
+            elif typ == "segment_dropped":
+                stream = str(ev.get("stream", ""))
+                reason = str(ev.get("reason", ""))
+                qsz = ev.get("seg_qsize", None)
+                self._warn_throttle(f"ASR dropped segment ({stream}) reason={reason} q={qsz}")
+
+            elif typ == "segment_skipped_overload":
+                cnt = int(ev.get("count", 0))
+                qsz = ev.get("seg_qsize", None)
+                self._warn_throttle(f"ASR skipped {cnt} old segments due to overload (q={qsz})")
+
             elif typ == "segment":
+                # ignore per-segment spam in UI
                 continue
 
             elif typ == "asr_init_start":
@@ -587,6 +625,9 @@ class MainWindow(QWidget):
             self._set_status("Add at least one device first.")
             return
 
+        self._asr_overload_active = False
+        self._last_warn_ts = 0.0
+
         while True:
             try:
                 self.asr_ui_q.get_nowait()
@@ -623,7 +664,15 @@ class MainWindow(QWidget):
                     vad_energy_threshold=0.0055,
                     vad_hangover_ms=350,
                     vad_min_speech_ms=350,
-                    # diarization deliberately removed/disabled in pipeline (step 1)
+                    # step2: overload tuning (can be exposed to UI later)
+                    overload_enter_qsize=18,
+                    overload_exit_qsize=6,
+                    overload_hard_drop_qsize=28,
+                    overload_hold_s=2.5,
+                    overload_beam_cap=2,
+                    overload_overlap_ms=120.0,
+                    overload_max_segment_s=5.0,
+                    # utterances + logs
                     utterance_enabled=True,
                     utterance_gap_s=0.85,
                     utterance_max_s=18.0,
@@ -723,6 +772,10 @@ class MainWindow(QWidget):
         drained = self.writer.drained_blocks()
         self.lbl_drops.setText(f"drops: out={dropped_out} tap={dropped_tap} drained={drained}")
 
+        # Step2: explicit warning if engine is dropping
+        if dropped_out > 0 or dropped_tap > 0:
+            self._warn_throttle(f"Engine drops detected: out={dropped_out} tap={dropped_tap}", min_interval_s=2.0)
+
         srcs = meters.get("sources", {})
         for name, info in srcs.items():
             if name not in self.rows:
@@ -754,7 +807,15 @@ class MainWindow(QWidget):
             state = "active" if active else "silence"
             r.status.setText(f"{state} buf={buf_frames} miss={miss_out} drop_in={drop_in} delay={int(round(delay_ms))}ms{rate_warn}")
 
-        self._drain_asr_ui_events(limit=50)
+        self._drain_asr_ui_events(limit=80)
+
+        # Step2: status line indicates overload
+        if self._is_running():
+            if self._asr_overload_active:
+                self.lbl_status.setText("running (ASR overload: degraded mode)")
+            else:
+                # keep whatever was set by start, but avoid spamming
+                pass
 
     @staticmethod
     def _rms_to_pct(rms: float) -> int:
