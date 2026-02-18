@@ -237,17 +237,28 @@ class DevicePickerDialog(QDialog):
                     self.cmb_device.addItem(label, token)
 
     @staticmethod
-    def _list_loopback_devices() -> List[Tuple[str, str]]:
-        out: List[Tuple[str, str]] = []
+    def _list_loopback_devices() -> List[Tuple[str, object]]:
+        out: List[Tuple[str, object]] = []
         try:
             mics = sc.all_microphones(include_loopback=True)
         except Exception:
             mics = []
 
         for m in mics:
-            name = getattr(m, "name", "")
+            if not bool(getattr(m, "isloopback", False)):
+                continue
+            name = str(getattr(m, "name", "")).strip()
             if name:
-                out.append((name, name))
+                token = getattr(m, "id", None)
+                out.append((name, token if token is not None else name))
+
+        if not out:
+            for m in mics:
+                name = str(getattr(m, "name", "")).strip()
+                if not name:
+                    continue
+                token = getattr(m, "id", None)
+                out.append((name, token if token is not None else name))
 
         try:
             sp = sc.default_speaker()
@@ -258,9 +269,9 @@ class DevicePickerDialog(QDialog):
             pass
 
         seen = set()
-        uniq: List[Tuple[str, str]] = []
+        uniq: List[Tuple[str, object]] = []
         for label, token in out:
-            k = label.lower()
+            k = f"{str(token)}::{label.lower()}"
             if k in seen:
                 continue
             seen.add(k)
@@ -305,7 +316,10 @@ class MainWindow(QWidget):
         self.setWindowTitle("Voice2TextTest — Audio Mixer + ASR")
         self.resize(1180, 820)
 
-        self.project_root = Path(__file__).resolve().parents[1]
+        if getattr(sys, "frozen", False):
+            self.project_root = Path(sys.executable).resolve().parent
+        else:
+            self.project_root = Path(__file__).resolve().parents[1]
         self.config_path = self.project_root / "config.json"
 
         self.fmt = AudioFormat(sample_rate=48000, channels=2, dtype="float32", blocksize=1024)
@@ -316,6 +330,7 @@ class MainWindow(QWidget):
 
         self.engine = AudioEngine(format=self.fmt, output_queue=self.out_q, tap_queue=self.tap_q)
         self.rows: dict[str, SourceRow] = {}
+        self.source_objs: Dict[str, Any] = {}
 
         self.writer = WriterThread(self.out_q)
         self.writer.start()
@@ -944,6 +959,18 @@ class MainWindow(QWidget):
     def _set_status(self, text: str) -> None:
         self.lbl_status.setText(text)
 
+    def _on_source_error(self, source: str, error: str) -> None:
+        ev = {
+            "type": "source_error",
+            "source": str(source),
+            "error": str(error),
+            "ts": time.time(),
+        }
+        try:
+            self.asr_ui_q.put_nowait(ev)
+        except Exception:
+            pass
+
     def _is_running(self) -> bool:
         return self.engine.is_running()
 
@@ -1055,8 +1082,10 @@ class MainWindow(QWidget):
         try:
             if typ == DevicePickerDialog.TYPE_LOOPBACK:
                 name = self._make_unique_name("desktop_audio")
-                src = WasapiLoopbackSource(name=name, format=self.fmt, device=str(token))
+                src = WasapiLoopbackSource(name=name, format=self.fmt, device=token)
+                src.set_error_callback(self._on_source_error)
                 self.engine.add_source(src)
+                self.source_objs[name] = src
                 self._add_row(name)
                 self._set_status(f"Added loopback -> source '{name}'")
             else:
@@ -1064,6 +1093,7 @@ class MainWindow(QWidget):
                 mic_fmt = AudioFormat(sample_rate=48000, channels=1, dtype="float32", blocksize=1024)
                 src = MicrophoneSource(name=name, format=mic_fmt, device=int(token))
                 self.engine.add_source(src)
+                self.source_objs[name] = src
                 self._add_row(name)
                 self._set_status(f"Added mic -> source '{name}'")
         except Exception as e:
@@ -1132,6 +1162,12 @@ class MainWindow(QWidget):
                 if overload:
                     self._asr_overload_active = True
                 self._append_transcript_line(f"[{tss}] {stream}: {text}")
+
+            elif typ == "source_error":
+                source = str(ev.get("source", ""))
+                error = str(ev.get("error", ""))
+                self._append_transcript_line(f"[{tss}] SOURCE ERROR {source}: {error}")
+                self._set_status(f"Audio source failed: {source}")
 
             elif typ == "asr_overload":
                 active = bool(ev.get("active", False))
@@ -1254,6 +1290,8 @@ class MainWindow(QWidget):
             self._set_status(f"Engine start failed: {e}")
             return
 
+        QTimer.singleShot(1400, self._post_start_audio_check)
+
         self.asr_running = False
         self.asr = None
 
@@ -1355,6 +1393,50 @@ class MainWindow(QWidget):
 
         self.ui_timer.start()
         self._set_status(f"running: ASR={'on' if self.asr_running else 'off'}, WAV={'on' if self.writer.is_recording() else 'off'}")
+
+    def _post_start_audio_check(self) -> None:
+        if not self._is_running():
+            return
+
+        meters = self.engine.get_meters()
+        srcs = meters.get("sources", {})
+        now_mono = time.monotonic()
+
+        failed: List[str] = []
+        silent: List[str] = []
+        for name, row in self.rows.items():
+            if not row.enabled.isChecked():
+                continue
+
+            info = srcs.get(name, {})
+            last_ts = float(info.get("last_ts", 0.0))
+            rms = float(info.get("rms", 0.0))
+            if last_ts <= 0.0 or ((now_mono - last_ts) > 2.0 and rms <= 1e-5):
+                silent.append(name)
+
+            src_obj = self.source_objs.get(name)
+            if src_obj is not None and hasattr(src_obj, "get_last_error"):
+                try:
+                    err = src_obj.get_last_error()
+                except Exception:
+                    err = None
+                if err:
+                    failed.append(f"{name}: {err}")
+
+        if failed:
+            for msg in failed:
+                self._append_transcript_line(f"[{self._fmt_ts(time.time())}] SOURCE ERROR: {msg}")
+            self._set_status("Audio source failed. See transcript for details.")
+            return
+
+        if silent:
+            joined = ", ".join(silent[:3])
+            more = "..." if len(silent) > 3 else ""
+            self._warn_throttle(
+                f"No audio frames detected from: {joined}{more}. "
+                "Try re-adding loopback device and Start again.",
+                min_interval_s=0.1,
+            )
 
     def _stop_all(self) -> None:
         # stop writer first (ensures wav finalized)
