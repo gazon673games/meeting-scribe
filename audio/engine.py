@@ -70,8 +70,9 @@ TapMode = Literal["mix", "sources", "both"]
 
 class AudioEngine:
     """
-    Real-time safe-ish mixer with per-source ring buffers and master clock.
+    Real-time mixer with per-source ring buffers + master clock.
 
+    output_queue: master mix blocks (blocksize, channels) float32 in [-1..1]
     tap_queue packet (if enabled):
       {
         "t_start": float,
@@ -80,10 +81,9 @@ class AudioEngine:
         "sources": {name: np.ndarray (...)}          # if tap_mode includes sources
       }
 
-    Changes (long-run stability):
-      - configurable tap mode (mix/sources/both) + optional source filter
-      - early tap drop: if tap queue is near full, we skip building/copying packets
-      - "active_sources" for normalization is based on signal presence (RMS), not merely enabled
+    Important behavior:
+      - "enabled=False" means "mute": source still ticks and exports silence so ASR SPLIT stays stable.
+      - tap has early-drop to avoid expensive copies when queue is near full.
     """
 
     def __init__(
@@ -121,17 +121,18 @@ class AudioEngine:
         self._tap_q_max = int(tap_queue_max)
         self._dropped_tap_blocks: int = 0
 
-        # tap config (NEW)
+        # tap config
         self._tap_mode: TapMode = "both"
         self._tap_sources_filter: Optional[Set[str]] = None
         self._tap_drop_threshold: float = 0.85  # if tap_q fill ratio >= this, skip packet build/copies
 
+        # autosync (not implemented here, just state)
         self._autosync_enabled: bool = False
         self._autosync_ref: Optional[str] = None
         self._autosync_target: Optional[str] = None
         self._autosync_last_offset_ms: float = 0.0
 
-        # mix normalization behavior (NEW)
+        # mix normalization behavior
         self._mix_active_rms_eps: float = 1e-4
 
     @property
@@ -159,9 +160,11 @@ class AudioEngine:
           - "mix": put only mix into tap packets
           - "sources": put only sources into tap packets
           - "both": put mix + sources into tap packets
+
         sources:
           - None: no filtering (all sources)
           - list[str]: only include these source names in tap packets (when mode includes "sources")
+
         drop_threshold:
           - if tap queue fill ratio >= threshold, we skip building/copying tap packets
         """
@@ -200,7 +203,22 @@ class AudioEngine:
             st = self._state.get(name)
             if st is None:
                 return
-            st.enabled = bool(enabled)
+            new_val = bool(enabled)
+            if st.enabled == new_val:
+                return
+
+            st.enabled = new_val
+
+            # Сбрасываем буферы при любом переключении, чтобы не тащить старое аудио
+            with st.buf_lock:
+                st.buf.clear()
+                st.delay_buf.clear()
+                st.buffer_frames = 0
+
+            if not new_val:
+                # Мгновенно обнуляем метры, чтобы UI не показывал старое
+                st.rms = 0.0
+                st.last_ts = time.monotonic()
 
     def set_source_delay_ms(self, name: str, delay_ms: float) -> None:
         if delay_ms < 0:
@@ -257,7 +275,7 @@ class AudioEngine:
                     "mode": str(self._tap_mode),
                     "filter": sorted(list(self._tap_sources_filter)) if self._tap_sources_filter else None,
                     "drop_threshold": float(self._tap_drop_threshold),
-                    "tap_queue_max": int(self._tap_q_max),  # NEW: for UI/metrics if needed
+                    "tap_queue_max": int(self._tap_q_max),
                 },
                 "autosync": {
                     "enabled": bool(self._autosync_enabled),
@@ -356,6 +374,9 @@ class AudioEngine:
             st = self._state.get(source_name)
             if st is None:
                 return
+            # ВАЖНО: если источник muted, не копим аудио в буфере (иначе после unmute будет огромный лаг)
+            if not st.enabled:
+                return
 
         x = np.asarray(frame)
         if x.ndim == 1:
@@ -371,7 +392,7 @@ class AudioEngine:
             st.buffer_frames = int(sum(len(b) for b in st.buf))
 
     def _tap_should_send(self, tap_q: "queue.Queue[dict]") -> bool:
-        # Avoid doing expensive packet building/copies if the tap queue is close to full.
+        # Avoid expensive packet building/copies if the tap queue is close to full.
         try:
             qsz = int(tap_q.qsize())
         except Exception:
@@ -407,7 +428,6 @@ class AudioEngine:
 
             mix = np.zeros((fmt.blocksize, fmt.channels), dtype=np.float32)
 
-            # We only build sources_out if tap wants sources.
             want_sources = (tap_q is not None) and (tap_mode in ("sources", "both"))
             sources_out: Optional[Dict[str, np.ndarray]] = {} if want_sources else None
 
@@ -415,20 +435,26 @@ class AudioEngine:
             ts_mono = time.monotonic()
 
             for name, st in items:
+                # Always read source format so meters stay current even when muted
+                src_fmt = st.src.get_format()
+                st.src_rate = int(src_fmt.sample_rate)
+
+                # MUTE behavior: keep stream alive (tap stability), but output silence and don't add to mix.
                 if not st.enabled:
+                    block_eng = np.zeros((fmt.blocksize, fmt.channels), dtype=np.float32)
+                    st.rms = 0.0
+                    st.last_ts = ts_mono
+
+                    if sources_out is not None:
+                        if tap_filter is None or name in tap_filter:
+                            sources_out[name] = block_eng
                     continue
-                if tap_filter is not None and want_sources and name not in tap_filter:
-                    # We still need this source for mixing if enabled. Filter only affects what we export to tap.
-                    pass
 
                 raw = None
                 with st.buf_lock:
                     if st.buf:
                         raw = st.buf.popleft()
                         st.buffer_frames = int(sum(len(b) for b in st.buf))
-
-                src_fmt = st.src.get_format()
-                st.src_rate = int(src_fmt.sample_rate)
 
                 if raw is None:
                     block_src = np.zeros((fmt.blocksize, max(1, src_fmt.channels)), dtype=np.float32)
@@ -438,7 +464,7 @@ class AudioEngine:
                     if block_src.ndim == 1:
                         block_src = block_src[:, None]
 
-                # Normalize input block in SOURCE rate to engine blocksize for predictable resample duration
+                # Normalize input block in SOURCE rate
                 if block_src.shape[0] < fmt.blocksize:
                     pad = np.zeros((fmt.blocksize - block_src.shape[0], block_src.shape[1]), dtype=np.float32)
                     block_src = np.vstack([block_src, pad])
@@ -472,18 +498,16 @@ class AudioEngine:
                 st.rms = self._rms(block_eng)
                 st.last_ts = ts_mono
 
-                # Count active sources by signal presence (NEW)
                 if float(st.rms) > float(self._mix_active_rms_eps):
                     active_sources += 1
 
-                # Export to tap only if requested AND passes filter (NEW)
                 if sources_out is not None:
                     if tap_filter is None or name in tap_filter:
                         sources_out[name] = block_eng
 
                 mix += block_eng
 
-            # Normalize only by actually "active" sources (NEW)
+            # Normalize only by actually "active" sources
             if active_sources > 1:
                 mix *= 1.0 / float(active_sources)
 
@@ -504,7 +528,7 @@ class AudioEngine:
                 with self._lock:
                     self._dropped_out_blocks += 1
 
-            # Tap packet (NEW: early drop + minimal copies)
+            # Tap packet: early drop + minimal copies
             if tap_q is not None:
                 if not self._tap_should_send(tap_q):
                     with self._lock:
@@ -514,7 +538,6 @@ class AudioEngine:
                     if tap_mode in ("mix", "both"):
                         pkt["mix"] = np.array(mixed, copy=True)
                     if tap_mode in ("sources", "both"):
-                        # Only copy/export selected sources (and only if we built it)
                         src_map: Dict[str, np.ndarray] = {}
                         if sources_out is not None:
                             for k, v in sources_out.items():

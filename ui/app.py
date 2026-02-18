@@ -1025,6 +1025,7 @@ class MainWindow(QWidget):
         row = QHBoxLayout()
 
         cb = QCheckBox(name)
+        cb.setTristate(False)
         cb.setChecked(True)
 
         delay = QLineEdit("0")
@@ -1039,7 +1040,8 @@ class MainWindow(QWidget):
         status = QLabel("idle")
         status.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        cb.stateChanged.connect(lambda st, n=name: self.engine.set_source_enabled(n, st == Qt.Checked))
+        # ВАЖНО: clicked(bool) — стабильнее для интерактивного mute/unmute
+        cb.clicked.connect(lambda checked, n=name: self._on_source_toggle(n, checked))
         delay.editingFinished.connect(lambda n=name: self._apply_delay_from_ui(n))
 
         row.addWidget(cb, 0)
@@ -1064,6 +1066,20 @@ class MainWindow(QWidget):
             v = 0.0
         r.delay_ms.setText(str(int(round(v))) if abs(v - round(v)) < 1e-6 else f"{v:.2f}")
         self.engine.set_source_delay_ms(name, v)
+
+    def _on_source_toggle(self, name: str, checked: bool) -> None:
+        # 1) реально переключаем движок
+        self.engine.set_source_enabled(name, bool(checked))
+
+        # 2) логируем в transcript, чтобы было видно, что клик дошёл
+        self._append_transcript_line(
+            f"[{self._fmt_ts(time.time())}] UI toggle: {name} -> {'ON' if checked else 'MUTED'}"
+        )
+
+        # 3) Если ASR включен и режим SPLIT — обновляем tap sources filter (чтобы ASR точно видел текущий набор)
+        if self._is_running() and self.chk_asr.isChecked() and self.cmb_asr_mode.currentIndex() == 1:
+            enabled_sources = [n for n, r in self.rows.items() if r.enabled.isChecked()]
+            self.engine.set_tap_config(mode="sources", sources=enabled_sources, drop_threshold=0.85)
 
     def _add_device_dialog(self) -> None:
         if self._is_running():
@@ -1582,6 +1598,12 @@ class MainWindow(QWidget):
                 self._add_row(name)
             r = self.rows[name]
 
+            enabled = bool(info.get("enabled", True))
+            if not enabled:
+                r.meter.setValue(0)
+                r.status.setText("muted")
+
+            # дальше идет твой обычный код (rms/last_ts/buf_frames/...)
             rms = float(info.get("rms", 0.0))
             last_ts = float(info.get("last_ts", 0.0))
             buf_frames = int(info.get("buffer_frames", 0))
