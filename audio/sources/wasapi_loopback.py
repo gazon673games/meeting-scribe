@@ -4,6 +4,28 @@ from typing import Any, Callable, Optional
 import threading
 
 import numpy as np
+
+# soundcard 0.4.x uses numpy.fromstring() in binary mode, which is removed in NumPy 2.x.
+# Provide a local compatibility shim before importing soundcard.
+if not getattr(np, "_voice2text_fromstring_compat", False):
+    _np_fromstring_orig = np.fromstring
+
+    def _np_fromstring_compat(data, dtype=float, count=-1, sep="", **kwargs):
+        if sep == "" and isinstance(data, (bytes, bytearray, memoryview)):
+            return np.frombuffer(data, dtype=dtype, count=count)
+        try:
+            return _np_fromstring_orig(data, dtype=dtype, count=count, sep=sep, **kwargs)
+        except ValueError as e:
+            if sep == "" and "frombuffer" in str(e).lower():
+                try:
+                    return np.frombuffer(data, dtype=dtype, count=count)
+                except Exception:
+                    pass
+            raise
+
+    np.fromstring = _np_fromstring_compat  # type: ignore[assignment]
+    np._voice2text_fromstring_compat = True  # type: ignore[attr-defined]
+
 import soundcard as sc
 
 from audio.engine import AudioFormat
