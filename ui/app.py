@@ -1582,10 +1582,6 @@ class MainWindow(QWidget):
                 self._add_row(name)
             r = self.rows[name]
 
-            r.enabled.blockSignals(True)
-            r.enabled.setChecked(bool(info.get("enabled", True)))
-            r.enabled.blockSignals(False)
-
             rms = float(info.get("rms", 0.0))
             last_ts = float(info.get("last_ts", 0.0))
             buf_frames = int(info.get("buffer_frames", 0))
@@ -1605,7 +1601,10 @@ class MainWindow(QWidget):
                 rate_warn = f" SR={src_rate}!"
 
             state = "active" if active else "silence"
-            r.status.setText(f"{state} buf={buf_frames} miss={miss_out} drop_in={drop_in} delay={int(round(delay_ms))}ms{rate_warn}")
+            r.status.setText(
+                f"{state} buf={buf_frames} miss={miss_out} drop_in={drop_in} "
+                f"delay={int(round(delay_ms))}ms{rate_warn}"
+            )
 
             if str(name).startswith("desktop_audio"):
                 desktop_any_present = True
