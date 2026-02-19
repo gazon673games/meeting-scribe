@@ -366,6 +366,10 @@ class MainWindow(QWidget):
         self._rt_tr_path: Optional[Path] = None
         self._rt_tr_fh = None
 
+        # human-readable transcript logging (always on during ASR session)
+        self._human_log_path: Optional[Path] = None
+        self._human_log_fh = None
+
         # resource telemetry (optional)
         self._proc = psutil.Process() if psutil is not None else None
         self._last_cpu_poll_mono: float = 0.0
@@ -945,6 +949,8 @@ class MainWindow(QWidget):
             self.txt_tr.moveCursor(QTextCursor.End)
             self.txt_tr.ensureCursorVisible()
 
+        self._human_log_write_line(line)
+
         if self._rt_tr_to_file:
             self._rt_write_line(line)
 
@@ -1117,6 +1123,42 @@ class MainWindow(QWidget):
 
     # ---------------- transcript file logging ----------------
 
+    def _human_log_open_session(self) -> Optional[Path]:
+        self._human_log_close()
+        try:
+            d = self.project_root / "human_logs"
+            d.mkdir(parents=True, exist_ok=True)
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            self._human_log_path = d / f"chat_{ts}.txt"
+            self._human_log_fh = self._human_log_path.open("a", encoding="utf-8")
+            self._human_log_fh.write(f"# Voice2Text chat log: {ts}\n")
+            self._human_log_fh.flush()
+            return self._human_log_path
+        except Exception:
+            self._human_log_fh = None
+            self._human_log_path = None
+            return None
+
+    def _human_log_close(self) -> None:
+        try:
+            if self._human_log_fh is not None:
+                self._human_log_fh.flush()
+                self._human_log_fh.close()
+        except Exception:
+            pass
+        self._human_log_fh = None
+        self._human_log_path = None
+
+    def _human_log_write_line(self, line: str) -> None:
+        if self._human_log_fh is None:
+            return
+        try:
+            self._human_log_fh.write(line + "\n")
+            # Flush every line so another tool/LLM can read near real-time updates.
+            self._human_log_fh.flush()
+        except Exception:
+            pass
+
     def _rt_open_if_needed(self) -> None:
         if not self._rt_tr_to_file:
             return
@@ -1260,6 +1302,8 @@ class MainWindow(QWidget):
             self._set_status("Add at least one device first.")
             return
 
+        self._human_log_close()
+
         self._asr_overload_active = False
         self._last_warn_ts = 0.0
 
@@ -1374,6 +1418,10 @@ class MainWindow(QWidget):
                 )
                 self.asr.start()
                 self.asr_running = True
+
+                hp = self._human_log_open_session()
+                if hp is not None:
+                    self._append_transcript_line(f"[{self._fmt_ts(time.time())}] human log -> {hp}")
             except Exception as e:
                 self._set_status(f"ASR start failed: {e}")
 
@@ -1514,8 +1562,9 @@ class MainWindow(QWidget):
 
         self._drain_asr_ui_events(limit=500)
 
-        # close transcript file
+        # close transcript files
         self._rt_close()
+        self._human_log_close()
 
         werr = self.writer.last_error()
         if werr:
@@ -1699,6 +1748,7 @@ class MainWindow(QWidget):
             except Exception:
                 pass
             self._rt_close()
+            self._human_log_close()
         event.accept()
 
 
