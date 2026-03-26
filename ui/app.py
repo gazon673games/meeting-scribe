@@ -41,6 +41,7 @@ from audio.engine import AudioEngine, AudioFormat
 from audio.sources.wasapi_loopback import WasapiLoopbackSource
 from audio.sources.microphone import MicrophoneSource
 from asr.pipeline import ASRPipeline
+from ui.codex_integration import CodexIntegrationMixin
 
 try:
     import soundfile as sf
@@ -305,7 +306,7 @@ class DevicePickerDialog(QDialog):
         return t, token
 
 
-class MainWindow(QWidget):
+class MainWindow(CodexIntegrationMixin, QWidget):
     PROFILE_REALTIME = "Realtime"
     PROFILE_BALANCED = "Balanced"
     PROFILE_QUALITY = "Quality"
@@ -369,6 +370,8 @@ class MainWindow(QWidget):
         # human-readable transcript logging (always on during ASR session)
         self._human_log_path: Optional[Path] = None
         self._human_log_fh = None
+
+        self._init_codex_state()
 
         # resource telemetry (optional)
         self._proc = psutil.Process() if psutil is not None else None
@@ -563,6 +566,8 @@ class MainWindow(QWidget):
         status_row.addWidget(self.lbl_status, 1)
         root.addLayout(status_row)
 
+        self._build_codex_header(root)
+
         # Splitter: transcript should be resizable vertically without breaking scrolling
         self.splitter = QSplitter(Qt.Vertical)
         self.splitter.setChildrenCollapsible(False)
@@ -582,12 +587,16 @@ class MainWindow(QWidget):
         tr_layout.addWidget(self.txt_tr, 1)
         self.splitter.addWidget(self.grp_tr)
 
+        self._build_codex_panel(self.splitter)
+
         root.addWidget(self.splitter, 1)
 
         # timers
         self.ui_timer = QTimer(self)
         self.ui_timer.setInterval(self._ui_interval_normal_ms)
         self.ui_timer.timeout.connect(self._tick_ui)
+
+        self._start_codex_timer()
 
         # autosave debounce
         self._cfg_dirty = False
@@ -606,6 +615,7 @@ class MainWindow(QWidget):
         self.chk_longrun.stateChanged.connect(self._on_longrun_changed)
 
         self.btn_asr_toggle.clicked.connect(self._toggle_asr_settings)
+        self._connect_codex_signals()
 
         # config widgets -> autosave
         for w in [
@@ -644,6 +654,8 @@ class MainWindow(QWidget):
             self.chk_offline_on_stop.setToolTip("Offline runner module not found (asr/offline_runner.py).")
         else:
             self.chk_offline_on_stop.setEnabled(True)
+
+        self._set_codex_inputs_enabled(False)
 
         # load config + apply profile
         self._load_config_into_ui()
@@ -716,6 +728,7 @@ class MainWindow(QWidget):
                 "overload_max_segment_s": self._safe_float(self.txt_over_maxseg.text(), 5.0, 0.5, 60.0),
                 "overload_overlap_ms": self._safe_float(self.txt_over_overlap.text(), 120.0, 0.0, 2000.0),
             },
+            "codex": self._build_codex_config(),
         }
 
     def _load_config_into_ui(self) -> None:
@@ -728,6 +741,7 @@ class MainWindow(QWidget):
 
         ui = cfg.get("ui", {}) if isinstance(cfg, dict) else {}
         asr = cfg.get("asr", {}) if isinstance(cfg, dict) else {}
+        codex = cfg.get("codex", {}) if isinstance(cfg, dict) else {}
 
         try:
             if "asr_enabled" in ui:
@@ -794,6 +808,8 @@ class MainWindow(QWidget):
                 self.txt_over_overlap.setText(str(float(asr.get("overload_overlap_ms"))))
         except Exception:
             pass
+
+        self._load_codex_from_config(codex)
 
         # apply long-run interval immediately
         self._on_longrun_changed()
@@ -1684,6 +1700,7 @@ class MainWindow(QWidget):
 
         # drain ASR events and update metrics
         self._drain_asr_ui_events(limit=160 if not self._long_run_mode else 120)
+        self._drain_codex_ui_events(limit=10)
 
         # completeness label
         ok = (self._tap_dropped_total <= 0) and (self._seg_dropped_total <= 0) and (self._seg_skipped_total <= 0)
@@ -1743,6 +1760,7 @@ class MainWindow(QWidget):
         try:
             self._stop_all()
         finally:
+            self._stop_codex_timer()
             try:
                 self.writer.stop()
             except Exception:
