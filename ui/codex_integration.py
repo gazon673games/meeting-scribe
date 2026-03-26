@@ -83,6 +83,7 @@ class CodexIntegrationMixin:
         self.txt_codex.setReadOnly(True)
         self.txt_codex.setPlaceholderText("Codex output will appear here")
         self.txt_codex.setLineWrapMode(QTextEdit.WidgetWidth)
+        self.txt_codex.document().setMaximumBlockCount(1200)
         self.txt_codex.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         codex_layout.addWidget(self.txt_codex, 1)
 
@@ -354,13 +355,23 @@ class CodexIntegrationMixin:
         except Exception:
             pass
 
+        max_chars = max(2000, int(self._codex_max_log_chars))
+        max_bytes = max_chars * 4 + 4096
+
         try:
-            txt = path.read_text(encoding="utf-8", errors="ignore")
+            with path.open("rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                size = fh.tell()
+                start = max(0, int(size) - int(max_bytes))
+                fh.seek(start, os.SEEK_SET)
+                raw = fh.read()
         except Exception:
             return ""
 
-        if len(txt) > int(self._codex_max_log_chars):
-            txt = txt[-int(self._codex_max_log_chars) :]
+        txt = raw.decode("utf-8", errors="ignore")
+
+        if len(txt) > max_chars:
+            txt = txt[-max_chars:]
             txt = "[log tail]\n" + txt
         return txt.strip()
 

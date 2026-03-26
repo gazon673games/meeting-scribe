@@ -114,3 +114,6 @@ class OfflineRunner:
         dt = time.time() - t0
         # return path to main transcript
         return out_txt
+
+
+OfflineASRRunner = OfflineRunner

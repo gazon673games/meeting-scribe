@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
 
 from PySide6.QtGui import QTextCursor
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QWidget,
@@ -56,8 +56,9 @@ except Exception:
 
 # Optional offline runner (Step 6). If you haven't created it yet – it's fine, checkbox will be disabled.
 try:
-    from asr.offline_runner import OfflineASRRunner  # type: ignore
+    from asr.offline_runner import OfflineProfile, OfflineRunner as OfflineASRRunner  # type: ignore
 except Exception:
+    OfflineProfile = None  # type: ignore
     OfflineASRRunner = None  # type: ignore
 
 
@@ -307,6 +308,8 @@ class DevicePickerDialog(QDialog):
 
 
 class MainWindow(CodexIntegrationMixin, QWidget):
+    background_event = Signal(dict)
+
     PROFILE_REALTIME = "Realtime"
     PROFILE_BALANCED = "Balanced"
     PROFILE_QUALITY = "Quality"
@@ -372,6 +375,10 @@ class MainWindow(CodexIntegrationMixin, QWidget):
         self._human_log_fh = None
 
         self._init_codex_state()
+        self._closing: bool = False
+        self._offline_pass_active: bool = False
+        self._offline_thread: Optional[threading.Thread] = None
+        self.background_event.connect(self._handle_background_event)
 
         # resource telemetry (optional)
         self._proc = psutil.Process() if psutil is not None else None
@@ -579,6 +586,7 @@ class MainWindow(CodexIntegrationMixin, QWidget):
         self.txt_tr.setReadOnly(True)
         self.txt_tr.setPlaceholderText("ASR output will appear here…")
         self.txt_tr.setLineWrapMode(QTextEdit.WidgetWidth)
+        self.txt_tr.document().setMaximumBlockCount(2500)
 
         # Ensure it can grow and has its own scrollbar
         self.txt_tr.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -952,7 +960,7 @@ class MainWindow(CodexIntegrationMixin, QWidget):
         return int(sb.value()) >= int(sb.maximum()) - int(margin_px)
 
     def _append_transcript_line(self, line: str) -> None:
-        max_chars = 260_000
+        max_chars = 400_000
         if self.txt_tr.document().characterCount() > max_chars:
             self.txt_tr.clear()
             self.txt_tr.append("[transcript cleared: too large]")
@@ -979,7 +987,22 @@ class MainWindow(CodexIntegrationMixin, QWidget):
         self._append_transcript_line(f"[{tss}] WARNING: {msg}")
 
     def _set_status(self, text: str) -> None:
-        self.lbl_status.setText(text)
+        self._set_label_text_if_changed(self.lbl_status, text)
+
+    @staticmethod
+    def _set_label_text_if_changed(label: QLabel, text: str) -> None:
+        if label.text() != text:
+            label.setText(text)
+
+    @staticmethod
+    def _set_progress_if_changed(bar: QProgressBar, value: int) -> None:
+        if int(bar.value()) != int(value):
+            bar.setValue(int(value))
+
+    @staticmethod
+    def _set_line_edit_if_changed(edit: QLineEdit, text: str) -> None:
+        if edit.text() != text:
+            edit.setText(text)
 
     def _on_source_error(self, source: str, error: str) -> None:
         ev = {
@@ -1314,6 +1337,9 @@ class MainWindow(CodexIntegrationMixin, QWidget):
     def _start_all(self) -> None:
         if self._is_running():
             return
+        if self._offline_pass_active:
+            self._set_status("Offline pass is still running. Wait for it to finish first.")
+            return
         if len(self.rows) == 0:
             self._set_status("Add at least one device first.")
             return
@@ -1518,7 +1544,7 @@ class MainWindow(CodexIntegrationMixin, QWidget):
                 min_interval_s=0.1,
             )
 
-    def _stop_all(self) -> None:
+    def _stop_all(self, *, run_offline_pass: bool = True) -> None:
         # stop writer first (ensures wav finalized)
         if self.writer.is_recording():
             self.writer.stop_recording()
@@ -1569,12 +1595,12 @@ class MainWindow(CodexIntegrationMixin, QWidget):
         self.chk_wav.setEnabled(sf is not None)
         self.txt_output.setEnabled(True)
 
-        self.master_meter.setValue(0)
-        self.master_status.setText("stopped")
-        self.lbl_drops.setText("drops: 0")
+        self._set_progress_if_changed(self.master_meter, 0)
+        self._set_label_text_if_changed(self.master_status, "stopped")
+        self._set_label_text_if_changed(self.lbl_drops, "drops: 0")
         for r in self.rows.values():
-            r.meter.setValue(0)
-            r.status.setText("stopped")
+            self._set_progress_if_changed(r.meter, 0)
+            self._set_label_text_if_changed(r.status, "stopped")
 
         self._drain_asr_ui_events(limit=500)
 
@@ -1592,29 +1618,107 @@ class MainWindow(CodexIntegrationMixin, QWidget):
 
         # Optional offline pass after stop
         if (
-            OfflineASRRunner is not None
+            run_offline_pass
+            and OfflineASRRunner is not None
             and bool(self.chk_offline_on_stop.isChecked())
             and sf is not None
             and wav_path is not None
             and Path(wav_path).exists()
         ):
-            try:
-                self._append_transcript_line(f"[{self._fmt_ts(time.time())}] offline pass: starting…")
-                runner = OfflineASRRunner(project_root=self.project_root)
-                out_txt = runner.run(
-                    wav_path=Path(wav_path),
-                    model_name=str(self.cmb_model.currentText() or "large-v3"),
-                    language=str(self._get_asr_lang() or "ru"),
-                )
-                self._append_transcript_line(f"[{self._fmt_ts(time.time())}] offline pass: done -> {out_txt}")
-            except Exception as e:
-                self._append_transcript_line(f"[{self._fmt_ts(time.time())}] offline pass: ERROR {e}")
+            lang_ui = self._get_asr_lang()
+            offline_lang = None if lang_ui == "auto" else str(lang_ui or "ru")
+            self._start_offline_pass(
+                Path(wav_path),
+                model_name=str(self.cmb_model.currentText() or "large-v3"),
+                language=offline_lang,
+            )
+
+    def _start_offline_pass(self, wav_path: Path, *, model_name: str, language: Optional[str]) -> None:
+        if self._offline_pass_active:
+            self._set_status("Offline pass is already running.")
+            return
+        if OfflineASRRunner is None or OfflineProfile is None:
+            self._set_status("Offline pass is unavailable.")
+            return
+
+        self._offline_pass_active = True
+        self.btn_start.setEnabled(False)
+
+        self._offline_thread = threading.Thread(
+            target=self._run_offline_pass_worker,
+            args=(Path(wav_path), str(model_name), language),
+            name="offline-asr-pass",
+            daemon=True,
+        )
+        self._offline_thread.start()
+
+    def _run_offline_pass_worker(self, wav_path: Path, model_name: str, language: Optional[str]) -> None:
+        try:
+            self.background_event.emit({"type": "offline_pass_started"})
+
+            logs_dir = self.project_root / "logs"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            out_txt = logs_dir / f"offline_transcript_{ts}.txt"
+
+            runner = OfflineASRRunner(project_root=self.project_root)
+            profile = OfflineProfile(
+                model_name=str(model_name or "large-v3"),
+                language=language,
+            )
+            result_path = runner.run(
+                wav_path=Path(wav_path),
+                out_txt=out_txt,
+                profile=profile,
+            )
+
+            self.background_event.emit(
+                {
+                    "type": "offline_pass_done",
+                    "out_txt": str(result_path),
+                }
+            )
+        except Exception as e:
+            self.background_event.emit(
+                {
+                    "type": "offline_pass_error",
+                    "error": f"{type(e).__name__}: {e}",
+                }
+            )
+
+    def _handle_background_event(self, ev: Dict[str, Any]) -> None:
+        if self._closing:
+            return
+
+        typ = str(ev.get("type", ""))
+        if typ == "offline_pass_started":
+            self._append_transcript_line(f"[{self._fmt_ts(time.time())}] offline pass: starting…")
+            self._set_status("offline pass: running")
+            return
+
+        if typ == "offline_pass_done":
+            self._offline_pass_active = False
+            self._offline_thread = None
+            self.btn_start.setEnabled(True)
+            out_txt = str(ev.get("out_txt", "")).strip()
+            self._append_transcript_line(f"[{self._fmt_ts(time.time())}] offline pass: done -> {out_txt}")
+            self._set_status("offline pass: done")
+            return
+
+        if typ == "offline_pass_error":
+            self._offline_pass_active = False
+            self._offline_thread = None
+            self.btn_start.setEnabled(True)
+            err = str(ev.get("error", "unknown error"))
+            self._append_transcript_line(f"[{self._fmt_ts(time.time())}] offline pass: ERROR {err}")
+            self._set_status("offline pass: failed")
+            return
 
     # ---------------- tick UI ----------------
 
     def _poll_resources(self) -> None:
         if self._proc is None:
-            self.lbl_resources.setText("resources: n/a")
+            self._set_label_text_if_changed(self.lbl_resources, "resources: n/a")
             return
         now = time.monotonic()
         if (now - self._last_cpu_poll_mono) < 0.8:
@@ -1625,9 +1729,12 @@ class MainWindow(CodexIntegrationMixin, QWidget):
             self._cpu_pct = float(self._proc.cpu_percent(interval=None))  # since last call
             mem = self._proc.memory_info()
             self._rss_mb = float(mem.rss) / (1024.0 * 1024.0)
-            self.lbl_resources.setText(f"resources: cpu={self._cpu_pct:.0f}% rss={self._rss_mb:.0f}MB")
+            self._set_label_text_if_changed(
+                self.lbl_resources,
+                f"resources: cpu={self._cpu_pct:.0f}% rss={self._rss_mb:.0f}MB",
+            )
         except Exception:
-            self.lbl_resources.setText("resources: n/a")
+            self._set_label_text_if_changed(self.lbl_resources, "resources: n/a")
 
     def _tick_ui(self) -> None:
         meters = self.engine.get_meters()
@@ -1639,8 +1746,11 @@ class MainWindow(CodexIntegrationMixin, QWidget):
         # master
         mrms = float(meters["master"]["rms"])
         mlast = float(meters["master"]["last_ts"])
-        self.master_meter.setValue(self._rms_to_pct(mrms))
-        self.master_status.setText("active" if (now_mono - mlast) < 0.6 and mrms > 1e-4 else "silence")
+        self._set_progress_if_changed(self.master_meter, self._rms_to_pct(mrms))
+        self._set_label_text_if_changed(
+            self.master_status,
+            "active" if (now_mono - mlast) < 0.6 and mrms > 1e-4 else "silence",
+        )
 
         drops = meters.get("drops", {})
         dropped_out = int(drops.get("dropped_out_blocks", 0))
@@ -1648,7 +1758,10 @@ class MainWindow(CodexIntegrationMixin, QWidget):
         self._tap_dropped_total = dropped_tap
 
         drained = self.writer.drained_blocks()
-        self.lbl_drops.setText(f"drops: out={dropped_out} tap={dropped_tap} drained={drained}")
+        self._set_label_text_if_changed(
+            self.lbl_drops,
+            f"drops: out={dropped_out} tap={dropped_tap} drained={drained}",
+        )
 
         if dropped_out > 0 or dropped_tap > 0:
             self._warn_throttle(f"Engine drops detected: out={dropped_out} tap={dropped_tap}", min_interval_s=2.0)
@@ -1665,8 +1778,8 @@ class MainWindow(CodexIntegrationMixin, QWidget):
 
             enabled = bool(info.get("enabled", True))
             if not enabled:
-                r.meter.setValue(0)
-                r.status.setText("muted")
+                self._set_progress_if_changed(r.meter, 0)
+                self._set_label_text_if_changed(r.status, "muted")
 
             # дальше идет твой обычный код (rms/last_ts/buf_frames/...)
             rms = float(info.get("rms", 0.0))
@@ -1678,9 +1791,9 @@ class MainWindow(CodexIntegrationMixin, QWidget):
             src_rate = int(info.get("src_rate", 0))
 
             if not r.delay_ms.hasFocus():
-                r.delay_ms.setText(str(int(round(delay_ms))))
+                self._set_line_edit_if_changed(r.delay_ms, str(int(round(delay_ms))))
 
-            r.meter.setValue(self._rms_to_pct(rms))
+            self._set_progress_if_changed(r.meter, self._rms_to_pct(rms))
             active = (now_mono - last_ts) < 0.6 and rms > 1e-4
 
             rate_warn = ""
@@ -1688,9 +1801,10 @@ class MainWindow(CodexIntegrationMixin, QWidget):
                 rate_warn = f" SR={src_rate}!"
 
             state = "active" if active else "silence"
-            r.status.setText(
+            self._set_label_text_if_changed(
+                r.status,
                 f"{state} buf={buf_frames} miss={miss_out} drop_in={drop_in} "
-                f"delay={int(round(delay_ms))}ms{rate_warn}"
+                f"delay={int(round(delay_ms))}ms{rate_warn}",
             )
 
             if str(name).startswith("desktop_audio"):
@@ -1700,15 +1814,15 @@ class MainWindow(CodexIntegrationMixin, QWidget):
 
         # drain ASR events and update metrics
         self._drain_asr_ui_events(limit=160 if not self._long_run_mode else 120)
-        self._drain_codex_ui_events(limit=10)
 
         # completeness label
         ok = (self._tap_dropped_total <= 0) and (self._seg_dropped_total <= 0) and (self._seg_skipped_total <= 0)
         status = "OK" if ok else "DROPS"
-        self.lbl_completeness.setText(
+        self._set_label_text_if_changed(
+            self.lbl_completeness,
             f"Completeness: {status} | tap_drop={self._tap_dropped_total} seg_drop={self._seg_dropped_total} "
             f"seg_skip={self._seg_skipped_total} | avg_lat={self._avg_latency_s:.2f}s p95={self._p95_latency_s:.2f}s "
-            f"lag={self._lag_s:.2f}s"
+            f"lag={self._lag_s:.2f}s",
         )
 
         # desktop silence alert
@@ -1724,7 +1838,7 @@ class MainWindow(CodexIntegrationMixin, QWidget):
                         self._warn_throttle(f"desktop_audio silence for {dur:.1f}s (rms<{self._silence_eps})", min_interval_s=4.0)
 
         if self._is_running() and self._asr_overload_active:
-            self.lbl_status.setText("running (ASR overload: degraded mode)")
+            self._set_label_text_if_changed(self.lbl_status, "running (ASR overload: degraded mode)")
 
     # ---------------- utils ----------------
 
@@ -1757,8 +1871,9 @@ class MainWindow(CodexIntegrationMixin, QWidget):
         return float(v)
 
     def closeEvent(self, event) -> None:
+        self._closing = True
         try:
-            self._stop_all()
+            self._stop_all(run_offline_pass=False)
         finally:
             self._stop_codex_timer()
             try:
