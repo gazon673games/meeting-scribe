@@ -211,6 +211,19 @@ class ASRPipeline:
       - emits periodic "asr_metrics" events to UI
     """
 
+    _UI_EVENT_TYPES = {
+        "utterance",
+        "asr_overload",
+        "segment_dropped",
+        "segment_skipped_overload",
+        "asr_metrics",
+        "asr_init_start",
+        "asr_started",
+        "asr_init_ok",
+        "error",
+        "asr_stopped",
+    }
+
     def __init__(
         self,
         *,
@@ -519,6 +532,9 @@ class ASRPipeline:
 
     def _push_ui(self, rec: Dict[str, Any]) -> None:
         if not self.ui_q:
+            return
+        typ = str(rec.get("type", ""))
+        if typ not in self._UI_EVENT_TYPES:
             return
         try:
             self.ui_q.put_nowait(rec)

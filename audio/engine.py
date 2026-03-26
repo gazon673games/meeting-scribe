@@ -385,11 +385,11 @@ class AudioEngine:
 
         with st.buf_lock:
             st.buf.append(x)
+            st.buffer_frames += int(len(x))
             while len(st.buf) > self._max_buf_blocks:
                 dropped = st.buf.popleft()
                 st.dropped_in_frames += int(len(dropped))
-
-            st.buffer_frames = int(sum(len(b) for b in st.buf))
+                st.buffer_frames = max(0, int(st.buffer_frames) - int(len(dropped)))
 
     def _tap_should_send(self, tap_q: "queue.Queue[dict]") -> bool:
         # Avoid expensive packet building/copies if the tap queue is close to full.
@@ -454,7 +454,7 @@ class AudioEngine:
                 with st.buf_lock:
                     if st.buf:
                         raw = st.buf.popleft()
-                        st.buffer_frames = int(sum(len(b) for b in st.buf))
+                        st.buffer_frames = max(0, int(st.buffer_frames) - int(len(raw)))
 
                 if raw is None:
                     block_src = np.zeros((fmt.blocksize, max(1, src_fmt.channels)), dtype=np.float32)
