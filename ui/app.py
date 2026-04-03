@@ -317,7 +317,7 @@ class MainWindow(CodexIntegrationMixin, QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Voice2TextTest — Audio Mixer + ASR")
+        self.setWindowTitle("Meeting Scribe — Audio Mixer + ASR")
         self.resize(1180, 820)
 
         if getattr(sys, "frozen", False):
@@ -1172,7 +1172,7 @@ class MainWindow(CodexIntegrationMixin, QWidget):
             ts = time.strftime("%Y%m%d_%H%M%S")
             self._human_log_path = d / f"chat_{ts}.txt"
             self._human_log_fh = self._human_log_path.open("a", encoding="utf-8")
-            self._human_log_fh.write(f"# Voice2Text chat log: {ts}\n")
+            self._human_log_fh.write(f"# Meeting Scribe chat log: {ts}\n")
             self._human_log_fh.flush()
             return self._human_log_path
         except Exception:
