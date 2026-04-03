@@ -1,7 +1,11 @@
 __pycache__/
 *.py[cod]
-*.pyo
+
 .venv/
 .idea/
+
 logs/
 human_logs/
+recordings/
+
+.codex_tmp/

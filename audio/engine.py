@@ -298,15 +298,37 @@ class AudioEngine:
             self._dropped_out_blocks = 0
             self._dropped_tap_blocks = 0
 
-        for src in self._sources:
-            src.start(self._on_audio_from_source)
+        started_sources: List[AudioSource] = []
+        try:
+            for src in self._sources:
+                try:
+                    src.start(self._on_audio_from_source)
+                except Exception:
+                    started_sources.append(src)
+                    raise
+                started_sources.append(src)
 
-        self._mix_thread = threading.Thread(
-            target=self._mix_loop,
-            name="audio-mixer",
-            daemon=True,
-        )
-        self._mix_thread.start()
+            self._mix_thread = threading.Thread(
+                target=self._mix_loop,
+                name="audio-mixer",
+                daemon=True,
+            )
+            self._mix_thread.start()
+        except Exception:
+            with self._lock:
+                self._running = False
+                self._stop_evt.set()
+                self._mix_thread = None
+
+            for src in reversed(started_sources):
+                try:
+                    src.stop()
+                except Exception:
+                    pass
+
+            with self._lock:
+                self._reset_runtime_state_locked()
+            raise
 
     def stop(self) -> None:
         with self._lock:
@@ -326,22 +348,25 @@ class AudioEngine:
             self._mix_thread = None
 
         with self._lock:
-            for st in self._state.values():
-                with st.buf_lock:
-                    st.buf.clear()
-                    st.delay_buf.clear()
-                st.rms = 0.0
-                st.last_ts = 0.0
-                st.dropped_in_frames = 0
-                st.missing_out_frames = 0
-                st.buffer_frames = 0
-            self._master_rms = 0.0
-            self._master_last_ts = 0.0
-            self._dropped_out_blocks = 0
-            self._dropped_tap_blocks = 0
-            self._autosync_last_offset_ms = 0.0
+            self._reset_runtime_state_locked()
 
     # ---------------- internals ----------------
+
+    def _reset_runtime_state_locked(self) -> None:
+        for st in self._state.values():
+            with st.buf_lock:
+                st.buf.clear()
+                st.delay_buf.clear()
+            st.rms = 0.0
+            st.last_ts = 0.0
+            st.dropped_in_frames = 0
+            st.missing_out_frames = 0
+            st.buffer_frames = 0
+        self._master_rms = 0.0
+        self._master_last_ts = 0.0
+        self._dropped_out_blocks = 0
+        self._dropped_tap_blocks = 0
+        self._autosync_last_offset_ms = 0.0
 
     @staticmethod
     def _apply_filters(x: np.ndarray, fmt: AudioFormat, filters: List[AudioFilter]) -> np.ndarray:

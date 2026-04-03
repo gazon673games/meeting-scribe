@@ -378,6 +378,8 @@ class MainWindow(CodexIntegrationMixin, QWidget):
         self._closing: bool = False
         self._offline_pass_active: bool = False
         self._offline_thread: Optional[threading.Thread] = None
+        self._asr_stop_active: bool = False
+        self._asr_stop_thread: Optional[threading.Thread] = None
         self.background_event.connect(self._handle_background_event)
 
         # resource telemetry (optional)
@@ -1337,6 +1339,9 @@ class MainWindow(CodexIntegrationMixin, QWidget):
     def _start_all(self) -> None:
         if self._is_running():
             return
+        if self._asr_stop_active:
+            self._set_status("ASR is still stopping. Wait for it to finish first.")
+            return
         if self._offline_pass_active:
             self._set_status("Offline pass is still running. Wait for it to finish first.")
             return
@@ -1544,34 +1549,35 @@ class MainWindow(CodexIntegrationMixin, QWidget):
                 min_interval_s=0.1,
             )
 
-    def _stop_all(self, *, run_offline_pass: bool = True) -> None:
-        # stop writer first (ensures wav finalized)
-        if self.writer.is_recording():
-            self.writer.stop_recording()
+    def _set_stop_ui_pending(self) -> None:
+        self.btn_start.setEnabled(False)
+        self.btn_stop.setEnabled(False)
 
-        wav_path = self._current_output_path()
-        if self.writer.target_path() is not None:
-            wav_path = self.writer.target_path() or wav_path
+        self.btn_add.setEnabled(False)
+        self.chk_asr.setEnabled(False)
+        self.cmb_profile.setEnabled(False)
+        self.cmb_lang.setEnabled(False)
+        self.cmb_asr_mode.setEnabled(False)
+        self.cmb_model.setEnabled(False)
+        self.grp_asr_cfg.setEnabled(False)
+        self.btn_asr_toggle.setEnabled(False)
+        self.chk_longrun.setEnabled(False)
+        self.chk_offline_on_stop.setEnabled(False)
+        self.chk_rt_transcript_file.setEnabled(False)
+        self.chk_wav.setEnabled(False)
+        self.txt_output.setEnabled(False)
 
-        if self.asr is not None:
-            try:
-                self.asr.stop()
-            except Exception:
-                pass
-        self.asr = None
-        self.asr_running = False
-
-        if self.engine.is_running():
-            try:
-                self.engine.stop()
-            except Exception as e:
-                self._set_status(f"Engine stop error: {e}")
-
-        try:
-            self.engine.set_tap_queue(None)
-        except Exception:
-            pass
-
+    def _finish_stop_ui(
+        self,
+        *,
+        wav_path: Path,
+        run_offline_pass: bool,
+        offline_model_name: str,
+        offline_language: Optional[str],
+        stop_error: Optional[str] = None,
+    ) -> None:
+        self._asr_stop_active = False
+        self._asr_stop_thread = None
         self.ui_timer.stop()
 
         self.btn_start.setEnabled(True)
@@ -1604,34 +1610,136 @@ class MainWindow(CodexIntegrationMixin, QWidget):
 
         self._drain_asr_ui_events(limit=500)
 
-        # close transcript files
         self._rt_close()
         self._human_log_close()
 
+        if stop_error:
+            self._append_transcript_line(f"[{self._fmt_ts(time.time())}] ASR stop error: {stop_error}")
+
         werr = self.writer.last_error()
-        if werr:
+        if stop_error:
+            self._set_status(f"stopped (asr stop error: {stop_error})")
+        elif werr:
             self._set_status(f"stopped (wav error: {werr})")
         else:
             self._set_status("stopped")
 
         self._flush_config_if_dirty()
 
-        # Optional offline pass after stop
         if (
-            run_offline_pass
+            not stop_error
+            and run_offline_pass
             and OfflineASRRunner is not None
             and bool(self.chk_offline_on_stop.isChecked())
             and sf is not None
-            and wav_path is not None
             and Path(wav_path).exists()
         ):
-            lang_ui = self._get_asr_lang()
-            offline_lang = None if lang_ui == "auto" else str(lang_ui or "ru")
             self._start_offline_pass(
                 Path(wav_path),
-                model_name=str(self.cmb_model.currentText() or "large-v3"),
-                language=offline_lang,
+                model_name=offline_model_name,
+                language=offline_language,
             )
+
+    def _run_asr_stop_worker(
+        self,
+        asr_obj: ASRPipeline,
+        *,
+        wav_path: Path,
+        run_offline_pass: bool,
+        offline_model_name: str,
+        offline_language: Optional[str],
+    ) -> None:
+        stop_error: Optional[str] = None
+        try:
+            asr_obj.stop()
+        except Exception as e:
+            stop_error = f"{type(e).__name__}: {e}"
+
+        self.background_event.emit(
+            {
+                "type": "asr_stop_done",
+                "wav_path": str(wav_path),
+                "run_offline_pass": bool(run_offline_pass),
+                "offline_model_name": str(offline_model_name),
+                "offline_language": offline_language,
+                "stop_error": stop_error,
+            }
+        )
+
+    def _stop_all(self, *, run_offline_pass: bool = True, wait: bool = False) -> None:
+        if self._asr_stop_active:
+            if wait and self._asr_stop_thread is not None:
+                self._asr_stop_thread.join()
+            else:
+                self._set_status("ASR is still stopping. Wait for it to finish.")
+            return
+
+        wav_path = self.writer.target_path() or self._current_output_path()
+        offline_model_name = str(self.cmb_model.currentText() or "large-v3")
+        lang_ui = self._get_asr_lang()
+        offline_language = None if lang_ui == "auto" else str(lang_ui or "ru")
+
+        if self.writer.is_recording():
+            self.writer.stop_recording()
+
+        asr_to_stop = self.asr
+        self.asr = None
+        self.asr_running = False
+
+        if self.engine.is_running():
+            try:
+                self.engine.stop()
+            except Exception as e:
+                self._set_status(f"Engine stop error: {e}")
+
+        try:
+            self.engine.set_tap_queue(None)
+        except Exception:
+            pass
+
+        self.ui_timer.stop()
+        self._set_stop_ui_pending()
+
+        if asr_to_stop is None:
+            self._finish_stop_ui(
+                wav_path=Path(wav_path),
+                run_offline_pass=run_offline_pass,
+                offline_model_name=offline_model_name,
+                offline_language=offline_language,
+            )
+            return
+
+        self._asr_stop_active = True
+        self._set_status("stopping (waiting for ASR to finish current transcription)...")
+
+        if wait or self._closing:
+            stop_error: Optional[str] = None
+            try:
+                asr_to_stop.stop()
+            except Exception as e:
+                stop_error = f"{type(e).__name__}: {e}"
+            self._finish_stop_ui(
+                wav_path=Path(wav_path),
+                run_offline_pass=run_offline_pass,
+                offline_model_name=offline_model_name,
+                offline_language=offline_language,
+                stop_error=stop_error,
+            )
+            return
+
+        self._asr_stop_thread = threading.Thread(
+            target=self._run_asr_stop_worker,
+            kwargs={
+                "asr_obj": asr_to_stop,
+                "wav_path": Path(wav_path),
+                "run_offline_pass": run_offline_pass,
+                "offline_model_name": offline_model_name,
+                "offline_language": offline_language,
+            },
+            name="asr-stop-worker",
+            daemon=True,
+        )
+        self._asr_stop_thread.start()
 
     def _start_offline_pass(self, wav_path: Path, *, model_name: str, language: Optional[str]) -> None:
         if self._offline_pass_active:
@@ -1691,6 +1799,17 @@ class MainWindow(CodexIntegrationMixin, QWidget):
             return
 
         typ = str(ev.get("type", ""))
+        if typ == "asr_stop_done":
+            stop_error_raw = ev.get("stop_error")
+            self._finish_stop_ui(
+                wav_path=Path(str(ev.get("wav_path", self._current_output_path()))),
+                run_offline_pass=bool(ev.get("run_offline_pass", False)),
+                offline_model_name=str(ev.get("offline_model_name", self.cmb_model.currentText() or "large-v3")),
+                offline_language=ev.get("offline_language"),
+                stop_error=(str(stop_error_raw).strip() if stop_error_raw is not None else None),
+            )
+            return
+
         if typ == "offline_pass_started":
             self._append_transcript_line(f"[{self._fmt_ts(time.time())}] offline pass: starting…")
             self._set_status("offline pass: running")
@@ -1873,7 +1992,7 @@ class MainWindow(CodexIntegrationMixin, QWidget):
     def closeEvent(self, event) -> None:
         self._closing = True
         try:
-            self._stop_all(run_offline_pass=False)
+            self._stop_all(run_offline_pass=False, wait=True)
         finally:
             self._stop_codex_timer()
             try:

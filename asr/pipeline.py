@@ -514,9 +514,11 @@ class ASRPipeline:
     def stop(self) -> None:
         self._stop.set()
         if self._ingest_thread:
-            self._ingest_thread.join(timeout=2.0)
+            self._ingest_thread.join()
+            self._ingest_thread = None
         if self._worker_thread:
-            self._worker_thread.join(timeout=2.0)
+            self._worker_thread.join()
+            self._worker_thread = None
 
         try:
             self._flush_all_utterances(force=True)
@@ -527,6 +529,7 @@ class ASRPipeline:
 
         self._log_event({"type": "asr_stopped", "ts": time.time()})
         self.logger.close()
+        self._asr = None
 
     # ================= helpers =================
 
