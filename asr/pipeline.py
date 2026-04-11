@@ -4,196 +4,25 @@ from __future__ import annotations
 import queue
 import threading
 import time
-from dataclasses import dataclass
-from typing import Dict, Optional, Literal, List, Any, Tuple, Deque
+from typing import Dict, Optional, List, Any, Tuple, Deque
 from collections import deque
 
 import numpy as np
 
+from asr.domain import (
+    DiarBackend,
+    Mode,
+    OverloadStrategy,
+    Segment,
+)
+from asr.diarization import DiarizationRuntime
 from asr.logger import ASRLogger
+from asr.overload import OverloadController
+from asr.policies import AdaptiveBeam, PreGainAGC
+from asr.text import normalize_text, trim_overlap
+from asr.utterances import UtteranceAggregator
 from asr.utils_audio import stereo_to_mono, resample_linear
 from asr.vad import EnergyVAD
-from asr.diarizer import OnlineDiarizer
-
-Mode = Literal["mix", "split"]
-DiarBackend = Literal["pyannote", "online", "nemo"]
-OverloadStrategy = Literal["drop_old", "keep_all"]
-
-
-@dataclass
-class Segment:
-    stream: str
-    t_start: float
-    t_end: float
-    audio_16k: np.ndarray
-    enqueue_ts: float  # NEW: for lag metrics
-
-
-@dataclass
-class DiarSegment:
-    t0: float
-    t1: float
-    speaker: str
-
-
-def _pick_speaker(timeline: List[DiarSegment], t0: float, t1: float) -> str:
-    best_label = "S?"
-    best_ov = 0.0
-    for s in timeline:
-        a = max(float(t0), float(s.t0))
-        b = min(float(t1), float(s.t1))
-        ov = b - a
-        if ov > best_ov:
-            best_ov = ov
-            best_label = str(s.speaker)
-    return best_label if best_ov > 0 else "S?"
-
-
-class _PyannoteBackend:
-    def __init__(self, device: str = "cuda") -> None:
-        try:
-            from pyannote.audio import Pipeline  # type: ignore
-        except Exception as e:
-            raise RuntimeError(
-                "pyannote.audio is not installed or failed to import.\n"
-                "Install example:\n"
-                "  pip install pyannote.audio\n"
-                f"Import error: {type(e).__name__}: {e}"
-            )
-
-        try:
-            import torch  # type: ignore
-        except Exception as e:
-            raise RuntimeError(
-                "pyannote.audio requires torch.\n"
-                "Install torch compatible with your CUDA.\n"
-                f"Import error: {type(e).__name__}: {e}"
-            )
-
-        self._torch = torch
-        self._device = torch.device("cuda" if device == "cuda" and torch.cuda.is_available() else "cpu")
-        self._pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization")
-        try:
-            self._pipeline.to(self._device)
-        except Exception:
-            pass
-
-    def diarize(self, audio_16k: np.ndarray, *, t_offset: float = 0.0) -> List[DiarSegment]:
-        x = np.asarray(audio_16k, dtype=np.float32).reshape(-1)
-        if x.size == 0:
-            return []
-        wav = self._torch.from_numpy(x).unsqueeze(0)
-        diar = self._pipeline({"waveform": wav, "sample_rate": 16000})
-        out: List[DiarSegment] = []
-        for turn, _, label in diar.itertracks(yield_label=True):
-            out.append(
-                DiarSegment(
-                    t0=float(t_offset) + float(turn.start),
-                    t1=float(t_offset) + float(turn.end),
-                    speaker=str(label),
-                )
-            )
-        return out
-
-
-class _PreGainAGC:
-    def __init__(self, target_rms: float = 0.06, max_gain: float = 6.0, alpha: float = 0.02):
-        self.target_rms = float(target_rms)
-        self.max_gain = float(max_gain)
-        self.alpha = float(alpha)
-        self.gain = 1.0
-        self.last_in_rms = 0.0
-
-    @staticmethod
-    def _rms(x: np.ndarray) -> float:
-        if x.size == 0:
-            return 0.0
-        xf = x.astype(np.float32, copy=False)
-        return float(np.sqrt(np.mean(xf * xf)))
-
-    def process(self, x: np.ndarray) -> np.ndarray:
-        x = np.asarray(x, dtype=np.float32).reshape(-1)
-        r = self._rms(x)
-        self.last_in_rms = r
-        if r > 1e-7:
-            desired = self.target_rms / r
-            desired = max(1.0 / self.max_gain, min(self.max_gain, desired))
-            self.gain = (1.0 - self.alpha) * self.gain + self.alpha * desired
-        y = x * float(self.gain)
-        return np.clip(y, -1.0, 1.0).astype(np.float32, copy=False)
-
-
-def _norm_text(s: str) -> str:
-    s = (s or "").strip()
-    s = " ".join(s.split())
-    return s
-
-
-def _trim_overlap(prev_text: str, cur_text: str, *, max_window: int = 80, min_match: int = 8) -> Tuple[str, int]:
-    p = _norm_text(prev_text)
-    c = _norm_text(cur_text)
-    if not p or not c:
-        return (c, 0)
-
-    ps = p[-max_window:]
-    best = 0
-    max_k = min(len(ps), len(c))
-    for k in range(min(max_k, max_window), min_match - 1, -1):
-        if ps[-k:] == c[:k]:
-            best = k
-            break
-    if best > 0:
-        trimmed = c[best:].lstrip()
-        return (trimmed, best)
-    return (c, 0)
-
-
-@dataclass
-class _AdaptiveBeam:
-    min_beam: int = 1
-    max_beam: int = 5
-    cur_beam: int = 5
-
-    backlog_hi: int = 12
-    backlog_lo: int = 2
-    latency_ratio_hi: float = 1.1
-    latency_ratio_lo: float = 0.7
-
-    cool_down_s: float = 2.0
-    last_change_ts: float = 0.0
-
-    def maybe_update(
-        self, *, seg_qsize: int, last_latency_s: float, last_dur_s: float, now: float
-    ) -> Tuple[int, Optional[str]]:
-        if (now - float(self.last_change_ts)) < float(self.cool_down_s):
-            return (int(self.cur_beam), None)
-
-        dur = max(1e-6, float(last_dur_s))
-        ratio = float(last_latency_s) / dur
-
-        reason = None
-        if seg_qsize >= int(self.backlog_hi) or ratio >= float(self.latency_ratio_hi):
-            if self.cur_beam > self.min_beam:
-                self.cur_beam -= 1
-                self.last_change_ts = now
-                reason = f"downshift (q={seg_qsize}, lat_ratio={ratio:.2f})"
-        elif seg_qsize <= int(self.backlog_lo) and ratio <= float(self.latency_ratio_lo):
-            if self.cur_beam < self.max_beam:
-                self.cur_beam += 1
-                self.last_change_ts = now
-                reason = f"upshift (q={seg_qsize}, lat_ratio={ratio:.2f})"
-
-        return (int(self.cur_beam), reason)
-
-
-@dataclass
-class _UtteranceState:
-    stream: str
-    speaker: str
-    t_start: float
-    t_end: float
-    text: str
-    last_emit_ts: float
 
 
 class ASRPipeline:
@@ -211,7 +40,7 @@ class ASRPipeline:
       - emits periodic "asr_metrics" events to UI
     """
 
-    _UI_EVENT_TYPES = {
+    _PUBLIC_EVENT_TYPES = {
         "utterance",
         "asr_overload",
         "segment_dropped",
@@ -237,6 +66,7 @@ class ASRPipeline:
         compute_type: str = "int8_float16",
         beam_size: int = 5,
         ui_queue: Optional["queue.Queue[dict]"] = None,
+        event_queue: Optional["queue.Queue[dict]"] = None,
         endpoint_silence_ms: float = 800.0,
         max_segment_s: float = 12.0,
         overlap_ms: float = 300.0,
@@ -318,7 +148,7 @@ class ASRPipeline:
         self.asr_language = asr_language
         self.asr_initial_prompt = asr_initial_prompt
 
-        self.ui_q = ui_queue
+        self.event_q = event_queue if event_queue is not None else ui_queue
 
         self._stop = threading.Event()
         self._ingest_thread: Optional[threading.Thread] = None
@@ -347,26 +177,22 @@ class ASRPipeline:
         self._vad_min_end_silence_ms = int(vad_min_end_silence_ms)
         self._min_segment_ms = int(min_segment_ms)
 
-        self._diar_enabled = bool(diarization_enabled)
-        self._diar_backend: DiarBackend = diar_backend
-        self._diar_sim_threshold = float(diar_sim_threshold)
-        self._diar_min_segment_s = float(diar_min_segment_s)
-        self._diar_window_s = float(diar_window_s)
-        self._diar_chunk_s = float(diar_chunk_s)
-        self._diar_step_s = float(diar_step_s)
-
-        self._diarizers: Dict[str, OnlineDiarizer] = {}
-        self._pyannote: Optional[_PyannoteBackend] = None
-        self._ring16: Dict[str, np.ndarray] = {}
-        self._ring_t0: Dict[str, float] = {}
-        self._diar_last_run_ts: Dict[str, float] = {}
-        self._timeline: Dict[str, List[DiarSegment]] = {}
+        self._diar = DiarizationRuntime(
+            enabled=bool(diarization_enabled),
+            backend=diar_backend,
+            sim_threshold=float(diar_sim_threshold),
+            min_segment_s=float(diar_min_segment_s),
+            window_s=float(diar_window_s),
+            chunk_s=float(diar_chunk_s),
+            step_s=float(diar_step_s),
+            device=self.device,
+        )
 
         self._agc_enabled = bool(agc_enabled)
         self._agc_target_rms = float(agc_target_rms)
         self._agc_max_gain = float(agc_max_gain)
         self._agc_alpha = float(agc_alpha)
-        self._agc: Dict[str, _PreGainAGC] = {}
+        self._agc: Dict[str, PreGainAGC] = {}
 
         self._text_dedup_enabled = bool(text_dedup_enabled)
         self._text_dedup_window = int(text_dedup_window)
@@ -375,44 +201,35 @@ class ASRPipeline:
         self._adaptive_beam_enabled = bool(adaptive_beam_enabled)
         maxb = int(adaptive_beam_max) if adaptive_beam_max is not None else int(self.beam_size)
         maxb = max(1, maxb)
-        self._beam_ctl = _AdaptiveBeam(
+        self._beam_ctl = AdaptiveBeam(
             min_beam=max(1, int(adaptive_beam_min)),
             max_beam=maxb,
             cur_beam=max(1, min(int(self.beam_size), maxb)),
         )
 
         # Step 4: overload state + knobs
-        self._over_enter = int(overload_enter_qsize)
-        self._over_exit = int(overload_exit_qsize)
-        self._over_hard = int(overload_hard_drop_qsize)
-        self._over_hold_s = float(overload_hold_s)
-        self._over_beam_cap_base = max(1, int(overload_beam_cap))
-        self._over_overlap_ms_base = float(overload_overlap_ms)
-        self._over_max_segment_s_base = float(overload_max_segment_s)
-
-        # NEW: keep_all vs drop_old
         osx = str(overload_strategy).strip().lower()
-        self._over_strategy: OverloadStrategy = "keep_all" if osx == "keep_all" else "drop_old"
-
-        # NEW: hard-overload extra degrade (only for keep_all)
-        self._hard_over_active: bool = False
-        self._hard_over_since: float = 0.0
-        self._hard_over_beam_cap: int = 1
-        self._hard_over_overlap_ms: float = 80.0
-        self._hard_over_max_segment_s: float = 3.5
-
-        self._over_active: bool = False
-        self._over_since: float = 0.0
-        self._over_last_event_ts: float = 0.0
+        over_strategy: OverloadStrategy = "keep_all" if osx == "keep_all" else "drop_old"
+        self._over = OverloadController(
+            enter_qsize=int(overload_enter_qsize),
+            exit_qsize=int(overload_exit_qsize),
+            hard_qsize=int(overload_hard_drop_qsize),
+            hold_s=float(overload_hold_s),
+            beam_cap=max(1, int(overload_beam_cap)),
+            overlap_ms=float(overload_overlap_ms),
+            max_segment_s=float(overload_max_segment_s),
+            strategy=over_strategy,
+        )
 
         # Step 4: utterances
-        self._utt_enabled = bool(utterance_enabled)
-        self._utt_gap_s = float(utterance_gap_s)
-        self._utt_max_s = float(utterance_max_s)
-        self._utt_flush_s = float(utterance_flush_s)
-        self._utt_state: Dict[Tuple[str, str], _UtteranceState] = {}
-
         self._log_speaker_labels = bool(log_speaker_labels)
+        self._utt = UtteranceAggregator(
+            enabled=bool(utterance_enabled),
+            gap_s=float(utterance_gap_s),
+            max_s=float(utterance_max_s),
+            flush_s=float(utterance_flush_s),
+            log_speaker_labels=self._log_speaker_labels,
+        )
 
         self.session_id = f"sess_{int(time.time())}"
         self.logger = ASRLogger(
@@ -428,7 +245,6 @@ class ASRPipeline:
 
         self._pkt_count = 0
         self._last_heartbeat = 0.0
-        self._last_utt_flush_check = 0.0
 
         # ===== NEW: metrics/counters =====
         self._seg_dropped_total: int = 0
@@ -444,11 +260,7 @@ class ASRPipeline:
         self._stop.clear()
         self._pkt_count = 0
         self._last_heartbeat = time.time()
-        self._over_active = False
-        self._over_since = 0.0
-        self._over_last_event_ts = 0.0
-        self._hard_over_active = False
-        self._hard_over_since = 0.0
+        self._over.reset()
 
         self._seg_dropped_total = 0
         self._seg_skipped_total = 0
@@ -469,7 +281,7 @@ class ASRPipeline:
                 "endpoint_silence_ms": self._endpoint_silence_ms_base,
                 "max_segment_s": self._max_segment_s_base,
                 "overlap_ms": self._overlap_ms_base,
-                "overload_strategy": self._over_strategy,
+                "overload_strategy": self._over.strategy,
                 "vad": {
                     "energy_threshold": self._vad_energy_threshold,
                     "hangover_ms": self._vad_hangover_ms,
@@ -481,23 +293,23 @@ class ASRPipeline:
                     "min_segment_ms": self._min_segment_ms,
                 },
                 "overload": {
-                    "enter_qsize": self._over_enter,
-                    "exit_qsize": self._over_exit,
-                    "hard_drop_qsize": self._over_hard,
-                    "hold_s": self._over_hold_s,
-                    "beam_cap": self._over_beam_cap_base,
-                    "overlap_ms": self._over_overlap_ms_base,
-                    "max_segment_s": self._over_max_segment_s_base,
+                    "enter_qsize": self._over.enter_qsize,
+                    "exit_qsize": self._over.exit_qsize,
+                    "hard_drop_qsize": self._over.hard_qsize,
+                    "hold_s": self._over.hold_s,
+                    "beam_cap": self._over.beam_cap,
+                    "overlap_ms": self._over.overlap_ms,
+                    "max_segment_s": self._over.max_segment_s,
                 },
-                "diarization_enabled": self._diar_enabled,
-                "diar_backend": self._diar_backend,
+                "diarization_enabled": self._diar.enabled,
+                "diar_backend": self._diar.backend,
                 "agc_enabled": self._agc_enabled,
                 "text_dedup_enabled": self._text_dedup_enabled,
                 "adaptive_beam_enabled": self._adaptive_beam_enabled,
-                "utterance_enabled": self._utt_enabled,
-                "utterance_gap_s": self._utt_gap_s,
-                "utterance_max_s": self._utt_max_s,
-                "utterance_flush_s": self._utt_flush_s,
+                "utterance_enabled": self._utt.enabled,
+                "utterance_gap_s": self._utt.gap_s,
+                "utterance_max_s": self._utt.max_s,
+                "utterance_flush_s": self._utt.flush_s,
                 "log_rotation": {"max_bytes": self.logger.max_bytes, "backup_count": self.logger.backup_count},
                 "log_speaker_labels": self._log_speaker_labels,
                 "asr_language": self.asr_language,  # None => auto
@@ -521,7 +333,9 @@ class ASRPipeline:
             self._worker_thread = None
 
         try:
-            self._flush_all_utterances(force=True)
+            self._emit_utterance_events(
+                self._utt.flush_all(now=time.time(), force=True, overload=bool(self._over.active))
+            )
         except Exception:
             pass
 
@@ -529,18 +343,17 @@ class ASRPipeline:
 
         self._log_event({"type": "asr_stopped", "ts": time.time()})
         self.logger.close()
-        self._asr = None
 
     # ================= helpers =================
 
-    def _push_ui(self, rec: Dict[str, Any]) -> None:
-        if not self.ui_q:
+    def _publish_event(self, rec: Dict[str, Any]) -> None:
+        if not self.event_q:
             return
         typ = str(rec.get("type", ""))
-        if typ not in self._UI_EVENT_TYPES:
+        if typ not in self._PUBLIC_EVENT_TYPES:
             return
         try:
-            self.ui_q.put_nowait(rec)
+            self.event_q.put_nowait(rec)
         except queue.Full:
             pass
 
@@ -549,96 +362,24 @@ class ASRPipeline:
             self.logger.write(rec)
         except Exception:
             pass
-        self._push_ui(rec)
-
-    def _maybe_emit_overload_event(self, active: bool, reason: str) -> None:
-        now = time.time()
-        if (now - float(self._over_last_event_ts)) < 0.6:
-            return
-        self._over_last_event_ts = now
-
-        self._log_event(
-            {
-                "type": "asr_overload",
-                "active": bool(active),
-                "reason": str(reason),
-                "seg_qsize": int(self._seg_q.qsize()),
-                "beam_cur": int(self._beam_ctl.cur_beam),
-                "lag_s": float(self._last_lag_s),
-                "ts": now,
-            }
-        )
+        self._publish_event(rec)
 
     def _update_overload_state(self) -> None:
-        qsz = int(self._seg_q.qsize())
         now = time.time()
-
-        if not self._over_active:
-            if qsz >= self._over_enter:
-                self._over_active = True
-                self._over_since = now
-                self._maybe_emit_overload_event(True, f"enter: qsize>={self._over_enter}")
-            return
-
-        held = (now - float(self._over_since)) < float(self._over_hold_s)
-        if not held and qsz <= self._over_exit:
-            self._over_active = False
-            self._over_since = 0.0
-            self._maybe_emit_overload_event(False, f"exit: qsize<={self._over_exit}")
-
-    def _update_hard_overload_state_keep_all(self) -> None:
-        if self._over_strategy != "keep_all":
-            self._hard_over_active = False
-            self._hard_over_since = 0.0
-            return
-
-        qsz = int(self._seg_q.qsize())
-        now = time.time()
-
-        if not self._hard_over_active:
-            if qsz >= int(self._over_hard):
-                self._hard_over_active = True
-                self._hard_over_since = now
-                self._log_event(
-                    {
-                        "type": "asr_overload",
-                        "active": True,
-                        "reason": f"hard_overload_keep_all: qsize>={self._over_hard}",
-                        "seg_qsize": qsz,
-                        "beam_cur": int(self._beam_ctl.cur_beam),
-                        "lag_s": float(self._last_lag_s),
-                        "ts": now,
-                    }
-                )
-            return
-
-        # exit hard-overload when backlog goes low
-        if qsz <= int(self._over_exit):
-            self._hard_over_active = False
-            self._hard_over_since = 0.0
-            self._log_event(
-                {
-                    "type": "asr_overload",
-                    "active": True,
-                    "reason": f"hard_overload_keep_all_recover: qsize<={self._over_exit}",
-                    "seg_qsize": qsz,
-                    "beam_cur": int(self._beam_ctl.cur_beam),
-                    "lag_s": float(self._last_lag_s),
-                    "ts": now,
-                }
-            )
+        for event in self._over.update(
+            seg_qsize=int(self._seg_q.qsize()),
+            beam_cur=int(self._beam_ctl.cur_beam),
+            lag_s=float(self._last_lag_s),
+            now=now,
+        ):
+            self._log_event(event)
 
     def _segmentation_params(self) -> Tuple[float, float, float]:
-        # returns: endpoint_silence_ms, max_segment_s, overlap_ms
-        if self._over_active:
-            if self._hard_over_active and self._over_strategy == "keep_all":
-                return (
-                    self._endpoint_silence_ms_base,
-                    float(min(self._over_max_segment_s_base, self._hard_over_max_segment_s)),
-                    float(min(self._over_overlap_ms_base, self._hard_over_overlap_ms)),
-                )
-            return (self._endpoint_silence_ms_base, self._over_max_segment_s_base, self._over_overlap_ms_base)
-        return (self._endpoint_silence_ms_base, self._max_segment_s_base, self._overlap_ms_base)
+        return self._over.segmentation_params(
+            endpoint_silence_ms=self._endpoint_silence_ms_base,
+            max_segment_s=self._max_segment_s_base,
+            overlap_ms=self._overlap_ms_base,
+        )
 
     def _ensure_stream(self, name: str) -> None:
         if name not in self._vads:
@@ -661,27 +402,13 @@ class ASRPipeline:
             self._residual_16k[name] = np.zeros((0,), dtype=np.float32)
 
         if self._agc_enabled and name not in self._agc:
-            self._agc[name] = _PreGainAGC(
+            self._agc[name] = PreGainAGC(
                 target_rms=self._agc_target_rms,
                 max_gain=self._agc_max_gain,
                 alpha=self._agc_alpha,
             )
 
-        if self._diar_enabled and self._diar_backend in ("online", "nemo") and name not in self._diarizers:
-            self._diarizers[name] = OnlineDiarizer(
-                similarity_threshold=self._diar_sim_threshold,
-                min_segment_s=self._diar_min_segment_s,
-                window_s=self._diar_window_s,
-                backend=("nemo" if self._diar_backend == "nemo" else "resemblyzer"),
-                device=self.device,
-            )
-
-        if self._diar_enabled and self._diar_backend == "pyannote":
-            if name not in self._ring16:
-                self._ring16[name] = np.zeros((0,), dtype=np.float32)
-                self._ring_t0[name] = 0.0
-                self._diar_last_run_ts[name] = 0.0
-                self._timeline[name] = []
+        self._diar.ensure_stream(name)
 
     def _heartbeat(self, stream: str, vad: EnergyVAD) -> None:
         now = time.time()
@@ -706,9 +433,9 @@ class ASRPipeline:
                 "agc_in_rms": float(agc.last_in_rms) if agc is not None else None,
                 "beam_cur": int(self._beam_ctl.cur_beam),
                 "seg_qsize": int(self._seg_q.qsize()),
-                "overload": bool(self._over_active),
-                "overload_strategy": self._over_strategy,
-                "hard_overload": bool(self._hard_over_active),
+                "overload": bool(self._over.active),
+                "overload_strategy": self._over.strategy,
+                "hard_overload": bool(self._over.hard_active),
                 "ts": now,
             }
         )
@@ -738,37 +465,17 @@ class ASRPipeline:
                 "p95_latency_s": float(p95),
                 "lag_s": float(self._last_lag_s),
                 "seg_qsize": int(self._seg_q.qsize()),
-                "overload": bool(self._over_active),
-                "overload_strategy": self._over_strategy,
-                "hard_overload": bool(self._hard_over_active),
+                "overload": bool(self._over.active),
+                "overload_strategy": self._over.strategy,
+                "hard_overload": bool(self._over.hard_active),
                 "ts": now,
             }
         )
 
     # ================= ingest =================
 
-    def _update_ring(self, stream: str, t0: float, t1: float, x16: np.ndarray) -> None:
-        if not self._diar_enabled or self._diar_backend != "pyannote":
-            return
-
-        self._ensure_stream(stream)
-
-        x16 = np.asarray(x16, dtype=np.float32).reshape(-1)
-        if x16.size == 0:
-            return
-
-        ring = self._ring16.get(stream, np.zeros((0,), dtype=np.float32))
-        ring = np.concatenate([ring, x16]) if ring.size else x16
-
-        max_len = int(max(1.0, self._diar_chunk_s) * 16000)
-        if ring.size > max_len:
-            cut = ring.size - max_len
-            ring = ring[cut:]
-
-        ring_t0 = float(t1) - (ring.size / 16000.0)
-
-        self._ring16[stream] = ring
-        self._ring_t0[stream] = ring_t0
+    def _update_ring(self, stream: str, t1: float, x16: np.ndarray) -> None:
+        self._diar.update_ring(stream, t1, x16)
 
     def _feed_stream(self, stream: str, t0: float, t1: float, block_48k: np.ndarray, sample_rate: int = 48000) -> None:
         self._ensure_stream(stream)
@@ -782,7 +489,7 @@ class ASRPipeline:
             if agc is not None:
                 x16 = agc.process(x16)
 
-        self._update_ring(stream, t0, t1, x16)
+        self._update_ring(stream, t1, x16)
 
         frame_len = vad.frame_len
         res = self._residual_16k[stream]
@@ -864,7 +571,7 @@ class ASRPipeline:
                 "t_end": t_end,
                 "samples": int(audio.shape[0]),
                 "dur_s": float(audio.shape[0]) / 16000.0,
-                "overload": bool(self._over_active),
+                "overload": bool(self._over.active),
                 "seg_qsize": int(self._seg_q.qsize()),
                 "ts": time.time(),
             }
@@ -880,7 +587,7 @@ class ASRPipeline:
                     "stream": stream,
                     "reason": "seg_queue_full",
                     "seg_qsize": int(self._seg_q.qsize()),
-                    "overload": bool(self._over_active),
+                    "overload": bool(self._over.active),
                     "ts": time.time(),
                 }
             )
@@ -934,127 +641,13 @@ class ASRPipeline:
     # ================= diarization helpers =================
 
     def _init_diarization_backend(self) -> None:
-        if not self._diar_enabled:
-            return
-
-        if self._diar_backend == "pyannote":
-            try:
-                self._pyannote = _PyannoteBackend(device=self.device)
-                self._log_event({"type": "diar_init_ok", "backend": "pyannote", "ts": time.time()})
-                return
-            except Exception as e:
-                self._log_event({"type": "error", "where": "diar_init", "error": str(e), "ts": time.time()})
-                self._diar_backend = "nemo"
-                self._pyannote = None
-                self._log_event({"type": "diar_fallback", "backend": "nemo", "ts": time.time()})
-
-        if self._diar_backend == "online":
-            self._log_event({"type": "diar_init_ok", "backend": "online", "ts": time.time()})
-            return
-
-        if self._diar_backend == "nemo":
-            self._log_event({"type": "diar_init_ok", "backend": "nemo", "ts": time.time()})
-            return
-
-    def _maybe_update_pyannote_timeline(self, stream: str) -> None:
-        if not self._diar_enabled or self._diar_backend != "pyannote" or self._pyannote is None:
-            return
-
-        now = time.time()
-        last = float(self._diar_last_run_ts.get(stream, 0.0))
-        if (now - last) < max(0.5, float(self._diar_step_s)):
-            return
-
-        ring = self._ring16.get(stream)
-        if ring is None or ring.size < int(6.0 * 16000):
-            return
-
-        t0 = float(self._ring_t0.get(stream, 0.0))
-        try:
-            tl = self._pyannote.diarize(ring, t_offset=t0)
-            self._timeline[stream] = tl
-            self._diar_last_run_ts[stream] = now
-        except Exception as e:
-            self._log_event({"type": "error", "where": "diar_run", "error": str(e), "ts": time.time()})
-            self._diar_enabled = False
+        self._diar.init_backend(self._log_event)
 
     # ================= utterance aggregation =================
 
-    def _flush_all_utterances(self, *, force: bool = False) -> None:
-        now = time.time()
-        for key in list(self._utt_state.keys()):
-            self._flush_utterance(key, now=now, force=force)
-
-    def _flush_utterance(self, key: Tuple[str, str], *, now: float, force: bool) -> None:
-        st = self._utt_state.get(key)
-        if st is None:
-            return
-        if not st.text.strip():
-            self._utt_state.pop(key, None)
-            return
-
-        if force or (now - float(st.last_emit_ts)) >= float(self._utt_flush_s):
-            self._log_event(
-                {
-                    "type": "utterance",
-                    "stream": st.stream,
-                    "speaker": st.speaker if self._log_speaker_labels else "S?",
-                    "t_start": float(st.t_start),
-                    "t_end": float(st.t_end),
-                    "text": _norm_text(st.text),
-                    "overload": bool(self._over_active),
-                    "ts": now,
-                }
-            )
-            self._utt_state.pop(key, None)
-
-    def _update_utterance(self, *, stream: str, speaker: str, t_start: float, t_end: float, text: str) -> None:
-        if not self._utt_enabled:
-            return
-        txt = _norm_text(text)
-        if not txt:
-            return
-
-        now = time.time()
-        spk = str(speaker if self._log_speaker_labels else "S?")
-        key = (str(stream), spk)
-        st = self._utt_state.get(key)
-
-        if (now - self._last_utt_flush_check) > 0.5:
-            self._last_utt_flush_check = now
-            for k in list(self._utt_state.keys()):
-                self._flush_utterance(k, now=now, force=False)
-
-        if st is None:
-            self._utt_state[key] = _UtteranceState(
-                stream=str(stream),
-                speaker=spk,
-                t_start=float(t_start),
-                t_end=float(t_end),
-                text=txt,
-                last_emit_ts=now,
-            )
-            return
-
-        gap = float(t_start) - float(st.t_end)
-        new_len = float(t_end) - float(st.t_start)
-
-        if gap <= float(self._utt_gap_s) and new_len <= float(self._utt_max_s):
-            st.t_end = float(t_end)
-            st.text = (st.text + " " + txt).strip()
-            st.last_emit_ts = now
-            self._utt_state[key] = st
-            return
-
-        self._flush_utterance(key, now=now, force=True)
-        self._utt_state[key] = _UtteranceState(
-            stream=str(stream),
-            speaker=spk,
-            t_start=float(t_start),
-            t_end=float(t_end),
-            text=txt,
-            last_emit_ts=now,
-        )
+    def _emit_utterance_events(self, events: List[dict]) -> None:
+        for event in events:
+            self._log_event(event)
 
     # ================= ASR worker =================
 
@@ -1063,18 +656,14 @@ class ASRPipeline:
             self._worker_loop()
         except Exception as e:
             self._log_event({"type": "error", "where": "worker", "error": str(e), "ts": time.time()})
+        finally:
+            # FasterWhisperASR owns native/CUDA resources; release them in the same
+            # worker thread that created and used them to avoid cross-thread teardown.
+            self._asr = None
 
     def _drain_old_segments_if_hard_overload(self) -> None:
-        # Only for overload_strategy == drop_old
-        if self._over_strategy != "drop_old":
-            return
-
         qsz = int(self._seg_q.qsize())
-        if qsz < int(self._over_hard):
-            return
-
-        keep = max(1, int(self._over_exit))
-        drop_cnt = max(0, qsz - keep)
+        drop_cnt = self._over.drop_old_count(qsz)
         if drop_cnt <= 0:
             return
 
@@ -1121,65 +710,24 @@ class ASRPipeline:
 
         while not self._stop.is_set():
             self._update_overload_state()
-            self._update_hard_overload_state_keep_all()
             self._drain_old_segments_if_hard_overload()
 
             try:
                 seg = self._seg_q.get(timeout=0.2)
             except queue.Empty:
-                if self._utt_enabled:
+                if self._utt.enabled:
                     try:
-                        self._flush_all_utterances(force=False)
+                        self._emit_utterance_events(
+                            self._utt.flush_all(now=time.time(), force=False, overload=bool(self._over.active))
+                        )
                     except Exception:
                         pass
                 self._emit_metrics(force=False)
                 continue
 
             self._update_overload_state()
-            self._update_hard_overload_state_keep_all()
 
-            speaker = "S?"
-
-            if self._diar_enabled:
-                if self._diar_backend == "pyannote":
-                    self._maybe_update_pyannote_timeline(seg.stream)
-                    tl = self._timeline.get(seg.stream, [])
-                    speaker = _pick_speaker(tl, seg.t_start, seg.t_end)
-                else:
-                    try:
-                        diar = self._diarizers.get(seg.stream)
-                        if diar is not None:
-                            speaker, nsp, best_sim, created = diar.assign_with_debug(seg.audio_16k, ts=time.time())
-                            if str(speaker).startswith("S_ERR"):
-                                derr = None
-                                try:
-                                    derr = diar.last_error()
-                                except Exception:
-                                    derr = None
-                                self._log_event(
-                                    {
-                                        "type": "error",
-                                        "where": "diar_embed",
-                                        "stream": seg.stream,
-                                        "error": derr or "unknown",
-                                        "ts": time.time(),
-                                    }
-                                )
-                            self._log_event(
-                                {
-                                    "type": "diar_debug",
-                                    "stream": seg.stream,
-                                    "speaker": speaker,
-                                    "best_sim": best_sim,
-                                    "created_new": bool(created),
-                                    "n_speakers_window": nsp,
-                                    "seg_dur_s": float(seg.audio_16k.shape[0]) / 16000.0,
-                                    "ts": time.time(),
-                                }
-                            )
-                    except Exception as e:
-                        self._log_event({"type": "error", "where": "diar_assign", "error": str(e), "ts": time.time()})
-                        speaker = "S?"
+            speaker = self._diar.speaker_for_segment(seg, self._log_event)
 
             seg_dur_s = max(1e-6, float(seg.audio_16k.shape[0]) / 16000.0)
 
@@ -1188,11 +736,7 @@ class ASRPipeline:
             queue_wait_s = max(0.0, float(now0) - float(seg.enqueue_ts))
 
             beam_to_use = int(self._beam_ctl.cur_beam)
-            if self._over_active:
-                beam_to_use = min(beam_to_use, int(self._over_beam_cap_base))
-            if self._hard_over_active and self._over_strategy == "keep_all":
-                beam_to_use = min(beam_to_use, int(self._hard_over_beam_cap))
-            beam_to_use = max(1, beam_to_use)
+            beam_to_use = self._over.limit_beam(beam_to_use)
 
             t0 = time.time()
             try:
@@ -1208,7 +752,7 @@ class ASRPipeline:
                         "t_end": seg.t_end,
                         "text": "",
                         "error": str(e),
-                        "overload": bool(self._over_active),
+                        "overload": bool(self._over.active),
                         "ts": time.time(),
                     }
                 )
@@ -1222,13 +766,13 @@ class ASRPipeline:
             removed = 0
             if self._text_dedup_enabled:
                 prev = self._last_text.get(seg.stream, "")
-                trimmed, removed = _trim_overlap(prev, text, max_window=self._text_dedup_window, min_match=8)
+                trimmed, removed = trim_overlap(prev, text, max_window=self._text_dedup_window, min_match=8)
                 text = trimmed
                 if text:
-                    self._last_text[seg.stream] = _norm_text(prev + " " + text).strip()
+                    self._last_text[seg.stream] = normalize_text(prev + " " + text).strip()
             else:
                 if text:
-                    self._last_text[seg.stream] = _norm_text(text)
+                    self._last_text[seg.stream] = normalize_text(text)
 
             # latency stats over ASR-only latency (not queue wait), per spec
             self._lat_samples.append(float(asr_latency_s))
@@ -1252,27 +796,31 @@ class ASRPipeline:
                     "speaker": speaker if self._log_speaker_labels else "S?",
                     "t_start": seg.t_start,
                     "t_end": seg.t_end,
-                    "text": _norm_text(text),
+                    "text": normalize_text(text),
                     "latency_s": float(asr_latency_s),
                     "seg_dur_s": float(seg_dur_s),
                     "beam_used": int(beam_to_use),
                     "dedup_removed_chars": int(removed),
                     "seg_qsize": int(self._seg_q.qsize()),
-                    "overload": bool(self._over_active),
-                    "overload_strategy": self._over_strategy,
-                    "hard_overload": bool(self._hard_over_active),
+                    "overload": bool(self._over.active),
+                    "overload_strategy": self._over.strategy,
+                    "hard_overload": bool(self._over.hard_active),
                     "lag_s": float(self._last_lag_s),
                     "ts": time.time(),
                 }
             )
 
-            if self._utt_enabled and text.strip():
-                self._update_utterance(
-                    stream=str(seg.stream),
-                    speaker=str(speaker if self._log_speaker_labels else "S?"),
-                    t_start=float(seg.t_start),
-                    t_end=float(seg.t_end),
-                    text=str(text),
+            if self._utt.enabled and text.strip():
+                self._emit_utterance_events(
+                    self._utt.update(
+                        stream=str(seg.stream),
+                        speaker=str(speaker),
+                        t_start=float(seg.t_start),
+                        t_end=float(seg.t_end),
+                        text=str(text),
+                        now=time.time(),
+                        overload=bool(self._over.active),
+                    )
                 )
 
             self._emit_metrics(force=False)
