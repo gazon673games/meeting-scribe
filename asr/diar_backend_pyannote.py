@@ -1,43 +1,56 @@
-# asr/diar_backend_pyannote.py
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import List, Tuple
+
+from typing import List
 
 import numpy as np
 
-@dataclass
-class DiarSegment:
-    t0: float
-    t1: float
-    speaker: str
+from asr.domain import DiarSegment
+
 
 class PyannoteDiarizer:
-    def __init__(self, device: str = "cuda"):
-        # ВНИМАНИЕ: pyannote часто требует модели с HuggingFace токеном.
-        # Если токен/онлайн нельзя — лучше NeMo (см. ниже).
-        from pyannote.audio import Pipeline  # type: ignore
-        import torch
+    def __init__(self, device: str = "cuda") -> None:
+        try:
+            from pyannote.audio import Pipeline  # type: ignore
+        except Exception as e:
+            raise RuntimeError(
+                "pyannote.audio is not installed or failed to import.\n"
+                "Install example:\n"
+                "  pip install pyannote.audio\n"
+                f"Import error: {type(e).__name__}: {e}"
+            )
 
-        self._device = torch.device("cuda" if device == "cuda" else "cpu")
-        # пример: конкретный pipeline зависит от того, что ты ставишь
+        try:
+            import torch  # type: ignore
+        except Exception as e:
+            raise RuntimeError(
+                "pyannote.audio requires torch.\n"
+                "Install torch compatible with your CUDA.\n"
+                f"Import error: {type(e).__name__}: {e}"
+            )
+
+        self._torch = torch
+        self._device = torch.device("cuda" if device == "cuda" and torch.cuda.is_available() else "cpu")
         self._pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization")
-        self._pipeline.to(self._device)
+        try:
+            self._pipeline.to(self._device)
+        except Exception:
+            pass
 
-    def diarize(self, audio_16k: np.ndarray, t_offset: float = 0.0) -> List[DiarSegment]:
-        """
-        audio_16k: mono float32 16kHz
-        t_offset: смещение времени этого чанка в общей шкале времени (сек)
-        """
-        import torch
-
+    def diarize(self, audio_16k: np.ndarray, *, t_offset: float = 0.0) -> List[DiarSegment]:
         x = np.asarray(audio_16k, dtype=np.float32).reshape(-1)
-        wav = torch.from_numpy(x).unsqueeze(0)  # (1, n)
-        sample_rate = 16000
+        if x.size == 0:
+            return []
 
-        diar = self._pipeline({"waveform": wav, "sample_rate": sample_rate})
+        wav = self._torch.from_numpy(x).unsqueeze(0)
+        diar = self._pipeline({"waveform": wav, "sample_rate": 16000})
+
         out: List[DiarSegment] = []
-        for turn, _, speaker in diar.itertracks(yield_label=True):
-            out.append(DiarSegment(t0=t_offset + float(turn.start),
-                                   t1=t_offset + float(turn.end),
-                                   speaker=str(speaker)))
+        for turn, _, label in diar.itertracks(yield_label=True):
+            out.append(
+                DiarSegment(
+                    t0=float(t_offset) + float(turn.start),
+                    t1=float(t_offset) + float(turn.end),
+                    speaker=str(label),
+                )
+            )
         return out
