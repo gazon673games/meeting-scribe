@@ -6,7 +6,7 @@ from typing import Callable, Optional
 import numpy as np
 import sounddevice as sd
 
-from audio.engine import AudioFormat
+from audio.types import AudioFormat
 from audio.sources.base import BaseSource
 
 

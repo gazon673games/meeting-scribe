@@ -29,7 +29,8 @@ from PySide6.QtWidgets import (
 )
 
 from application.recording import create_wav_writer, wav_recording_available
-from audio.engine import AudioEngine, AudioFormat
+from audio.engine import AudioEngine
+from audio.types import AudioFormat
 from application.asr_profiles import (
     PROFILE_BALANCED as ASR_PROFILE_BALANCED,
     PROFILE_CUSTOM as ASR_PROFILE_CUSTOM,

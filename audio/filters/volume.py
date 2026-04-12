@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from audio.engine import AudioFormat
+from audio.types import AudioFormat
 
 
 @dataclass

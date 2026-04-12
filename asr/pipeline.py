@@ -1,57 +1,31 @@
-# --- File: D:\work\own\voice2textTest\asr\pipeline.py ---
 from __future__ import annotations
 
 import queue
 import threading
 import time
-from typing import Dict, Optional, List, Any, Tuple, Deque
-from collections import deque
+from typing import List, Optional, Tuple
 
-import numpy as np
-
-from asr.domain import (
-    DiarBackend,
-    Mode,
-    OverloadStrategy,
-    Segment,
-)
 from asr.diarization import DiarizationRuntime
+from asr.domain import DiarBackend, Mode, OverloadStrategy, Segment
+from asr.events import ASREventPublisher
+from asr.ingest import TapIngestRuntime
 from asr.logger import ASRLogger
+from asr.metrics import ASRMetrics
 from asr.overload import OverloadController
-from asr.policies import AdaptiveBeam, PreGainAGC
-from asr.text import normalize_text, trim_overlap
+from asr.policies import AdaptiveBeam
+from asr.segmentation import AudioSegmenter, SegmenterConfig
+from asr.transcription_worker import TranscriptionWorkerRuntime
 from asr.utterances import UtteranceAggregator
-from asr.utils_audio import stereo_to_mono, resample_linear
-from asr.vad import EnergyVAD
 
 
 class ASRPipeline:
     """
-    Consumes AudioEngine tap_queue packets and produces ASR events (+ optional diarization).
+    Thin lifecycle facade for realtime ASR.
 
-    Step 3: VAD (band ratio + voicedness + preroll) + min segment duration.
-    Step 4: overload/degraded mode + utterance aggregation + log rotation.
-
-    Step 5 (NEW in this patch): profiles/metrics support:
-      - overload_strategy: drop_old | keep_all
-      - session counters: seg_dropped_total, seg_skipped_total
-      - latency stats: avg/p95 over sliding window
-      - lag_s: queue wait + asr latency (approx)
-      - emits periodic "asr_metrics" events to UI
+    Domain/runtime responsibilities live in focused collaborators:
+    segmentation, ingest, overload, metrics, event publishing, diarization,
+    utterance aggregation, and transcription worker runtime.
     """
-
-    _PUBLIC_EVENT_TYPES = {
-        "utterance",
-        "asr_overload",
-        "segment_dropped",
-        "segment_skipped_overload",
-        "asr_metrics",
-        "asr_init_start",
-        "asr_started",
-        "asr_init_ok",
-        "error",
-        "asr_stopped",
-    }
 
     def __init__(
         self,
@@ -73,14 +47,11 @@ class ASRPipeline:
         vad_energy_threshold: float = 0.006,
         vad_hangover_ms: int = 400,
         vad_min_speech_ms: int = 350,
-
-        # Step 3: VAD tuning knobs
         vad_band_ratio_min: float = 0.35,
         vad_voiced_min: float = 0.12,
         vad_pre_speech_ms: int = 120,
         vad_min_end_silence_ms: int = 220,
         min_segment_ms: int = 650,
-
         diarization_enabled: bool = True,
         diar_backend: DiarBackend = "pyannote",
         diar_sim_threshold: float = 0.74,
@@ -88,20 +59,15 @@ class ASRPipeline:
         diar_window_s: float = 120.0,
         diar_chunk_s: float = 30.0,
         diar_step_s: float = 10.0,
-
         agc_enabled: bool = True,
         agc_target_rms: float = 0.06,
         agc_max_gain: float = 6.0,
         agc_alpha: float = 0.02,
-
         text_dedup_enabled: bool = True,
         text_dedup_window: int = 80,
-
         adaptive_beam_enabled: bool = True,
         adaptive_beam_min: int = 1,
         adaptive_beam_max: Optional[int] = None,
-
-        # Step 4: overload control
         overload_enter_qsize: int = 18,
         overload_exit_qsize: int = 6,
         overload_hard_drop_qsize: int = 28,
@@ -109,31 +75,19 @@ class ASRPipeline:
         overload_beam_cap: int = 2,
         overload_overlap_ms: float = 120.0,
         overload_max_segment_s: float = 5.0,
-
-        # Step 4: overload strategy (NEW)
         overload_strategy: OverloadStrategy = "drop_old",
-
-        # Step 4: utterance aggregation
         utterance_enabled: bool = True,
         utterance_gap_s: float = 0.85,
         utterance_max_s: float = 18.0,
         utterance_flush_s: float = 2.5,
-
-        # Step 4: log rotation
         log_max_bytes: int = 25 * 1024 * 1024,
         log_backup_count: int = 5,
-
-        # Optional: stop writing speaker labels into events
         log_speaker_labels: bool = True,
-
-        # faster-whisper language/prompt
         asr_language: Optional[str] = "ru",
         asr_initial_prompt: Optional[str] = None,
-
-        # Step 5: metrics emission
         metrics_emit_interval_s: float = 1.0,
         metrics_latency_window: int = 200,
-    ):
+    ) -> None:
         self.tap_q = tap_queue
         self.project_root = project_root
         self.language = language
@@ -144,38 +98,41 @@ class ASRPipeline:
         self.device = device
         self.compute_type = compute_type
         self.beam_size = int(beam_size)
-
         self.asr_language = asr_language
         self.asr_initial_prompt = asr_initial_prompt
 
-        self.event_q = event_queue if event_queue is not None else ui_queue
-
-        self._stop = threading.Event()
-        self._ingest_thread: Optional[threading.Thread] = None
-        self._worker_thread: Optional[threading.Thread] = None
-
-        self._seg_q: "queue.Queue[Segment]" = queue.Queue(maxsize=50)
-
-        self._vads: Dict[str, EnergyVAD] = {}
-        self._buffers: Dict[str, List[np.ndarray]] = {}
-        self._buf_t0: Dict[str, Optional[float]] = {}
-        self._residual_16k: Dict[str, np.ndarray] = {}
-
-        # base (normal) segmentation params
         self._endpoint_silence_ms_base = float(endpoint_silence_ms)
         self._max_segment_s_base = float(max_segment_s)
         self._overlap_ms_base = float(overlap_ms)
 
-        self._vad_energy_threshold = float(vad_energy_threshold)
-        self._vad_hangover_ms = int(vad_hangover_ms)
-        self._vad_min_speech_ms = int(vad_min_speech_ms)
+        self._stop = threading.Event()
+        self._ingest_thread: Optional[threading.Thread] = None
+        self._worker_thread: Optional[threading.Thread] = None
+        self._seg_q: "queue.Queue[Segment]" = queue.Queue(maxsize=50)
 
-        # Step 3: new VAD params
-        self._vad_band_ratio_min = float(vad_band_ratio_min)
-        self._vad_voiced_min = float(vad_voiced_min)
-        self._vad_pre_speech_ms = int(vad_pre_speech_ms)
-        self._vad_min_end_silence_ms = int(vad_min_end_silence_ms)
-        self._min_segment_ms = int(min_segment_ms)
+        self.session_id = f"sess_{int(time.time())}"
+        self.logger = ASRLogger(
+            root=self.project_root,
+            session_id=self.session_id,
+            language=language,
+            max_bytes=int(log_max_bytes),
+            backup_count=int(log_backup_count),
+        )
+        self._events = ASREventPublisher(
+            logger=self.logger,
+            event_queue=event_queue if event_queue is not None else ui_queue,
+        )
+
+        self._over = OverloadController(
+            enter_qsize=int(overload_enter_qsize),
+            exit_qsize=int(overload_exit_qsize),
+            hard_qsize=int(overload_hard_drop_qsize),
+            hold_s=float(overload_hold_s),
+            beam_cap=max(1, int(overload_beam_cap)),
+            overlap_ms=float(overload_overlap_ms),
+            max_segment_s=float(overload_max_segment_s),
+            strategy="keep_all" if str(overload_strategy).strip().lower() == "keep_all" else "drop_old",
+        )
 
         self._diar = DiarizationRuntime(
             enabled=bool(diarization_enabled),
@@ -188,138 +145,96 @@ class ASRPipeline:
             device=self.device,
         )
 
-        self._agc_enabled = bool(agc_enabled)
-        self._agc_target_rms = float(agc_target_rms)
-        self._agc_max_gain = float(agc_max_gain)
-        self._agc_alpha = float(agc_alpha)
-        self._agc: Dict[str, PreGainAGC] = {}
-
-        self._text_dedup_enabled = bool(text_dedup_enabled)
-        self._text_dedup_window = int(text_dedup_window)
-        self._last_text: Dict[str, str] = {}
-
-        self._adaptive_beam_enabled = bool(adaptive_beam_enabled)
-        maxb = int(adaptive_beam_max) if adaptive_beam_max is not None else int(self.beam_size)
-        maxb = max(1, maxb)
+        max_beam = int(adaptive_beam_max) if adaptive_beam_max is not None else int(self.beam_size)
+        max_beam = max(1, max_beam)
         self._beam_ctl = AdaptiveBeam(
             min_beam=max(1, int(adaptive_beam_min)),
-            max_beam=maxb,
-            cur_beam=max(1, min(int(self.beam_size), maxb)),
+            max_beam=max_beam,
+            cur_beam=max(1, min(int(self.beam_size), max_beam)),
         )
 
-        # Step 4: overload state + knobs
-        osx = str(overload_strategy).strip().lower()
-        over_strategy: OverloadStrategy = "keep_all" if osx == "keep_all" else "drop_old"
-        self._over = OverloadController(
-            enter_qsize=int(overload_enter_qsize),
-            exit_qsize=int(overload_exit_qsize),
-            hard_qsize=int(overload_hard_drop_qsize),
-            hold_s=float(overload_hold_s),
-            beam_cap=max(1, int(overload_beam_cap)),
-            overlap_ms=float(overload_overlap_ms),
-            max_segment_s=float(overload_max_segment_s),
-            strategy=over_strategy,
-        )
-
-        # Step 4: utterances
-        self._log_speaker_labels = bool(log_speaker_labels)
         self._utt = UtteranceAggregator(
             enabled=bool(utterance_enabled),
             gap_s=float(utterance_gap_s),
             max_s=float(utterance_max_s),
             flush_s=float(utterance_flush_s),
-            log_speaker_labels=self._log_speaker_labels,
+            log_speaker_labels=bool(log_speaker_labels),
         )
 
-        self.session_id = f"sess_{int(time.time())}"
-        self.logger = ASRLogger(
-            root=self.project_root,
-            session_id=self.session_id,
-            language=language,
-            max_bytes=int(log_max_bytes),
-            backup_count=int(log_backup_count),
+        self._metrics = ASRMetrics(
+            latency_window=int(metrics_latency_window),
+            emit_interval_s=float(metrics_emit_interval_s),
         )
 
-        self._asr = None
-        self._asr_init_error: Optional[str] = None
+        self._segmenter_config = SegmenterConfig(
+            vad_energy_threshold=float(vad_energy_threshold),
+            vad_hangover_ms=int(vad_hangover_ms),
+            vad_min_speech_ms=int(vad_min_speech_ms),
+            vad_band_ratio_min=float(vad_band_ratio_min),
+            vad_voiced_min=float(vad_voiced_min),
+            vad_pre_speech_ms=int(vad_pre_speech_ms),
+            vad_min_end_silence_ms=int(vad_min_end_silence_ms),
+            min_segment_ms=int(min_segment_ms),
+            agc_enabled=bool(agc_enabled),
+            agc_target_rms=float(agc_target_rms),
+            agc_max_gain=float(agc_max_gain),
+            agc_alpha=float(agc_alpha),
+        )
 
-        self._pkt_count = 0
-        self._last_heartbeat = 0.0
+        self._segmenter = AudioSegmenter(
+            config=self._segmenter_config,
+            segment_queue=self._seg_q,
+            diarization=self._diar,
+            metrics=self._metrics,
+            log_event=self._events.log,
+            segmentation_params=self._segmentation_params,
+        )
 
-        # ===== NEW: metrics/counters =====
-        self._seg_dropped_total: int = 0
-        self._seg_skipped_total: int = 0
-        self._lat_samples: Deque[float] = deque(maxlen=max(20, int(metrics_latency_window)))
-        self._last_lag_s: float = 0.0
-        self._last_metrics_emit_ts: float = 0.0
-        self._metrics_emit_interval_s = max(0.25, float(metrics_emit_interval_s))
+        self._worker = TranscriptionWorkerRuntime(
+            segment_queue=self._seg_q,
+            stop_event=self._stop,
+            log_event=self._events.log,
+            metrics=self._metrics,
+            overload=self._over,
+            beam_controller=self._beam_ctl,
+            diarization=self._diar,
+            utterances=self._utt,
+            model_name=self.asr_model_name,
+            language=self.asr_language,
+            device=self.device,
+            compute_type=self.compute_type,
+            beam_size=self.beam_size,
+            initial_prompt=self.asr_initial_prompt,
+            text_dedup_enabled=bool(text_dedup_enabled),
+            text_dedup_window=int(text_dedup_window),
+            adaptive_beam_enabled=bool(adaptive_beam_enabled),
+            log_speaker_labels=bool(log_speaker_labels),
+        )
 
-    # ================= lifecycle =================
+        self._ingest = TapIngestRuntime(
+            tap_queue=self.tap_q,
+            stop_event=self._stop,
+            mode=self.mode,
+            segmenter=self._segmenter,
+            log_event=self._events.log,
+            emit_metrics=lambda force=False: self._worker.emit_metrics(force=bool(force)),
+        )
+
+        self._text_dedup_enabled = bool(text_dedup_enabled)
+        self._adaptive_beam_enabled = bool(adaptive_beam_enabled)
+        self._log_speaker_labels = bool(log_speaker_labels)
 
     def start(self) -> None:
         self._stop.clear()
-        self._pkt_count = 0
-        self._last_heartbeat = time.time()
         self._over.reset()
+        self._metrics.reset()
+        self._segmenter.reset_runtime()
+        self._worker.reset_runtime()
 
-        self._seg_dropped_total = 0
-        self._seg_skipped_total = 0
-        self._lat_samples.clear()
-        self._last_lag_s = 0.0
-        self._last_metrics_emit_ts = 0.0
+        self._events.log(self._start_event())
 
-        self._log_event(
-            {
-                "type": "asr_started",
-                "session_id": self.session_id,
-                "language": self.language,
-                "mode": self.mode,
-                "model": self.asr_model_name,
-                "device": self.device,
-                "compute_type": self.compute_type,
-                "beam_size": self.beam_size,
-                "endpoint_silence_ms": self._endpoint_silence_ms_base,
-                "max_segment_s": self._max_segment_s_base,
-                "overlap_ms": self._overlap_ms_base,
-                "overload_strategy": self._over.strategy,
-                "vad": {
-                    "energy_threshold": self._vad_energy_threshold,
-                    "hangover_ms": self._vad_hangover_ms,
-                    "min_speech_ms": self._vad_min_speech_ms,
-                    "band_ratio_min": self._vad_band_ratio_min,
-                    "voiced_min": self._vad_voiced_min,
-                    "pre_speech_ms": self._vad_pre_speech_ms,
-                    "min_end_silence_ms": self._vad_min_end_silence_ms,
-                    "min_segment_ms": self._min_segment_ms,
-                },
-                "overload": {
-                    "enter_qsize": self._over.enter_qsize,
-                    "exit_qsize": self._over.exit_qsize,
-                    "hard_drop_qsize": self._over.hard_qsize,
-                    "hold_s": self._over.hold_s,
-                    "beam_cap": self._over.beam_cap,
-                    "overlap_ms": self._over.overlap_ms,
-                    "max_segment_s": self._over.max_segment_s,
-                },
-                "diarization_enabled": self._diar.enabled,
-                "diar_backend": self._diar.backend,
-                "agc_enabled": self._agc_enabled,
-                "text_dedup_enabled": self._text_dedup_enabled,
-                "adaptive_beam_enabled": self._adaptive_beam_enabled,
-                "utterance_enabled": self._utt.enabled,
-                "utterance_gap_s": self._utt.gap_s,
-                "utterance_max_s": self._utt.max_s,
-                "utterance_flush_s": self._utt.flush_s,
-                "log_rotation": {"max_bytes": self.logger.max_bytes, "backup_count": self.logger.backup_count},
-                "log_speaker_labels": self._log_speaker_labels,
-                "asr_language": self.asr_language,  # None => auto
-                "asr_initial_prompt": bool(self.asr_initial_prompt),
-                "ts": time.time(),
-            }
-        )
-
-        self._ingest_thread = threading.Thread(target=self._ingest_loop_safe, name="asr-ingest", daemon=True)
-        self._worker_thread = threading.Thread(target=self._worker_loop_safe, name="asr-worker", daemon=True)
+        self._ingest_thread = threading.Thread(target=self._ingest.run_safe, name="asr-ingest", daemon=True)
+        self._worker_thread = threading.Thread(target=self._worker.run_safe, name="asr-worker", daemon=True)
         self._ingest_thread.start()
         self._worker_thread.start()
 
@@ -333,46 +248,13 @@ class ASRPipeline:
             self._worker_thread = None
 
         try:
-            self._emit_utterance_events(
-                self._utt.flush_all(now=time.time(), force=True, overload=bool(self._over.active))
-            )
+            self._worker.flush_utterances(force=True)
         except Exception:
             pass
 
-        self._emit_metrics(force=True)
-
-        self._log_event({"type": "asr_stopped", "ts": time.time()})
+        self._worker.emit_metrics(force=True)
+        self._events.log({"type": "asr_stopped", "ts": time.time()})
         self.logger.close()
-
-    # ================= helpers =================
-
-    def _publish_event(self, rec: Dict[str, Any]) -> None:
-        if not self.event_q:
-            return
-        typ = str(rec.get("type", ""))
-        if typ not in self._PUBLIC_EVENT_TYPES:
-            return
-        try:
-            self.event_q.put_nowait(rec)
-        except queue.Full:
-            pass
-
-    def _log_event(self, rec: Dict[str, Any]) -> None:
-        try:
-            self.logger.write(rec)
-        except Exception:
-            pass
-        self._publish_event(rec)
-
-    def _update_overload_state(self) -> None:
-        now = time.time()
-        for event in self._over.update(
-            seg_qsize=int(self._seg_q.qsize()),
-            beam_cur=int(self._beam_ctl.cur_beam),
-            lag_s=float(self._last_lag_s),
-            now=now,
-        ):
-            self._log_event(event)
 
     def _segmentation_params(self) -> Tuple[float, float, float]:
         return self._over.segmentation_params(
@@ -381,446 +263,52 @@ class ASRPipeline:
             overlap_ms=self._overlap_ms_base,
         )
 
-    def _ensure_stream(self, name: str) -> None:
-        if name not in self._vads:
-            self._vads[name] = EnergyVAD(
-                sample_rate=16000,
-                frame_ms=20,
-                energy_threshold=self._vad_energy_threshold,
-                hangover_ms=self._vad_hangover_ms,
-                min_speech_ms=self._vad_min_speech_ms,
-                adaptive=True,
-                noise_mult=3.0,
-                noise_alpha=0.05,
-                band_ratio_min=self._vad_band_ratio_min,
-                voiced_min=self._vad_voiced_min,
-                pre_speech_ms=self._vad_pre_speech_ms,
-                min_end_silence_ms=self._vad_min_end_silence_ms,
-            )
-            self._buffers[name] = []
-            self._buf_t0[name] = None
-            self._residual_16k[name] = np.zeros((0,), dtype=np.float32)
-
-        if self._agc_enabled and name not in self._agc:
-            self._agc[name] = PreGainAGC(
-                target_rms=self._agc_target_rms,
-                max_gain=self._agc_max_gain,
-                alpha=self._agc_alpha,
-            )
-
-        self._diar.ensure_stream(name)
-
-    def _heartbeat(self, stream: str, vad: EnergyVAD) -> None:
-        now = time.time()
-        if now - self._last_heartbeat < 2.0:
-            return
-        self._last_heartbeat = now
-
-        agc = self._agc.get(stream)
-        self._log_event(
-            {
-                "type": "audio_seen",
-                "stream": stream,
-                "pkts": self._pkt_count,
-                "vad": {
-                    "last_rms": vad.last_rms(),
-                    "thr": vad.last_threshold(),
-                    "noise_rms": vad.noise_rms(),
-                    "band_ratio": vad.last_band_ratio(),
-                    "voiced": vad.last_voiced(),
-                },
-                "agc_gain": float(agc.gain) if agc is not None else None,
-                "agc_in_rms": float(agc.last_in_rms) if agc is not None else None,
-                "beam_cur": int(self._beam_ctl.cur_beam),
-                "seg_qsize": int(self._seg_q.qsize()),
-                "overload": bool(self._over.active),
-                "overload_strategy": self._over.strategy,
-                "hard_overload": bool(self._over.hard_active),
-                "ts": now,
-            }
-        )
-
-    def _emit_metrics(self, *, force: bool = False) -> None:
-        now = time.time()
-        if not force:
-            if (now - float(self._last_metrics_emit_ts)) < float(self._metrics_emit_interval_s):
-                return
-        self._last_metrics_emit_ts = now
-
-        lat_list = list(self._lat_samples)
-        avg_lat = float(sum(lat_list) / max(1, len(lat_list))) if lat_list else 0.0
-        p95 = 0.0
-        if lat_list:
-            lat_sorted = sorted(lat_list)
-            idx = int(round(0.95 * (len(lat_sorted) - 1)))
-            idx = max(0, min(len(lat_sorted) - 1, idx))
-            p95 = float(lat_sorted[idx])
-
-        self._log_event(
-            {
-                "type": "asr_metrics",
-                "seg_dropped_total": int(self._seg_dropped_total),
-                "seg_skipped_total": int(self._seg_skipped_total),
-                "avg_latency_s": float(avg_lat),
-                "p95_latency_s": float(p95),
-                "lag_s": float(self._last_lag_s),
-                "seg_qsize": int(self._seg_q.qsize()),
-                "overload": bool(self._over.active),
-                "overload_strategy": self._over.strategy,
-                "hard_overload": bool(self._over.hard_active),
-                "ts": now,
-            }
-        )
-
-    # ================= ingest =================
-
-    def _update_ring(self, stream: str, t1: float, x16: np.ndarray) -> None:
-        self._diar.update_ring(stream, t1, x16)
-
-    def _feed_stream(self, stream: str, t0: float, t1: float, block_48k: np.ndarray, sample_rate: int = 48000) -> None:
-        self._ensure_stream(stream)
-        vad = self._vads[stream]
-
-        mono = stereo_to_mono(block_48k)
-        x16 = resample_linear(mono, sample_rate, 16000)
-
-        if self._agc_enabled:
-            agc = self._agc.get(stream)
-            if agc is not None:
-                x16 = agc.process(x16)
-
-        self._update_ring(stream, t1, x16)
-
-        frame_len = vad.frame_len
-        res = self._residual_16k[stream]
-        merged = np.concatenate([res, x16]) if res.size else x16
-
-        endpoint_silence_ms, max_segment_s, _overlap_ms = self._segmentation_params()
-
-        total_frames = merged.size // frame_len
-        silence_frames = 0
-        silence_limit = int(endpoint_silence_ms / vad.frame_ms)
-        max_frames = int(max_segment_s * 1000 / vad.frame_ms)
-
-        for i in range(total_frames):
-            fr = merged[i * frame_len : (i + 1) * frame_len]
-            speech = vad.is_speech_frame(fr)
-
-            if speech:
-                silence_frames = 0
-                if self._buf_t0[stream] is None:
-                    frac = i / max(1, total_frames)
-                    self._buf_t0[stream] = t0 + (t1 - t0) * frac
-
-                    preroll, _n = vad.pop_preroll()
-                    if preroll.size > 0:
-                        n_frames = preroll.size // frame_len
-                        if n_frames > 0:
-                            prer = preroll[-(n_frames * frame_len) :]
-                            pre_frames = [prer[j * frame_len : (j + 1) * frame_len] for j in range(n_frames)]
-                            self._buffers[stream].extend(pre_frames)
-
-                self._buffers[stream].append(fr)
-            else:
-                silence_frames += 1
-                if self._buf_t0[stream] is not None:
-                    self._buffers[stream].append(fr)
-
-            should_end = (self._buf_t0[stream] is not None) and (
-                silence_frames >= silence_limit or len(self._buffers[stream]) >= max_frames
-            )
-            if should_end:
-                self._finalize_segment(stream, t1)
-                vad.reset()
-                silence_frames = 0
-
-        used = total_frames * frame_len
-        self._residual_16k[stream] = merged[used:]
-        self._heartbeat(stream, vad)
-
-        # opportunistic metrics emission
-        self._emit_metrics(force=False)
-
-    def _finalize_segment(self, stream: str, t_end: float) -> None:
-        t_start = self._buf_t0[stream]
-        frames = self._buffers[stream]
-
-        if t_start is None or not frames:
-            self._buf_t0[stream] = None
-            self._buffers[stream] = []
-            return
-
-        audio = np.concatenate(frames).astype(np.float32, copy=False)
-
-        seg_ms = int(round((audio.shape[0] / 16000.0) * 1000.0))
-        if seg_ms < int(self._min_segment_ms):
-            self._buf_t0[stream] = None
-            self._buffers[stream] = []
-            return
-
-        if not self._vads[stream].speech_long_enough():
-            self._buf_t0[stream] = None
-            self._buffers[stream] = []
-            return
-
-        self._log_event(
-            {
-                "type": "segment_ready",
-                "stream": stream,
-                "t_start": t_start,
-                "t_end": t_end,
-                "samples": int(audio.shape[0]),
-                "dur_s": float(audio.shape[0]) / 16000.0,
-                "overload": bool(self._over.active),
-                "seg_qsize": int(self._seg_q.qsize()),
-                "ts": time.time(),
-            }
-        )
-
-        try:
-            self._seg_q.put_nowait(Segment(stream, float(t_start), float(t_end), audio, enqueue_ts=time.time()))
-        except queue.Full:
-            self._seg_dropped_total += 1
-            self._log_event(
-                {
-                    "type": "segment_dropped",
-                    "stream": stream,
-                    "reason": "seg_queue_full",
-                    "seg_qsize": int(self._seg_q.qsize()),
-                    "overload": bool(self._over.active),
-                    "ts": time.time(),
-                }
-            )
-
-        _, _max_seg_s, overlap_ms = self._segmentation_params()
-        overlap_samples = int(round((overlap_ms / 1000.0) * 16000.0))
-        overlap_samples = max(0, min(overlap_samples, int(audio.shape[0])))
-
-        if overlap_samples > 0:
-            tail = audio[-overlap_samples:]
-            frame_len = self._vads[stream].frame_len
-            n_frames = tail.size // frame_len
-            if n_frames > 0:
-                tail_used = tail[-(n_frames * frame_len) :]
-                tail_frames = [tail_used[i * frame_len : (i + 1) * frame_len] for i in range(n_frames)]
-                self._buffers[stream] = tail_frames
-                self._buf_t0[stream] = float(t_end) - (tail_used.size / 16000.0)
-            else:
-                self._buffers[stream] = []
-                self._buf_t0[stream] = None
-        else:
-            self._buffers[stream] = []
-            self._buf_t0[stream] = None
-
-    def _ingest_loop_safe(self) -> None:
-        try:
-            self._ingest_loop()
-        except Exception as e:
-            self._log_event({"type": "error", "where": "ingest", "error": str(e), "ts": time.time()})
-
-    def _ingest_loop(self) -> None:
-        while not self._stop.is_set():
-            try:
-                pkt = self.tap_q.get(timeout=0.2)
-            except queue.Empty:
-                continue
-
-            self._pkt_count += 1
-            t0 = float(pkt.get("t_start", 0.0))
-            t1 = float(pkt.get("t_end", 0.0))
-
-            if self.mode == "mix":
-                blk = pkt.get("mix")
-                if isinstance(blk, np.ndarray):
-                    self._feed_stream("mix", t0, t1, blk)
-            else:
-                for n, blk in (pkt.get("sources") or {}).items():
-                    if isinstance(blk, np.ndarray):
-                        self._feed_stream(str(n), t0, t1, blk)
-
-    # ================= diarization helpers =================
-
-    def _init_diarization_backend(self) -> None:
-        self._diar.init_backend(self._log_event)
-
-    # ================= utterance aggregation =================
-
-    def _emit_utterance_events(self, events: List[dict]) -> None:
-        for event in events:
-            self._log_event(event)
-
-    # ================= ASR worker =================
-
-    def _worker_loop_safe(self) -> None:
-        try:
-            self._worker_loop()
-        except Exception as e:
-            self._log_event({"type": "error", "where": "worker", "error": str(e), "ts": time.time()})
-        finally:
-            # FasterWhisperASR owns native/CUDA resources; release them in the same
-            # worker thread that created and used them to avoid cross-thread teardown.
-            self._asr = None
-
-    def _drain_old_segments_if_hard_overload(self) -> None:
-        qsz = int(self._seg_q.qsize())
-        drop_cnt = self._over.drop_old_count(qsz)
-        if drop_cnt <= 0:
-            return
-
-        dropped = 0
-        for _ in range(drop_cnt):
-            try:
-                _ = self._seg_q.get_nowait()
-                dropped += 1
-            except queue.Empty:
-                break
-
-        if dropped > 0:
-            self._seg_skipped_total += int(dropped)
-            self._log_event(
-                {
-                    "type": "segment_skipped_overload",
-                    "count": int(dropped),
-                    "seg_qsize": int(self._seg_q.qsize()),
-                    "ts": time.time(),
-                }
-            )
-
-    def _worker_loop(self) -> None:
-        self._log_event({"type": "asr_init_start", "model": self.asr_model_name, "device": self.device, "ts": time.time()})
-
-        from asr.worker_faster_whisper import FasterWhisperASR
-
-        try:
-            self._asr = FasterWhisperASR(
-                model_name=self.asr_model_name,
-                language=self.asr_language,              # None -> auto-detect
-                device=self.device,
-                compute_type=self.compute_type,
-                beam_size=self.beam_size,
-                initial_prompt=self.asr_initial_prompt,
-            )
-            self._log_event({"type": "asr_init_ok", "model": self.asr_model_name, "ts": time.time()})
-        except Exception as e:
-            self._asr_init_error = str(e)
-            self._log_event({"type": "error", "where": "asr_init", "error": str(e), "ts": time.time()})
-            return
-
-        self._init_diarization_backend()
-
-        while not self._stop.is_set():
-            self._update_overload_state()
-            self._drain_old_segments_if_hard_overload()
-
-            try:
-                seg = self._seg_q.get(timeout=0.2)
-            except queue.Empty:
-                if self._utt.enabled:
-                    try:
-                        self._emit_utterance_events(
-                            self._utt.flush_all(now=time.time(), force=False, overload=bool(self._over.active))
-                        )
-                    except Exception:
-                        pass
-                self._emit_metrics(force=False)
-                continue
-
-            self._update_overload_state()
-
-            speaker = self._diar.speaker_for_segment(seg, self._log_event)
-
-            seg_dur_s = max(1e-6, float(seg.audio_16k.shape[0]) / 16000.0)
-
-            # queue wait lag
-            now0 = time.time()
-            queue_wait_s = max(0.0, float(now0) - float(seg.enqueue_ts))
-
-            beam_to_use = int(self._beam_ctl.cur_beam)
-            beam_to_use = self._over.limit_beam(beam_to_use)
-
-            t0 = time.time()
-            try:
-                res = self._asr.transcribe(seg.audio_16k, beam_size=beam_to_use)
-                text = (res.get("text") or "").strip()
-            except Exception as e:
-                self._log_event(
-                    {
-                        "type": "segment",
-                        "stream": seg.stream,
-                        "speaker": speaker if self._log_speaker_labels else "S?",
-                        "t_start": seg.t_start,
-                        "t_end": seg.t_end,
-                        "text": "",
-                        "error": str(e),
-                        "overload": bool(self._over.active),
-                        "ts": time.time(),
-                    }
-                )
-                self._emit_metrics(force=False)
-                continue
-
-            asr_latency_s = time.time() - t0
-            total_lag_s = float(queue_wait_s) + float(asr_latency_s)
-            self._last_lag_s = float(total_lag_s)
-
-            removed = 0
-            if self._text_dedup_enabled:
-                prev = self._last_text.get(seg.stream, "")
-                trimmed, removed = trim_overlap(prev, text, max_window=self._text_dedup_window, min_match=8)
-                text = trimmed
-                if text:
-                    self._last_text[seg.stream] = normalize_text(prev + " " + text).strip()
-            else:
-                if text:
-                    self._last_text[seg.stream] = normalize_text(text)
-
-            # latency stats over ASR-only latency (not queue wait), per spec
-            self._lat_samples.append(float(asr_latency_s))
-
-            if self._adaptive_beam_enabled:
-                now = time.time()
-                qsz = int(self._seg_q.qsize())
-                new_beam, reason = self._beam_ctl.maybe_update(
-                    seg_qsize=qsz,
-                    last_latency_s=float(asr_latency_s),
-                    last_dur_s=float(seg_dur_s),
-                    now=now,
-                )
-                if reason:
-                    self._log_event({"type": "asr_beam_update", "beam": int(new_beam), "reason": reason, "ts": now})
-
-            self._log_event(
-                {
-                    "type": "segment",
-                    "stream": seg.stream,
-                    "speaker": speaker if self._log_speaker_labels else "S?",
-                    "t_start": seg.t_start,
-                    "t_end": seg.t_end,
-                    "text": normalize_text(text),
-                    "latency_s": float(asr_latency_s),
-                    "seg_dur_s": float(seg_dur_s),
-                    "beam_used": int(beam_to_use),
-                    "dedup_removed_chars": int(removed),
-                    "seg_qsize": int(self._seg_q.qsize()),
-                    "overload": bool(self._over.active),
-                    "overload_strategy": self._over.strategy,
-                    "hard_overload": bool(self._over.hard_active),
-                    "lag_s": float(self._last_lag_s),
-                    "ts": time.time(),
-                }
-            )
-
-            if self._utt.enabled and text.strip():
-                self._emit_utterance_events(
-                    self._utt.update(
-                        stream=str(seg.stream),
-                        speaker=str(speaker),
-                        t_start=float(seg.t_start),
-                        t_end=float(seg.t_end),
-                        text=str(text),
-                        now=time.time(),
-                        overload=bool(self._over.active),
-                    )
-                )
-
-            self._emit_metrics(force=False)
+    def _start_event(self) -> dict:
+        cfg = self._segmenter_config
+        return {
+            "type": "asr_started",
+            "session_id": self.session_id,
+            "language": self.language,
+            "mode": self.mode,
+            "model": self.asr_model_name,
+            "device": self.device,
+            "compute_type": self.compute_type,
+            "beam_size": self.beam_size,
+            "endpoint_silence_ms": self._endpoint_silence_ms_base,
+            "max_segment_s": self._max_segment_s_base,
+            "overlap_ms": self._overlap_ms_base,
+            "overload_strategy": self._over.strategy,
+            "vad": {
+                "energy_threshold": cfg.vad_energy_threshold,
+                "hangover_ms": cfg.vad_hangover_ms,
+                "min_speech_ms": cfg.vad_min_speech_ms,
+                "band_ratio_min": cfg.vad_band_ratio_min,
+                "voiced_min": cfg.vad_voiced_min,
+                "pre_speech_ms": cfg.vad_pre_speech_ms,
+                "min_end_silence_ms": cfg.vad_min_end_silence_ms,
+                "min_segment_ms": cfg.min_segment_ms,
+            },
+            "overload": {
+                "enter_qsize": self._over.enter_qsize,
+                "exit_qsize": self._over.exit_qsize,
+                "hard_drop_qsize": self._over.hard_qsize,
+                "hold_s": self._over.hold_s,
+                "beam_cap": self._over.beam_cap,
+                "overlap_ms": self._over.overlap_ms,
+                "max_segment_s": self._over.max_segment_s,
+            },
+            "diarization_enabled": self._diar.enabled,
+            "diar_backend": self._diar.backend,
+            "agc_enabled": cfg.agc_enabled,
+            "text_dedup_enabled": self._text_dedup_enabled,
+            "adaptive_beam_enabled": self._adaptive_beam_enabled,
+            "utterance_enabled": self._utt.enabled,
+            "utterance_gap_s": self._utt.gap_s,
+            "utterance_max_s": self._utt.max_s,
+            "utterance_flush_s": self._utt.flush_s,
+            "log_rotation": {"max_bytes": self.logger.max_bytes, "backup_count": self.logger.backup_count},
+            "log_speaker_labels": self._log_speaker_labels,
+            "asr_language": self.asr_language,
+            "asr_initial_prompt": bool(self.asr_initial_prompt),
+            "ts": time.time(),
+        }
