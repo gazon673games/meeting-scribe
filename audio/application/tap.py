@@ -5,7 +5,7 @@ from typing import Dict, Optional
 
 import numpy as np
 
-from audio.types import TapMode
+from audio.domain import TapMode
 
 
 def tap_should_send(
@@ -39,3 +39,35 @@ def build_tap_packet(
             for name, block in (sources_out or {}).items()
         }
     return packet
+
+
+def try_emit_tap_packet(
+    *,
+    tap_q: "queue.Queue[dict]",
+    tap_queue_max: int,
+    drop_threshold: float,
+    t_start: float,
+    t_end: float,
+    mixed: np.ndarray,
+    sources_out: Optional[Dict[str, np.ndarray]],
+    mode: TapMode,
+) -> bool:
+    if not tap_should_send(
+        tap_q,
+        tap_queue_max=tap_queue_max,
+        drop_threshold=drop_threshold,
+    ):
+        return False
+
+    pkt = build_tap_packet(
+        t_start=t_start,
+        t_end=t_end,
+        mixed=mixed,
+        sources_out=sources_out,
+        mode=mode,
+    )
+    try:
+        tap_q.put_nowait(pkt)  # type: ignore[arg-type]
+        return True
+    except queue.Full:
+        return False

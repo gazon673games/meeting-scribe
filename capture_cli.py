@@ -7,11 +7,11 @@ from pathlib import Path
 
 import numpy as np
 
-from audio.engine import AudioEngine
-from audio.types import AudioFormat
-from audio.filters.volume import VolumeFilter
-from audio.sources.microphone import MicrophoneSource
-from audio.sources.wasapi_loopback import WasapiLoopbackSource
+from audio.application.engine import AudioEngine
+from audio.domain import AudioFormat
+from audio.infrastructure.filters.volume import VolumeFilter
+from audio.infrastructure.sources.microphone import MicrophoneSource
+from audio.infrastructure.sources.wasapi_loopback import WasapiLoopbackSource
 
 try:
     import soundfile as sf

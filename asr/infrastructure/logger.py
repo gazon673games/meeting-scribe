@@ -1,4 +1,3 @@
-# --- File: D:\work\own\voice2textTest\asr\logger.py ---
 from __future__ import annotations
 
 import json

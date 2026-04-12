@@ -5,9 +5,13 @@ from typing import Any
 
 from application.asr_session import ASRRuntime, ASRRuntimeFactory, ASRSessionSettings
 from asr.application.pipeline import ASRPipeline
+from asr.application.pipeline_config import ASRPipelineDependencies, ASRPipelineSettings
 from asr.infrastructure.diar_backend_pyannote import PyannoteDiarizer
+from asr.infrastructure.diarization_runtime import DefaultDiarizationRuntimeFactory
 from asr.infrastructure.diarizer import OnlineDiarizer
 from asr.infrastructure.logger import ASRLogger
+from asr.infrastructure.runtime_workers import ThreadRealtimeWorkerRunner
+from asr.infrastructure.segmentation import AudioSegmenter
 from asr.infrastructure.worker_faster_whisper import FasterWhisperASR
 
 
@@ -20,13 +24,7 @@ class ASRPipelineFactory(ASRRuntimeFactory):
         project_root: Path,
         event_queue: Any = None,
     ) -> ASRRuntime:
-        return ASRPipeline(
-            tap_queue=tap_queue,
-            project_root=project_root,
-            logger_factory=ASRLogger,
-            asr_backend_factory=FasterWhisperASR,
-            online_diarizer_factory=OnlineDiarizer,
-            pyannote_diarizer_factory=PyannoteDiarizer,
+        pipeline_settings = ASRPipelineSettings(
             language=settings.language,
             mode=settings.mode,
             asr_model_name=settings.model_name,
@@ -55,9 +53,25 @@ class ASRPipelineFactory(ASRRuntimeFactory):
             utterance_flush_s=2.5,
             log_max_bytes=25 * 1024 * 1024,
             log_backup_count=5,
-            event_queue=event_queue,
             asr_language=settings.asr_language,
             asr_initial_prompt=settings.asr_initial_prompt,
             metrics_emit_interval_s=1.0,
             metrics_latency_window=200,
+        )
+        pipeline_dependencies = ASRPipelineDependencies(
+            logger_factory=ASRLogger,
+            asr_backend_factory=FasterWhisperASR,
+            worker_runner=ThreadRealtimeWorkerRunner(),
+            diarization_factory=DefaultDiarizationRuntimeFactory(
+                online_diarizer_factory=OnlineDiarizer,
+                pyannote_diarizer_factory=PyannoteDiarizer,
+            ),
+            segmenter_factory=AudioSegmenter,
+        )
+        return ASRPipeline(
+            tap_queue=tap_queue,
+            project_root=project_root,
+            settings=pipeline_settings,
+            dependencies=pipeline_dependencies,
+            event_queue=event_queue,
         )

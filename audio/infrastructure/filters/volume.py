@@ -1,11 +1,10 @@
-# --- File: D:\work\own\voice2textTest\audio\filters\volume.py ---
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 import numpy as np
 
-from audio.types import AudioFormat
+from audio.domain import AudioFormat
 
 
 @dataclass

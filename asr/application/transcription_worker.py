@@ -169,10 +169,10 @@ class TranscriptionWorkerRuntime:
 
     def _transcribe_segment(self, seg: Segment) -> None:
         speaker = self._diar.speaker_for_segment(seg, self._log_event)
-        seg_dur_s = max(1e-6, float(seg.audio.duration_s))
+        seg_dur_s = max(1e-6, float(seg.duration_s))
 
         now0 = time.time()
-        queue_wait_s = max(0.0, float(now0) - float(seg.enqueue_ts))
+        queue_wait_s = seg.queue_wait_s(now0)
 
         beam_to_use = int(self._beam_ctl.cur_beam)
         beam_to_use = self._over.limit_beam(beam_to_use)

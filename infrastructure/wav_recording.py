@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from application.recording import WavRecorder, WavRecorderFactory
-from audio.writer import WavWriterThread, soundfile_available
+from audio.infrastructure.writer import WavWriterThread, soundfile_available
 
 
 class WavWriterFactory(WavRecorderFactory):

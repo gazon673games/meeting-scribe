@@ -1,4 +1,3 @@
-# --- File: D:\work\own\voice2textTest\asr\diarizer.py ---
 from __future__ import annotations
 
 import time

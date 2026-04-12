@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from asr.application.vad import EnergyVAD
+from asr.infrastructure.vad import EnergyVAD
 
 
 def _sine_frame(freq_hz: float, amplitude: float, sample_rate: int, frame_len: int) -> np.ndarray:

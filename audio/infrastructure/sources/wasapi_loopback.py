@@ -28,8 +28,8 @@ if not getattr(np, "_meeting_scribe_fromstring_compat", False):
 
 import soundcard as sc
 
-from audio.types import AudioFormat
-from audio.sources.base import BaseSource
+from audio.domain import AudioFormat
+from audio.infrastructure.sources.base import BaseSource
 
 
 class WasapiLoopbackSource(BaseSource):
