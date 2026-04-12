@@ -8,6 +8,7 @@ from infrastructure.asr_pipeline_factory import ASRPipelineFactory
 from infrastructure.audio_source_factory import DefaultAudioSourceFactory
 from infrastructure.codex_cli import CodexCliRunner
 from infrastructure.device_catalog import SoundDeviceCatalog
+from infrastructure.offline_asr import FasterWhisperOfflineAsrRunner
 from infrastructure.wav_recording import WavWriterFactory
 from ui.app import MainWindow
 
@@ -19,6 +20,7 @@ def create_main_window() -> MainWindow:
         device_catalog=SoundDeviceCatalog(),
         wav_recorder_factory=WavWriterFactory(),
         codex_assistant=CodexCliRunner(),
+        offline_asr_runner=FasterWhisperOfflineAsrRunner(),
     )
 
 
