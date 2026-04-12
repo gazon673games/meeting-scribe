@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import List, Tuple
 
 from application.device_catalog import DeviceCatalog
-from audio.devices import (
+from audio.infrastructure.devices import (
     list_input_devices as _list_input_devices,
     list_loopback_devices as _list_loopback_devices,
 )

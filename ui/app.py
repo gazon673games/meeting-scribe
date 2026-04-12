@@ -27,8 +27,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
 )
 
-from audio.engine import AudioEngine
-from audio.types import AudioFormat
+from audio.domain import AudioFormat
 from application.asr_profiles import (
     PROFILE_BALANCED as ASR_PROFILE_BALANCED,
     PROFILE_CUSTOM as ASR_PROFILE_CUSTOM,
@@ -36,11 +35,13 @@ from application.asr_profiles import (
     PROFILE_REALTIME as ASR_PROFILE_REALTIME,
 )
 from application.asr_session import ASRRuntimeFactory
+from application.background_tasks import BackgroundTaskRunner
+from application.audio_runtime import AudioRuntimeFactory
 from application.audio_sources import AudioSourceFactory
 from application.codex_use_case import CodexRequestUseCase
 from application.device_catalog import DeviceCatalog
-from application.offline_pass import OfflineAsrRunnerPort
 from application.recording import WavRecorderFactory
+from application.session_tasks import OfflinePassUseCase, StopAsrSessionUseCase
 from ui.asr_events_mixin import AsrEventsMixin
 from ui.config_mixin import MainWindowConfigMixin
 from ui.codex_integration import CodexIntegrationMixin
@@ -85,11 +86,14 @@ class MainWindow(
         self,
         *,
         asr_runtime_factory: ASRRuntimeFactory,
+        audio_runtime_factory: AudioRuntimeFactory,
         audio_source_factory: AudioSourceFactory,
+        background_task_runner: BackgroundTaskRunner,
         device_catalog: DeviceCatalog,
         wav_recorder_factory: WavRecorderFactory,
         codex_request_use_case: CodexRequestUseCase,
-        offline_asr_runner: OfflineAsrRunnerPort,
+        stop_asr_use_case: StopAsrSessionUseCase,
+        offline_pass_use_case: OfflinePassUseCase,
     ):
         super().__init__()
         self.setWindowTitle("Meeting Scribe — Audio Mixer + ASR")
@@ -107,16 +111,19 @@ class MainWindow(
         self.tap_q: "queue.Queue[dict]" = queue.Queue(maxsize=200)
         self.asr_ui_q: "queue.Queue[dict]" = queue.Queue(maxsize=600)
 
-        self.engine = AudioEngine(format=self.fmt, output_queue=self.out_q, tap_queue=self.tap_q)
+        self.engine = audio_runtime_factory.create(format=self.fmt, output_queue=self.out_q, tap_queue=self.tap_q)
         self.rows: dict[str, SourceRow] = {}
         self.source_objs: Dict[str, Any] = {}
 
         self.asr_runtime_factory = asr_runtime_factory
+        self.audio_runtime_factory = audio_runtime_factory
         self.audio_source_factory = audio_source_factory
+        self.background_task_runner = background_task_runner
         self.device_catalog = device_catalog
         self.wav_recorder_factory = wav_recorder_factory
         self.codex_request_use_case = codex_request_use_case
-        self.offline_asr_runner = offline_asr_runner
+        self.stop_asr_use_case = stop_asr_use_case
+        self.offline_pass_use_case = offline_pass_use_case
 
         self.writer = self.wav_recorder_factory.create(self.out_q)
         self.writer.start()
@@ -494,7 +501,7 @@ class MainWindow(
         return bool(self.wav_recorder_factory.available())
 
     def _offline_asr_available(self) -> bool:
-        return bool(self.offline_asr_runner.available())
+        return bool(self.offline_pass_use_case.available())
 
     def _current_output_path(self) -> Path:
         name = (self.txt_output.text() or "").strip()

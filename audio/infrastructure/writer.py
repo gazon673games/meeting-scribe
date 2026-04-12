@@ -7,7 +7,7 @@ from typing import Optional
 
 import numpy as np
 
-from audio.types import AudioFormat
+from audio.domain import AudioFormat
 
 try:
     import soundfile as sf

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
-from audio.types import AudioFormat
+from audio.domain import AudioFormat
 
 
 class WavRecorder(Protocol):

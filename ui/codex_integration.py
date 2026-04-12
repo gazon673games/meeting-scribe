@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import queue
-import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -256,13 +255,11 @@ class CodexIntegrationMixin:
         self.txt_codex_input.clear()
         self._set_codex_busy(True)
 
-        th = threading.Thread(
+        self.background_task_runner.start(
+            name="codex-helper-worker",
             target=self._run_codex_exec_worker,
             args=(profile, req),
-            name="codex-helper-worker",
-            daemon=True,
         )
-        th.start()
 
     def _codex_push_event(self, ev: Dict[str, Any]) -> None:
         try:

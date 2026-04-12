@@ -1,4 +1,3 @@
-# --- File: asr/worker_faster_whisper.py ---
 from __future__ import annotations
 
 from dataclasses import dataclass

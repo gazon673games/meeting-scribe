@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Protocol
-
-import numpy as np
+from typing import Any, Callable, Dict, List, Optional, Protocol
 
 from asr.domain import DiarSegment
 
@@ -32,7 +30,7 @@ class AsrLoggerFactoryPort(Protocol):
 
 
 class AsrBackendPort(Protocol):
-    def transcribe(self, audio_16k_mono: np.ndarray, *, beam_size: Optional[int] = None) -> Dict[str, Any]:
+    def transcribe(self, audio_16k_mono: Any, *, beam_size: Optional[int] = None) -> Dict[str, Any]:
         ...
 
 
@@ -55,7 +53,7 @@ class OnlineDiarizerPort(Protocol):
         ...
 
     def assign_with_debug(
-        self, audio_16k: np.ndarray, ts: Optional[float] = None
+        self, audio_16k: Any, ts: Optional[float] = None
     ) -> tuple[str, Optional[int], float, bool]:
         ...
 
@@ -74,10 +72,48 @@ class OnlineDiarizerFactoryPort(Protocol):
 
 
 class PyannoteDiarizerPort(Protocol):
-    def diarize(self, audio_16k: np.ndarray, *, t_offset: float = 0.0) -> List[DiarSegment]:
+    def diarize(self, audio_16k: Any, *, t_offset: float = 0.0) -> List[DiarSegment]:
+        ...
+
+
+class AudioSegmenterFactoryPort(Protocol):
+    def __call__(
+        self,
+        *,
+        config: Any,
+        segment_queue: Any,
+        diarization: Any,
+        metrics: Any,
+        log_event: Callable[[dict], None],
+        segmentation_params: Callable[[], tuple[float, float, float]],
+    ) -> Any:
         ...
 
 
 class PyannoteDiarizerFactoryPort(Protocol):
     def __call__(self, *, device: str) -> PyannoteDiarizerPort:
+        ...
+
+
+class StopSignalPort(Protocol):
+    def clear(self) -> None:
+        ...
+
+    def set(self) -> None:
+        ...
+
+    def is_set(self) -> bool:
+        ...
+
+
+class WorkerHandlePort(Protocol):
+    def join(self, timeout: Optional[float] = None) -> None:
+        ...
+
+
+class RealtimeWorkerRunnerPort(Protocol):
+    def create_stop_signal(self) -> StopSignalPort:
+        ...
+
+    def start_worker(self, *, name: str, target: Callable[[], None]) -> WorkerHandlePort:
         ...

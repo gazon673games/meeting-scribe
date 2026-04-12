@@ -1,4 +1,3 @@
-# --- File: D:\work\own\voice2textTest\audio\sources\microphone.py ---
 from __future__ import annotations
 
 from typing import Callable, Optional
@@ -6,8 +5,8 @@ from typing import Callable, Optional
 import numpy as np
 import sounddevice as sd
 
-from audio.types import AudioFormat
-from audio.sources.base import BaseSource
+from audio.domain import AudioFormat
+from audio.infrastructure.sources.base import BaseSource
 
 
 class MicrophoneSource(BaseSource):

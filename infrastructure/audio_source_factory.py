@@ -3,9 +3,9 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from application.audio_sources import AudioSourceFactory, SourceErrorCallback
-from audio.sources.microphone import MicrophoneSource
-from audio.sources.wasapi_loopback import WasapiLoopbackSource
-from audio.types import AudioFormat, AudioSource
+from audio.domain import AudioFormat, AudioSource
+from audio.infrastructure.sources.microphone import MicrophoneSource
+from audio.infrastructure.sources.wasapi_loopback import WasapiLoopbackSource
 
 
 class DefaultAudioSourceFactory(AudioSourceFactory):

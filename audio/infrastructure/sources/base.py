@@ -5,7 +5,7 @@ from typing import Callable, List
 
 import numpy as np
 
-from audio.types import AudioFilter, AudioFormat
+from audio.domain import AudioFilter, AudioFormat
 
 
 @dataclass

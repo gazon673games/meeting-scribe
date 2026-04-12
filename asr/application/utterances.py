@@ -71,13 +71,8 @@ class UtteranceAggregator:
             )
             return events
 
-        gap = float(t_start) - float(state.t_end)
-        new_len = float(t_end) - float(state.t_start)
-
-        if gap <= self.gap_s and new_len <= self.max_s:
-            state.t_end = float(t_end)
-            state.text = (state.text + " " + txt).strip()
-            state.last_emit_ts = now
+        if state.can_extend(t_start=t_start, t_end=t_end, gap_s=self.gap_s, max_s=self.max_s):
+            state.extend(t_end=t_end, text=txt, last_emit_ts=now)
             self._state[key] = state
             return events
 
@@ -103,7 +98,7 @@ class UtteranceAggregator:
             self._state.pop(key, None)
             return None
 
-        if not force and (now - float(state.last_emit_ts)) < self.flush_s:
+        if not state.should_flush(now=now, flush_s=self.flush_s, force=force):
             return None
 
         self._state.pop(key, None)

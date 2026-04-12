@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import queue
-import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -9,8 +8,8 @@ from typing import Any, Dict, List, Optional
 from PySide6.QtCore import QTimer
 
 from application.asr_language import initial_prompt_for_language, normalize_asr_language, runtime_asr_language
-from application.asr_session import ASRRuntime, ASRSessionSettings
-from application.offline_pass import OfflineAsrRequest
+from application.asr_session import ASRSessionSettings
+from application.session_tasks import OfflinePassRequest, StopAsrRequest
 
 
 class SessionMixin:
@@ -322,27 +321,31 @@ class SessionMixin:
 
     def _run_asr_stop_worker(
         self,
-        asr_obj: ASRRuntime,
+        asr_obj: Any,
         *,
         wav_path: Path,
         run_offline_pass: bool,
         offline_model_name: str,
         offline_language: Optional[str],
     ) -> None:
-        stop_error: Optional[str] = None
-        try:
-            asr_obj.stop()
-        except Exception as e:
-            stop_error = f"{type(e).__name__}: {e}"
+        result = self.stop_asr_use_case.execute(
+            StopAsrRequest(
+                asr=asr_obj,
+                wav_path=Path(wav_path),
+                run_offline_pass=bool(run_offline_pass),
+                offline_model_name=str(offline_model_name),
+                offline_language=offline_language,
+            )
+        )
 
         self.background_event.emit(
             {
                 "type": "asr_stop_done",
-                "wav_path": str(wav_path),
-                "run_offline_pass": bool(run_offline_pass),
-                "offline_model_name": str(offline_model_name),
-                "offline_language": offline_language,
-                "stop_error": stop_error,
+                "wav_path": str(result.wav_path),
+                "run_offline_pass": bool(result.run_offline_pass),
+                "offline_model_name": str(result.offline_model_name),
+                "offline_language": result.offline_language,
+                "stop_error": result.stop_error,
             }
         )
 
@@ -393,21 +396,26 @@ class SessionMixin:
         self._set_status("stopping (waiting for ASR to finish current transcription)...")
 
         if wait or self._closing:
-            stop_error: Optional[str] = None
-            try:
-                asr_to_stop.stop()
-            except Exception as e:
-                stop_error = f"{type(e).__name__}: {e}"
+            result = self.stop_asr_use_case.execute(
+                StopAsrRequest(
+                    asr=asr_to_stop,
+                    wav_path=Path(wav_path),
+                    run_offline_pass=bool(run_offline_pass),
+                    offline_model_name=str(offline_model_name),
+                    offline_language=offline_language,
+                )
+            )
             self._finish_stop_ui(
-                wav_path=Path(wav_path),
-                run_offline_pass=run_offline_pass,
-                offline_model_name=offline_model_name,
-                offline_language=offline_language,
-                stop_error=stop_error,
+                wav_path=result.wav_path,
+                run_offline_pass=result.run_offline_pass,
+                offline_model_name=result.offline_model_name,
+                offline_language=result.offline_language,
+                stop_error=result.stop_error,
             )
             return
 
-        self._asr_stop_thread = threading.Thread(
+        self._asr_stop_thread = self.background_task_runner.start(
+            name="asr-stop-worker",
             target=self._run_asr_stop_worker,
             kwargs={
                 "asr_obj": asr_to_stop,
@@ -416,10 +424,7 @@ class SessionMixin:
                 "offline_model_name": offline_model_name,
                 "offline_language": offline_language,
             },
-            name="asr-stop-worker",
-            daemon=True,
         )
-        self._asr_stop_thread.start()
 
     def _start_offline_pass(self, wav_path: Path, *, model_name: str, language: Optional[str]) -> None:
         if self._offline_pass_active:
@@ -432,28 +437,20 @@ class SessionMixin:
         self._offline_pass_active = True
         self.btn_start.setEnabled(False)
 
-        self._offline_thread = threading.Thread(
+        self._offline_thread = self.background_task_runner.start(
+            name="offline-asr-pass",
             target=self._run_offline_pass_worker,
             args=(Path(wav_path), str(model_name), language),
-            name="offline-asr-pass",
-            daemon=True,
         )
-        self._offline_thread.start()
 
     def _run_offline_pass_worker(self, wav_path: Path, model_name: str, language: Optional[str]) -> None:
         try:
             self.background_event.emit({"type": "offline_pass_started"})
 
-            logs_dir = self.project_root / "logs"
-            logs_dir.mkdir(parents=True, exist_ok=True)
-            ts = time.strftime("%Y%m%d_%H%M%S")
-            out_txt = logs_dir / f"offline_transcript_{ts}.txt"
-
-            result_path = self.offline_asr_runner.run(
-                OfflineAsrRequest(
+            result = self.offline_pass_use_case.execute(
+                OfflinePassRequest(
                     project_root=self.project_root,
                     wav_path=Path(wav_path),
-                    out_txt=out_txt,
                     model_name=str(model_name or "large-v3"),
                     language=language,
                 )
@@ -462,7 +459,7 @@ class SessionMixin:
             self.background_event.emit(
                 {
                     "type": "offline_pass_done",
-                    "out_txt": str(result_path),
+                    "out_txt": str(result.out_txt),
                 }
             )
         except Exception as e:
