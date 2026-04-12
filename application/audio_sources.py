@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-from audio.engine import AudioFormat, AudioSource
+from audio.types import AudioFormat, AudioSource
 from audio.sources.microphone import MicrophoneSource
 from audio.sources.wasapi_loopback import WasapiLoopbackSource
 

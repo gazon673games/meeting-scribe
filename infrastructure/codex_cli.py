@@ -1,0 +1,261 @@
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import tempfile
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+from application.codex_config import CodexProfile
+from application.codex_prompting import normalize_model_name, normalize_reasoning_effort
+
+
+@dataclass(frozen=True)
+class CodexCliSettings:
+    command_tokens: List[str]
+    path_hints: List[str]
+    proxy: str
+    timeout_s: int
+
+
+@dataclass(frozen=True)
+class CodexExecRequest:
+    prompt: str
+    profile: CodexProfile
+    original_cmd: str
+    project_root: Path
+
+
+@dataclass(frozen=True)
+class CodexExecResult:
+    ok: bool
+    profile: str
+    cmd: str
+    text: str
+    dt_s: float
+
+
+class CodexCliRunner:
+    def __init__(self, settings: CodexCliSettings):
+        self._settings = settings
+
+    def run(self, request: CodexExecRequest) -> CodexExecResult:
+        t0 = time.time()
+        out_path: Optional[Path] = None
+        profile = request.profile
+        try:
+            env = os.environ.copy()
+            proxy = str(self._settings.proxy or "").strip()
+            if proxy:
+                env["HTTP_PROXY"] = proxy
+                env["HTTPS_PROXY"] = proxy
+                env["ALL_PROXY"] = proxy
+                env["http_proxy"] = proxy
+                env["https_proxy"] = proxy
+                env["all_proxy"] = proxy
+
+            base_cmd, src = self._resolve_base_command()
+            if base_cmd is None:
+                return self._result(
+                    False,
+                    profile,
+                    request.original_cmd,
+                    (
+                        "codex executable not found. "
+                        "Set codex.command in config.json (e.g. "
+                        "'C:/Users/<you>/AppData/Roaming/npm/codex.cmd' or full codex.exe path)."
+                    ),
+                    t0,
+                )
+
+            cmd: List[str] = list(base_cmd) + ["exec", "--color", "never", "--skip-git-repo-check"]
+            model_name = normalize_model_name(profile.model)
+            if model_name:
+                cmd.extend(["-m", model_name])
+            effort = normalize_reasoning_effort(profile.reasoning_effort)
+            if effort:
+                cmd.extend(["-c", f'model_reasoning_effort="{effort}"'])
+            if profile.codex_profile:
+                cmd.extend(["-p", str(profile.codex_profile)])
+            if profile.extra_args:
+                cmd.extend([str(x) for x in profile.extra_args if str(x).strip()])
+
+            fd, tmp = tempfile.mkstemp(prefix="codex_last_", suffix=".txt")
+            os.close(fd)
+            out_path = Path(tmp)
+            cmd.extend(["-o", str(out_path), "-"])
+
+            prompt_safe = request.prompt.encode("utf-8", errors="replace").decode("utf-8")
+            process = subprocess.run(
+                cmd,
+                input=prompt_safe,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                cwd=str(request.project_root),
+                env=env,
+                timeout=max(10, int(self._settings.timeout_s)),
+            )
+
+            out_text = ""
+            if out_path.exists():
+                try:
+                    out_text = out_path.read_text(encoding="utf-8", errors="ignore").strip()
+                except Exception:
+                    out_text = ""
+            if not out_text:
+                out_text = (process.stdout or "").strip()
+
+            if process.returncode != 0:
+                err = (process.stderr or "").strip() or (process.stdout or "").strip()
+                if not err:
+                    err = f"codex exec failed with code {process.returncode}"
+                else:
+                    err = f"{err}\n(source={src})"
+                return self._result(False, profile, request.original_cmd, err, t0)
+
+            return self._result(True, profile, request.original_cmd, out_text or "(empty response)", t0)
+
+        except subprocess.TimeoutExpired:
+            return self._result(
+                False,
+                profile,
+                request.original_cmd,
+                f"timeout after {int(self._settings.timeout_s)}s",
+                t0,
+            )
+        except FileNotFoundError:
+            return self._result(
+                False,
+                profile,
+                request.original_cmd,
+                (
+                    "codex executable not found at runtime. "
+                    "Try setting codex.command in config.json to an explicit path."
+                ),
+                t0,
+            )
+        except Exception as e:
+            return self._result(False, profile, request.original_cmd, f"{type(e).__name__}: {e}", t0)
+        finally:
+            if out_path is not None:
+                try:
+                    out_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+    def _resolve_base_command(self) -> Tuple[Optional[List[str]], str]:
+        tokens = [str(x).strip() for x in self._settings.command_tokens if str(x).strip()]
+        if not tokens:
+            tokens = ["codex"]
+        base = tokens[0]
+        tail = tokens[1:]
+
+        pbase = Path(base)
+        if pbase.exists():
+            return (self._wrap_cmd_for_windows(str(pbase), tail), "direct_path")
+
+        found = shutil.which(base)
+        if found:
+            return (self._wrap_cmd_for_windows(found, tail), "path")
+
+        names: List[str] = [base]
+        if base.lower() == "codex":
+            names = ["codex", "codex.exe", "codex.cmd", "codex.bat", "codex.CMD"]
+
+        for name in names:
+            found_name = shutil.which(name)
+            if found_name:
+                return (self._wrap_cmd_for_windows(found_name, tail), f"path:{name}")
+
+        for directory in self._common_search_dirs():
+            for name in names:
+                candidate = directory / name
+                if candidate.exists():
+                    return (self._wrap_cmd_for_windows(str(candidate), tail), f"hint:{directory}")
+
+        try:
+            probe = subprocess.run(
+                ["where", "codex"],
+                capture_output=True,
+                text=True,
+                timeout=4,
+            )
+            if probe.returncode == 0:
+                for line in (probe.stdout or "").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    candidate = Path(line)
+                    if candidate.exists():
+                        return (self._wrap_cmd_for_windows(str(candidate), tail), "where")
+        except Exception:
+            pass
+
+        return (None, "")
+
+    def _common_search_dirs(self) -> List[Path]:
+        out: List[Path] = []
+
+        for raw in self._settings.path_hints:
+            path = Path(str(raw).strip())
+            if path and str(path).strip():
+                out.append(path)
+
+        appdata = os.environ.get("APPDATA", "").strip()
+        if appdata:
+            out.append(Path(appdata) / "npm")
+
+        home = Path.home()
+        out.append(home / "AppData" / "Roaming" / "npm")
+
+        ext_root = home / ".vscode" / "extensions"
+        if ext_root.exists():
+            try:
+                exes = list(ext_root.glob("openai.chatgpt-*/bin/windows-x86_64"))
+                exes.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                out.extend(exes[:5])
+            except Exception:
+                pass
+
+        uniq: List[Path] = []
+        seen = set()
+        for path in out:
+            try:
+                key = str(path.resolve())
+            except Exception:
+                key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(path)
+        return uniq
+
+    @staticmethod
+    def _wrap_cmd_for_windows(exe_path: str, tail: List[str]) -> List[str]:
+        path = str(exe_path).strip()
+        suffix = Path(path).suffix.lower()
+        if suffix in (".cmd", ".bat"):
+            comspec = os.environ.get("COMSPEC", "cmd.exe")
+            return [comspec, "/d", "/c", path, *tail]
+        return [path, *tail]
+
+    @staticmethod
+    def _result(
+        ok: bool,
+        profile: CodexProfile,
+        original_cmd: str,
+        text: str,
+        t0: float,
+    ) -> CodexExecResult:
+        return CodexExecResult(
+            ok=bool(ok),
+            profile=str(profile.label),
+            cmd=str(original_cmd),
+            text=str(text),
+            dt_s=time.time() - t0,
+        )

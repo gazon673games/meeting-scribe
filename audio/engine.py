@@ -4,68 +4,21 @@ from __future__ import annotations
 import queue
 import threading
 import time
-from collections import deque
-from dataclasses import dataclass
-from typing import Callable, Deque, Dict, List, Optional, Protocol, Tuple, Literal, Set
+from typing import Dict, List, Optional, Tuple, Set
 
 import numpy as np
 
-
-@dataclass(frozen=True)
-class AudioFormat:
-    sample_rate: int
-    channels: int
-    dtype: str = "float32"
-    blocksize: int = 1024
-
-
-class AudioFilter(Protocol):
-    def process(self, x: np.ndarray, fmt: AudioFormat) -> np.ndarray:
-        ...
-
-
-class AudioSource(Protocol):
-    name: str
-
-    def start(self, on_audio: Callable[[str, np.ndarray], None]) -> None:
-        ...
-
-    def stop(self) -> None:
-        ...
-
-    def get_format(self) -> AudioFormat:
-        ...
-
-    def get_filters(self) -> List[AudioFilter]:
-        ...
-
-
-@dataclass
-class _SourceState:
-    src: AudioSource
-    enabled: bool = True
-
-    buf: Deque[np.ndarray] = None  # type: ignore[assignment]
-    buf_lock: threading.Lock = None  # type: ignore[assignment]
-
-    delay_frames: int = 0
-    delay_buf: Deque[np.ndarray] = None  # type: ignore[assignment]
-
-    rms: float = 0.0
-    last_ts: float = 0.0
-
-    dropped_in_frames: int = 0
-    missing_out_frames: int = 0
-    buffer_frames: int = 0
-    src_rate: int = 0
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "buf", deque())
-        object.__setattr__(self, "buf_lock", threading.Lock())
-        object.__setattr__(self, "delay_buf", deque())
-
-
-TapMode = Literal["mix", "sources", "both"]
+from audio.dsp import (
+    apply_delay_block,
+    apply_filters,
+    channel_map_to_engine,
+    pad_or_crop_n,
+    resample_to_engine_rate,
+    rms,
+)
+from audio.source_state import SourceState as _SourceState
+from audio.tap import build_tap_packet, tap_should_send
+from audio.types import AudioFilter, AudioFormat, AudioSource, TapMode
 
 
 class AudioEngine:
@@ -368,30 +321,6 @@ class AudioEngine:
         self._dropped_tap_blocks = 0
         self._autosync_last_offset_ms = 0.0
 
-    @staticmethod
-    def _apply_filters(x: np.ndarray, fmt: AudioFormat, filters: List[AudioFilter]) -> np.ndarray:
-        y = x
-        for f in filters:
-            y = f.process(y, fmt)
-        return y
-
-    @staticmethod
-    def _rms(x: np.ndarray) -> float:
-        if x.size == 0:
-            return 0.0
-        xf = x.astype(np.float32, copy=False)
-        return float(np.sqrt(np.mean(xf * xf)))
-
-    @staticmethod
-    def _pad_or_crop_n(x: np.ndarray, n: int) -> np.ndarray:
-        """Ensure x has exactly n frames (rows)."""
-        if x.shape[0] == n:
-            return x.astype(np.float32, copy=False)
-        if x.shape[0] > n:
-            return x[:n].astype(np.float32, copy=False)
-        pad = np.zeros((n - x.shape[0], x.shape[1]), dtype=np.float32)
-        return np.vstack([x.astype(np.float32, copy=False), pad])
-
     def _on_audio_from_source(self, source_name: str, frame: np.ndarray) -> None:
         with self._lock:
             if not self._running:
@@ -415,16 +344,6 @@ class AudioEngine:
                 dropped = st.buf.popleft()
                 st.dropped_in_frames += int(len(dropped))
                 st.buffer_frames = max(0, int(st.buffer_frames) - int(len(dropped)))
-
-    def _tap_should_send(self, tap_q: "queue.Queue[dict]") -> bool:
-        # Avoid expensive packet building/copies if the tap queue is close to full.
-        try:
-            qsz = int(tap_q.qsize())
-        except Exception:
-            return True
-        cap = max(1, int(self._tap_q_max))
-        ratio = qsz / float(cap)
-        return ratio < float(self._tap_drop_threshold)
 
     def _mix_loop(self) -> None:
         fmt = self._fmt
@@ -500,27 +419,27 @@ class AudioEngine:
 
                 # Per-source filters (source format)
                 try:
-                    block_src = self._apply_filters(block_src, src_fmt, st.src.get_filters())
+                    block_src = apply_filters(block_src, src_fmt, st.src.get_filters())
                 except Exception:
                     block_src = np.zeros((fmt.blocksize, max(1, src_fmt.channels)), dtype=np.float32)
                     st.missing_out_frames += fmt.blocksize
 
                 # Resample to engine rate
-                block_src = self._resample_to_engine_rate(block_src, int(src_fmt.sample_rate), int(fmt.sample_rate))
+                block_src = resample_to_engine_rate(block_src, int(src_fmt.sample_rate), int(fmt.sample_rate))
 
                 # Enforce exact engine blocksize after resample
                 if block_src.ndim == 1:
                     block_src = block_src[:, None]
-                block_src = self._pad_or_crop_n(block_src, fmt.blocksize)
+                block_src = pad_or_crop_n(block_src, fmt.blocksize)
 
                 # Channel map to engine format
-                block_eng = self._channel_map_to_engine(block_src, int(src_fmt.channels), fmt.channels)
+                block_eng = channel_map_to_engine(block_src, int(src_fmt.channels), fmt.channels)
 
                 # Delay compensation
                 if st.delay_frames > 0:
-                    block_eng = self._apply_delay_block(st, block_eng, fmt.blocksize, fmt.channels)
+                    block_eng = apply_delay_block(st, block_eng, fmt.blocksize, fmt.channels)
 
-                st.rms = self._rms(block_eng)
+                st.rms = rms(block_eng)
                 st.last_ts = ts_mono
 
                 if float(st.rms) > float(self._mix_active_rms_eps):
@@ -537,14 +456,14 @@ class AudioEngine:
                 mix *= 1.0 / float(active_sources)
 
             try:
-                mixed = self._apply_filters(mix, fmt, master_filters)
+                mixed = apply_filters(mix, fmt, master_filters)
             except Exception:
                 mixed = mix
 
             mixed = np.clip(mixed, -1.0, 1.0)
 
             with self._lock:
-                self._master_rms = self._rms(mixed)
+                self._master_rms = rms(mixed)
                 self._master_last_ts = ts_mono
 
             try:
@@ -555,75 +474,23 @@ class AudioEngine:
 
             # Tap packet: early drop + minimal copies
             if tap_q is not None:
-                if not self._tap_should_send(tap_q):
+                if not tap_should_send(
+                    tap_q,
+                    tap_queue_max=self._tap_q_max,
+                    drop_threshold=self._tap_drop_threshold,
+                ):
                     with self._lock:
                         self._dropped_tap_blocks += 1
                 else:
-                    pkt: Dict[str, object] = {"t_start": float(t_start), "t_end": float(t_end)}
-                    if tap_mode in ("mix", "both"):
-                        pkt["mix"] = np.array(mixed, copy=True)
-                    if tap_mode in ("sources", "both"):
-                        src_map: Dict[str, np.ndarray] = {}
-                        if sources_out is not None:
-                            for k, v in sources_out.items():
-                                src_map[k] = np.array(v, copy=True)
-                        pkt["sources"] = src_map
+                    pkt = build_tap_packet(
+                        t_start=t_start,
+                        t_end=t_end,
+                        mixed=mixed,
+                        sources_out=sources_out,
+                        mode=tap_mode,
+                    )
                     try:
                         tap_q.put_nowait(pkt)  # type: ignore[arg-type]
                     except queue.Full:
                         with self._lock:
                             self._dropped_tap_blocks += 1
-
-    @staticmethod
-    def _channel_map_to_engine(x: np.ndarray, src_ch: int, eng_ch: int) -> np.ndarray:
-        if src_ch == eng_ch:
-            return x.astype(np.float32, copy=False)
-
-        if src_ch == 1 and eng_ch == 2:
-            return np.repeat(x, 2, axis=1).astype(np.float32, copy=False)
-
-        if src_ch == 2 and eng_ch == 1:
-            return x.mean(axis=1, keepdims=True).astype(np.float32, copy=False)
-
-        n = x.shape[0]
-        if x.shape[1] > eng_ch:
-            return x[:, :eng_ch].astype(np.float32, copy=False)
-
-        out = np.zeros((n, eng_ch), dtype=np.float32)
-        out[:, : x.shape[1]] = x.astype(np.float32, copy=False)
-        return out
-
-    @staticmethod
-    def _resample_to_engine_rate(x: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
-        if src_rate == dst_rate:
-            return x.astype(np.float32, copy=False)
-
-        n = x.shape[0]
-        if n == 0:
-            return x.astype(np.float32, copy=False)
-
-        duration = n / float(src_rate)
-        dst_n = int(round(duration * dst_rate))
-        if dst_n <= 0:
-            return np.zeros((0, x.shape[1]), dtype=np.float32)
-
-        src_t = np.linspace(0.0, duration, num=n, endpoint=False, dtype=np.float64)
-        dst_t = np.linspace(0.0, duration, num=dst_n, endpoint=False, dtype=np.float64)
-
-        out = np.zeros((dst_n, x.shape[1]), dtype=np.float32)
-        for ch in range(x.shape[1]):
-            out[:, ch] = np.interp(dst_t, src_t, x[:, ch].astype(np.float64, copy=False)).astype(np.float32, copy=False)
-        return out
-
-    @staticmethod
-    def _apply_delay_block(st: _SourceState, block: np.ndarray, blocksize: int, channels: int) -> np.ndarray:
-        if st.delay_frames <= 0:
-            return block
-
-        blocks_delay = int(np.ceil(st.delay_frames / float(blocksize)))
-        while len(st.delay_buf) < blocks_delay:
-            st.delay_buf.append(np.zeros((blocksize, channels), dtype=np.float32))
-
-        st.delay_buf.append(block)
-        out = st.delay_buf.popleft()
-        return out

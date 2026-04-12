@@ -14,13 +14,13 @@ Desktop app for capturing system audio and microphone input, transcribing speech
 ## Run
 
 ```powershell
-.venv\Scripts\python.exe ui\app.py
+.venv\Scripts\python.exe main.py
 ```
 
 Minimal CLI capture example:
 
 ```powershell
-.venv\Scripts\python.exe main.py
+.venv\Scripts\python.exe capture_cli.py
 ```
 
 ## Notes
