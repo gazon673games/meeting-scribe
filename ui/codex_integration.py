@@ -20,15 +20,14 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from application.codex_assistant import CodexAssistantRequest, CodexExecutionSettings
+from application.codex_assistant import CodexExecutionSettings
 from application.codex_config import (
     CodexProfile,
     CodexSettings,
     codex_settings_to_dict,
     parse_codex_settings,
 )
-from application.codex_logs import read_human_log_tail
-from application.codex_prompting import build_codex_prompt
+from application.codex_use_case import CodexRequestInput
 
 
 class CodexIntegrationMixin:
@@ -230,15 +229,6 @@ class CodexIntegrationMixin:
                 return p
         return self._codex_profiles[0] if self._codex_profiles else None
 
-    def _read_human_log_for_codex(self) -> str:
-        human_log_path = Path(self._human_log_path) if self._human_log_path is not None else None
-        return read_human_log_tail(
-            project_root=self.project_root,
-            human_log_path=human_log_path,
-            human_log_fh=self._human_log_fh,
-            max_chars=int(self._codex_max_log_chars),
-        )
-
     def _set_codex_busy(self, busy: bool) -> None:
         self._codex_busy = bool(busy)
         can_send = bool(self._codex_enabled and (not self._codex_busy) and len(self._codex_profiles) > 0)
@@ -262,21 +252,13 @@ class CodexIntegrationMixin:
             self._append_codex_line(f"[{self._fmt_ts(time.time())}] no codex profile configured")
             return
 
-        log_text = self._read_human_log_for_codex()
-        prompt = build_codex_prompt(
-            req,
-            profile,
-            log_text,
-            answer_keyword=self._codex_answer_keyword,
-        )
-
         self._append_codex_line(f"[{self._fmt_ts(time.time())}] you ({profile.label}): {req}")
         self.txt_codex_input.clear()
         self._set_codex_busy(True)
 
         th = threading.Thread(
             target=self._run_codex_exec_worker,
-            args=(prompt, profile, req),
+            args=(profile, req),
             name="codex-helper-worker",
             daemon=True,
         )
@@ -295,28 +277,31 @@ class CodexIntegrationMixin:
             except Exception:
                 pass
 
-    def _run_codex_exec_worker(self, prompt: str, profile: CodexProfile, original_cmd: str) -> None:
-        assistant = getattr(self, "codex_assistant", None)
-        if assistant is None:
+    def _run_codex_exec_worker(self, profile: CodexProfile, original_cmd: str) -> None:
+        use_case = getattr(self, "codex_request_use_case", None)
+        if use_case is None:
             self._codex_push_event(
                 {
                     "type": "codex_result",
                     "ok": False,
                     "profile": profile.label,
                     "cmd": original_cmd,
-                    "text": "codex assistant is not configured",
+                    "text": "codex request use case is not configured",
                     "dt_s": 0.0,
                 }
             )
             return
 
-        result = assistant.run(
-            CodexAssistantRequest(
-                prompt=prompt,
+        result = use_case.execute(
+            CodexRequestInput(
+                user_text=original_cmd,
                 profile=profile,
-                original_cmd=original_cmd,
                 project_root=self.project_root,
-                settings=CodexExecutionSettings(
+                human_log_path=Path(self._human_log_path) if self._human_log_path is not None else None,
+                human_log_fh=self._human_log_fh,
+                max_log_chars=int(self._codex_max_log_chars),
+                answer_keyword=self._codex_answer_keyword,
+                execution_settings=CodexExecutionSettings(
                     command_tokens=list(self._codex_command_tokens),
                     path_hints=list(self._codex_path_hints),
                     proxy=str(self._codex_proxy or ""),

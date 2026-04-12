@@ -37,7 +37,7 @@ from application.asr_profiles import (
 )
 from application.asr_session import ASRRuntimeFactory
 from application.audio_sources import AudioSourceFactory
-from application.codex_assistant import CodexAssistantPort
+from application.codex_use_case import CodexRequestUseCase
 from application.device_catalog import DeviceCatalog
 from application.offline_pass import OfflineAsrRunnerPort
 from application.recording import WavRecorderFactory
@@ -88,7 +88,7 @@ class MainWindow(
         audio_source_factory: AudioSourceFactory,
         device_catalog: DeviceCatalog,
         wav_recorder_factory: WavRecorderFactory,
-        codex_assistant: CodexAssistantPort,
+        codex_request_use_case: CodexRequestUseCase,
         offline_asr_runner: OfflineAsrRunnerPort,
     ):
         super().__init__()
@@ -115,7 +115,7 @@ class MainWindow(
         self.audio_source_factory = audio_source_factory
         self.device_catalog = device_catalog
         self.wav_recorder_factory = wav_recorder_factory
-        self.codex_assistant = codex_assistant
+        self.codex_request_use_case = codex_request_use_case
         self.offline_asr_runner = offline_asr_runner
 
         self.writer = self.wav_recorder_factory.create(self.out_q)
