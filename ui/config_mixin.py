@@ -7,7 +7,6 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QLineEdit
 
 from application.asr_language import SUPPORTED_ASR_LANGUAGES
 from application.asr_profiles import profile_defaults
-from infrastructure.wav_recording import wav_recording_available
 
 CONFIG_VERSION = 2
 
@@ -106,7 +105,7 @@ class MainWindowConfigMixin:
                 self.PROFILE_CUSTOM,
             ):
                 self.cmb_profile.setCurrentText(str(ui.get("profile")))
-            if "wav_enabled" in ui and wav_recording_available():
+            if "wav_enabled" in ui and self._wav_recording_available():
                 self.chk_wav.setChecked(bool(ui.get("wav_enabled")))
             if "output_file" in ui:
                 val = str(ui.get("output_file") or "").strip()

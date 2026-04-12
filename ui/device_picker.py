@@ -5,10 +5,9 @@ from typing import Tuple
 from PySide6.QtWidgets import QComboBox, QDialog, QDialogButtonBox, QFormLayout, QVBoxLayout, QWidget
 
 from application.device_catalog import (
+    DeviceCatalog,
     LOOPBACK_SOURCE_TYPE,
     MIC_SOURCE_TYPE,
-    list_input_devices,
-    list_loopback_devices,
 )
 
 
@@ -16,8 +15,9 @@ class DevicePickerDialog(QDialog):
     TYPE_LOOPBACK = LOOPBACK_SOURCE_TYPE
     TYPE_MIC = MIC_SOURCE_TYPE
 
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(self, parent: QWidget | None = None, *, catalog: DeviceCatalog):
         super().__init__(parent)
+        self._catalog = catalog
         self.setWindowTitle("Add device")
         self.resize(720, 190)
 
@@ -47,10 +47,10 @@ class DevicePickerDialog(QDialog):
         source_type = self.cmb_type.currentText()
 
         if source_type == self.TYPE_LOOPBACK:
-            devices = list_loopback_devices()
+            devices = self._catalog.list_loopback_devices()
             empty_label = "(no loopback devices found)"
         else:
-            devices = list_input_devices()
+            devices = self._catalog.list_input_devices()
             empty_label = "(no input devices found)"
 
         if not devices:

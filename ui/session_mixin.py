@@ -11,7 +11,6 @@ from PySide6.QtCore import QTimer
 from application.asr_language import initial_prompt_for_language, normalize_asr_language, runtime_asr_language
 from application.asr_session import ASRRuntime, ASRSessionSettings
 from application.offline_pass import offline_asr_available, run_offline_asr_pass
-from infrastructure.wav_recording import wav_recording_available
 
 
 class SessionMixin:
@@ -155,7 +154,7 @@ class SessionMixin:
     def _start_wav_if_enabled(self) -> None:
         if not self.chk_wav.isChecked():
             return
-        if not wav_recording_available():
+        if not self._wav_recording_available():
             self._set_status("WAV disabled: install soundfile.")
             return
 
@@ -279,7 +278,7 @@ class SessionMixin:
 
         self._set_custom_enabled(self.cmb_profile.currentText() == self.PROFILE_CUSTOM)
 
-        self.chk_wav.setEnabled(wav_recording_available())
+        self.chk_wav.setEnabled(self._wav_recording_available())
         self.txt_output.setEnabled(True)
 
         self._set_progress_if_changed(self.master_meter, 0)
@@ -312,7 +311,7 @@ class SessionMixin:
             and run_offline_pass
             and offline_asr_available()
             and bool(self.chk_offline_on_stop.isChecked())
-            and wav_recording_available()
+            and self._wav_recording_available()
             and Path(wav_path).exists()
         ):
             self._start_offline_pass(
