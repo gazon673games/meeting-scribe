@@ -4,7 +4,11 @@ from pathlib import Path
 from typing import Any
 
 from application.asr_session import ASRRuntime, ASRRuntimeFactory, ASRSessionSettings
-from asr.pipeline import ASRPipeline
+from asr.application.pipeline import ASRPipeline
+from asr.infrastructure.diar_backend_pyannote import PyannoteDiarizer
+from asr.infrastructure.diarizer import OnlineDiarizer
+from asr.infrastructure.logger import ASRLogger
+from asr.infrastructure.worker_faster_whisper import FasterWhisperASR
 
 
 class ASRPipelineFactory(ASRRuntimeFactory):
@@ -19,6 +23,10 @@ class ASRPipelineFactory(ASRRuntimeFactory):
         return ASRPipeline(
             tap_queue=tap_queue,
             project_root=project_root,
+            logger_factory=ASRLogger,
+            asr_backend_factory=FasterWhisperASR,
+            online_diarizer_factory=OnlineDiarizer,
+            pyannote_diarizer_factory=PyannoteDiarizer,
             language=settings.language,
             mode=settings.mode,
             asr_model_name=settings.model_name,

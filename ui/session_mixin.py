@@ -10,7 +10,7 @@ from PySide6.QtCore import QTimer
 
 from application.asr_language import initial_prompt_for_language, normalize_asr_language, runtime_asr_language
 from application.asr_session import ASRRuntime, ASRSessionSettings
-from application.offline_pass import offline_asr_available, run_offline_asr_pass
+from application.offline_pass import OfflineAsrRequest
 
 
 class SessionMixin:
@@ -273,7 +273,7 @@ class SessionMixin:
         self.btn_asr_toggle.setEnabled(True)
         self.chk_longrun.setEnabled(True)
 
-        self.chk_offline_on_stop.setEnabled(offline_asr_available())
+        self.chk_offline_on_stop.setEnabled(self._offline_asr_available())
         self.chk_rt_transcript_file.setEnabled(True)
 
         self._set_custom_enabled(self.cmb_profile.currentText() == self.PROFILE_CUSTOM)
@@ -309,7 +309,7 @@ class SessionMixin:
         if (
             not stop_error
             and run_offline_pass
-            and offline_asr_available()
+            and self._offline_asr_available()
             and bool(self.chk_offline_on_stop.isChecked())
             and self._wav_recording_available()
             and Path(wav_path).exists()
@@ -425,7 +425,7 @@ class SessionMixin:
         if self._offline_pass_active:
             self._set_status("Offline pass is already running.")
             return
-        if not offline_asr_available():
+        if not self._offline_asr_available():
             self._set_status("Offline pass is unavailable.")
             return
 
@@ -449,12 +449,14 @@ class SessionMixin:
             ts = time.strftime("%Y%m%d_%H%M%S")
             out_txt = logs_dir / f"offline_transcript_{ts}.txt"
 
-            result_path = run_offline_asr_pass(
-                project_root=self.project_root,
-                wav_path=Path(wav_path),
-                out_txt=out_txt,
-                model_name=str(model_name or "large-v3"),
-                language=language,
+            result_path = self.offline_asr_runner.run(
+                OfflineAsrRequest(
+                    project_root=self.project_root,
+                    wav_path=Path(wav_path),
+                    out_txt=out_txt,
+                    model_name=str(model_name or "large-v3"),
+                    language=language,
+                )
             )
 
             self.background_event.emit(

@@ -39,7 +39,7 @@ from application.asr_session import ASRRuntimeFactory
 from application.audio_sources import AudioSourceFactory
 from application.codex_assistant import CodexAssistantPort
 from application.device_catalog import DeviceCatalog
-from application.offline_pass import offline_asr_available
+from application.offline_pass import OfflineAsrRunnerPort
 from application.recording import WavRecorderFactory
 from ui.asr_events_mixin import AsrEventsMixin
 from ui.config_mixin import MainWindowConfigMixin
@@ -89,6 +89,7 @@ class MainWindow(
         device_catalog: DeviceCatalog,
         wav_recorder_factory: WavRecorderFactory,
         codex_assistant: CodexAssistantPort,
+        offline_asr_runner: OfflineAsrRunnerPort,
     ):
         super().__init__()
         self.setWindowTitle("Meeting Scribe — Audio Mixer + ASR")
@@ -115,6 +116,7 @@ class MainWindow(
         self.device_catalog = device_catalog
         self.wav_recorder_factory = wav_recorder_factory
         self.codex_assistant = codex_assistant
+        self.offline_asr_runner = offline_asr_runner
 
         self.writer = self.wav_recorder_factory.create(self.out_q)
         self.writer.start()
@@ -439,9 +441,9 @@ class MainWindow(
             self.chk_wav.setEnabled(False)
             self.chk_wav.setChecked(False)
 
-        if not offline_asr_available():
+        if not self._offline_asr_available():
             self.chk_offline_on_stop.setEnabled(False)
-            self.chk_offline_on_stop.setToolTip("Offline runner module not found (asr/offline_runner.py).")
+            self.chk_offline_on_stop.setToolTip("Offline ASR runner is unavailable.")
         else:
             self.chk_offline_on_stop.setEnabled(True)
 
@@ -490,6 +492,9 @@ class MainWindow(
 
     def _wav_recording_available(self) -> bool:
         return bool(self.wav_recorder_factory.available())
+
+    def _offline_asr_available(self) -> bool:
+        return bool(self.offline_asr_runner.available())
 
     def _current_output_path(self) -> Path:
         name = (self.txt_output.text() or "").strip()

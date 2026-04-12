@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from asr.profiles import (
+from asr.domain.profiles import (
     PROFILE_BALANCED,
     PROFILE_CUSTOM,
     PROFILE_QUALITY,
