@@ -7,6 +7,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from asr.audio_data import MonoAudio16kBuffer
 from asr.domain import Segment
 from asr.metrics import ASRMetrics
 from asr.policies import PreGainAGC
@@ -235,7 +236,15 @@ class AudioSegmenter:
         )
 
         try:
-            self._seg_q.put_nowait(Segment(stream, float(t_start), float(t_end), audio, enqueue_ts=time.time()))
+            self._seg_q.put_nowait(
+                Segment(
+                    stream=stream,
+                    t_start=float(t_start),
+                    t_end=float(t_end),
+                    audio=MonoAudio16kBuffer.from_array(audio),
+                    enqueue_ts=time.time(),
+                )
+            )
         except queue.Full:
             self._metrics.record_segment_dropped()
             self._log_event(

@@ -1,11 +1,37 @@
 from __future__ import annotations
 
-from audio.writer import WavWriterThread, soundfile_available
+from pathlib import Path
+from typing import Any, Optional, Protocol
+
+from audio.types import AudioFormat
 
 
-def wav_recording_available() -> bool:
-    return soundfile_available()
+class WavRecorder(Protocol):
+    def start(self) -> None:
+        ...
+
+    def stop(self) -> None:
+        ...
+
+    def start_recording(self, path: Path, fmt: AudioFormat) -> None:
+        ...
+
+    def stop_recording(self) -> None:
+        ...
+
+    def is_recording(self) -> bool:
+        ...
+
+    def target_path(self) -> Optional[Path]:
+        ...
+
+    def last_error(self) -> Optional[str]:
+        ...
 
 
-def create_wav_writer(output_queue) -> WavWriterThread:
-    return WavWriterThread(output_queue)
+class WavRecorderFactory(Protocol):
+    def available(self) -> bool:
+        ...
+
+    def create(self, output_queue: Any) -> WavRecorder:
+        ...

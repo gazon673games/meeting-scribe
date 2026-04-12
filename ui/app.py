@@ -28,7 +28,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
 )
 
-from application.recording import create_wav_writer, wav_recording_available
 from audio.engine import AudioEngine
 from audio.types import AudioFormat
 from application.asr_profiles import (
@@ -37,8 +36,10 @@ from application.asr_profiles import (
     PROFILE_QUALITY as ASR_PROFILE_QUALITY,
     PROFILE_REALTIME as ASR_PROFILE_REALTIME,
 )
-from application.audio_sources import create_loopback_source, create_microphone_source
 from application.offline_pass import offline_asr_available
+from infrastructure.asr_pipeline_factory import ASRPipelineFactory
+from infrastructure.audio_source_factory import DefaultAudioSourceFactory
+from infrastructure.wav_recording import WavWriterFactory, wav_recording_available
 from ui.asr_events_mixin import AsrEventsMixin
 from ui.config_mixin import MainWindowConfigMixin
 from ui.codex_integration import CodexIntegrationMixin
@@ -100,7 +101,11 @@ class MainWindow(
         self.rows: dict[str, SourceRow] = {}
         self.source_objs: Dict[str, Any] = {}
 
-        self.writer = create_wav_writer(self.out_q)
+        self.asr_runtime_factory = ASRPipelineFactory()
+        self.audio_source_factory = DefaultAudioSourceFactory()
+        self.wav_recorder_factory = WavWriterFactory()
+
+        self.writer = self.wav_recorder_factory.create(self.out_q)
         self.writer.start()
 
         self.asr: Any = None
@@ -583,7 +588,7 @@ class MainWindow(
         try:
             if typ == DevicePickerDialog.TYPE_LOOPBACK:
                 name = self._make_unique_name("desktop_audio")
-                src = create_loopback_source(
+                src = self.audio_source_factory.create_loopback_source(
                     name=name,
                     engine_format=self.fmt,
                     device=token,
@@ -595,7 +600,7 @@ class MainWindow(
                 self._set_status(f"Added loopback -> source '{name}'")
             else:
                 name = self._make_unique_name("mic")
-                src = create_microphone_source(name=name, device=token)
+                src = self.audio_source_factory.create_microphone_source(name=name, device=token)
                 self.engine.add_source(src)
                 self.source_objs[name] = src
                 self._add_row(name)

@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QLineEdit
 
 from application.asr_language import SUPPORTED_ASR_LANGUAGES
 from application.asr_profiles import profile_defaults
-from application.recording import wav_recording_available
+from infrastructure.wav_recording import wav_recording_available
 
 CONFIG_VERSION = 2
 

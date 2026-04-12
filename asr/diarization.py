@@ -120,7 +120,8 @@ class DiarizationRuntime:
             if diar is None:
                 return "S?"
 
-            speaker, nsp, best_sim, created = diar.assign_with_debug(seg.audio_16k, ts=time.time())
+            audio = np.asarray(seg.audio.samples, dtype=np.float32)
+            speaker, nsp, best_sim, created = diar.assign_with_debug(audio, ts=time.time())
             if str(speaker).startswith("S_ERR"):
                 derr = None
                 try:
@@ -144,7 +145,7 @@ class DiarizationRuntime:
                     "best_sim": best_sim,
                     "created_new": bool(created),
                     "n_speakers_window": nsp,
-                    "seg_dur_s": float(seg.audio_16k.shape[0]) / 16000.0,
+                    "seg_dur_s": float(seg.audio.duration_s),
                     "ts": time.time(),
                 }
             )
