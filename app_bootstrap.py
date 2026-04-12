@@ -4,6 +4,7 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
+from application.codex_use_case import CodexRequestUseCase
 from infrastructure.asr_pipeline_factory import ASRPipelineFactory
 from infrastructure.audio_source_factory import DefaultAudioSourceFactory
 from infrastructure.codex_cli import CodexCliRunner
@@ -14,12 +15,13 @@ from ui.app import MainWindow
 
 
 def create_main_window() -> MainWindow:
+    codex_runner = CodexCliRunner()
     return MainWindow(
         asr_runtime_factory=ASRPipelineFactory(),
         audio_source_factory=DefaultAudioSourceFactory(),
         device_catalog=SoundDeviceCatalog(),
         wav_recorder_factory=WavWriterFactory(),
-        codex_assistant=CodexCliRunner(),
+        codex_request_use_case=CodexRequestUseCase(codex_runner),
         offline_asr_runner=FasterWhisperOfflineAsrRunner(),
     )
 

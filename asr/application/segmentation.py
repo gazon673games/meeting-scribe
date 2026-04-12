@@ -12,7 +12,7 @@ from asr.domain import Segment
 from asr.application.metrics import ASRMetrics
 from asr.application.policies import PreGainAGC
 from asr.application.utils_audio import resample_linear, stereo_to_mono
-from asr.domain.vad import EnergyVAD
+from asr.application.vad import EnergyVAD
 
 LogEvent = Callable[[dict], None]
 SegmentationParams = Callable[[], Tuple[float, float, float]]
