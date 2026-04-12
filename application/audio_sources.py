@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional, Protocol
 
-from audio.domain import AudioFormat, AudioSource
+from audio.domain.formats import AudioFormat
+from audio.domain.ports import AudioSource
 
 SourceErrorCallback = Callable[[str, str], None]
 

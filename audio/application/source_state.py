@@ -7,7 +7,7 @@ from typing import Deque
 
 import numpy as np
 
-from audio.domain import AudioSource
+from audio.domain.ports import AudioSource
 
 
 @dataclass

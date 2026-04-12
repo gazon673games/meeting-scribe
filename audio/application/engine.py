@@ -12,7 +12,9 @@ from audio.application.engine_meters import build_meter_snapshot
 from audio.application.mixer import enqueue_source_frame, normalize_source_frame, render_source_block
 from audio.application.source_state import SourceState as _SourceState
 from audio.application.tap import try_emit_tap_packet
-from audio.domain import AudioFilter, AudioFormat, AudioSource, TapMode
+from audio.domain.formats import AudioFormat
+from audio.domain.ports import AudioFilter, AudioSource
+from audio.domain.types import TapMode
 
 
 class AudioEngine:

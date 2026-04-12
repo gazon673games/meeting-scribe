@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any, List, Optional, Protocol
 
-from audio.domain import AudioFilter, AudioFormat, AudioSource, TapMode
+from audio.domain.formats import AudioFormat
+from audio.domain.ports import AudioFilter, AudioSource
+from audio.domain.types import TapMode
 
 
 class AudioRuntimePort(Protocol):

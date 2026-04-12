@@ -28,7 +28,7 @@ if not getattr(np, "_meeting_scribe_fromstring_compat", False):
 
 import soundcard as sc
 
-from audio.domain import AudioFormat
+from audio.domain.formats import AudioFormat
 from audio.infrastructure.sources.base import BaseSource
 
 

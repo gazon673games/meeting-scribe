@@ -6,7 +6,7 @@ from typing import Callable, Dict, Optional
 
 from asr.application.metrics import ASRMetrics
 from asr.application.ports import AsrBackendFactoryPort, AsrBackendPort
-from asr.domain import Segment
+from asr.domain.segments import Segment
 from asr.domain.text import normalize_text, trim_overlap
 
 LogEvent = Callable[[dict], None]

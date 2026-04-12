@@ -13,7 +13,7 @@ from audio.application.dsp import (
     rms,
 )
 from audio.application.source_state import SourceState
-from audio.domain import AudioFormat
+from audio.domain.formats import AudioFormat
 
 
 @dataclass(frozen=True)

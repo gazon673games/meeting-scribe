@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
-from asr.domain import DiarBackend, Segment
+from asr.domain.segments import Segment
+from asr.domain.types import DiarBackend
 
 LogEvent = Callable[[dict], None]
 

@@ -4,7 +4,7 @@ from typing import Any, Optional
 
 from application.audio_runtime import AudioRuntimeFactory, AudioRuntimePort
 from audio.application.engine import AudioEngine
-from audio.domain import AudioFormat
+from audio.domain.formats import AudioFormat
 
 
 class DefaultAudioRuntimeFactory(AudioRuntimeFactory):

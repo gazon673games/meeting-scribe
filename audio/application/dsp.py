@@ -5,7 +5,8 @@ from typing import List
 import numpy as np
 
 from audio.application.source_state import SourceState
-from audio.domain import AudioFilter, AudioFormat
+from audio.domain.formats import AudioFormat
+from audio.domain.ports import AudioFilter
 
 
 def apply_filters(x: np.ndarray, fmt: AudioFormat, filters: List[AudioFilter]) -> np.ndarray:

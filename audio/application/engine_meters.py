@@ -4,7 +4,8 @@ import queue
 from typing import Dict, Optional, Set
 
 from audio.application.source_state import SourceState
-from audio.domain import AudioFormat, TapMode
+from audio.domain.formats import AudioFormat
+from audio.domain.types import TapMode
 
 
 def build_meter_snapshot(

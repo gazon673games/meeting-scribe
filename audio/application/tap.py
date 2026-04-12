@@ -5,7 +5,7 @@ from typing import Dict, Optional
 
 import numpy as np
 
-from audio.domain import TapMode
+from audio.domain.types import TapMode
 
 
 def tap_should_send(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
-from asr.domain import DiarSegment
+from asr.domain.segments import DiarSegment
 
 
 class AsrLoggerPort(Protocol):
