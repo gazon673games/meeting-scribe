@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from audio.domain import AudioFormat
+from audio.domain.formats import AudioFormat
 
 
 @dataclass

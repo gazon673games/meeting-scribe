@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
-from asr.domain import Mode, OverloadStrategy
+from asr.domain.types import Mode, OverloadStrategy
 
 
 class ASRRuntime(Protocol):

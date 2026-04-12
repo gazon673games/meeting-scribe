@@ -4,7 +4,7 @@ from typing import List
 
 import numpy as np
 
-from asr.domain import DiarSegment
+from asr.domain.segments import DiarSegment
 
 
 class PyannoteDiarizer:

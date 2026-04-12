@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Tuple
 
-from asr.domain import UtteranceState
+from asr.domain.utterances import UtteranceState
 from asr.domain.text import normalize_text
 
 

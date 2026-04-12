@@ -8,7 +8,7 @@ import numpy as np
 
 from asr.application.metrics import ASRMetrics
 from asr.application.segmentation import SegmenterConfig
-from asr.domain import Segment
+from asr.domain.segments import Segment
 from asr.infrastructure.audio_data import MonoAudio16kBuffer
 from asr.infrastructure.audio_utils import resample_linear, stereo_to_mono
 from asr.infrastructure.gain import PreGainAGC

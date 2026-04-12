@@ -12,7 +12,8 @@ from asr.application.ports import (
     PyannoteDiarizerFactoryPort,
     PyannoteDiarizerPort,
 )
-from asr.domain import DiarBackend, DiarSegment, Segment, pick_speaker
+from asr.domain.segments import DiarSegment, Segment, pick_speaker
+from asr.domain.types import DiarBackend
 
 LogEvent = Callable[[dict], None]
 

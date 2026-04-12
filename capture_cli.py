@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from audio.application.engine import AudioEngine
-from audio.domain import AudioFormat
+from audio.domain.formats import AudioFormat
 from audio.infrastructure.filters.volume import VolumeFilter
 from audio.infrastructure.sources.microphone import MicrophoneSource
 from audio.infrastructure.sources.wasapi_loopback import WasapiLoopbackSource

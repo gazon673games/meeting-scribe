@@ -11,7 +11,7 @@ from asr.application.ports import (
     RealtimeWorkerRunnerPort,
 )
 from asr.application.segmentation import SegmenterConfig
-from asr.domain import DiarBackend, Mode, OverloadStrategy
+from asr.domain.types import DiarBackend, Mode, OverloadStrategy
 
 
 @dataclass(frozen=True)

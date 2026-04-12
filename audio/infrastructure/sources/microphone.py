@@ -5,7 +5,7 @@ from typing import Callable, Optional
 import numpy as np
 import sounddevice as sd
 
-from audio.domain import AudioFormat
+from audio.domain.formats import AudioFormat
 from audio.infrastructure.sources.base import BaseSource
 
 

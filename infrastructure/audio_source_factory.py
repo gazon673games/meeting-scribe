@@ -3,7 +3,8 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from application.audio_sources import AudioSourceFactory, SourceErrorCallback
-from audio.domain import AudioFormat, AudioSource
+from audio.domain.formats import AudioFormat
+from audio.domain.ports import AudioSource
 from audio.infrastructure.sources.microphone import MicrophoneSource
 from audio.infrastructure.sources.wasapi_loopback import WasapiLoopbackSource
 

@@ -21,7 +21,7 @@ from asr.application.ports import AsrLoggerPort, RealtimeWorkerRunnerPort, StopS
 from asr.application.segmentation import AudioSegmenterPort, SegmenterConfig
 from asr.application.transcription_worker import TranscriptionWorkerRuntime
 from asr.application.utterances import UtteranceAggregator
-from asr.domain import Segment
+from asr.domain.segments import Segment
 
 
 @dataclass
