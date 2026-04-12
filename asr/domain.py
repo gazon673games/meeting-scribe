@@ -1,13 +1,29 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Literal
-
-import numpy as np
+from typing import List, Literal, Protocol
 
 Mode = Literal["mix", "split"]
 DiarBackend = Literal["pyannote", "online", "nemo"]
 OverloadStrategy = Literal["drop_old", "keep_all"]
+
+
+class MonoAudio16k(Protocol):
+    @property
+    def sample_rate_hz(self) -> int:
+        ...
+
+    @property
+    def frame_count(self) -> int:
+        ...
+
+    @property
+    def duration_s(self) -> float:
+        ...
+
+    @property
+    def samples(self) -> object:
+        ...
 
 
 @dataclass
@@ -15,7 +31,7 @@ class Segment:
     stream: str
     t_start: float
     t_end: float
-    audio_16k: np.ndarray
+    audio: MonoAudio16k
     enqueue_ts: float
 
 

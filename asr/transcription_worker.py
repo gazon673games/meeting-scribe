@@ -168,7 +168,7 @@ class TranscriptionWorkerRuntime:
 
     def _transcribe_segment(self, seg: Segment) -> None:
         speaker = self._diar.speaker_for_segment(seg, self._log_event)
-        seg_dur_s = max(1e-6, float(seg.audio_16k.shape[0]) / 16000.0)
+        seg_dur_s = max(1e-6, float(seg.audio.duration_s))
 
         now0 = time.time()
         queue_wait_s = max(0.0, float(now0) - float(seg.enqueue_ts))
@@ -178,7 +178,7 @@ class TranscriptionWorkerRuntime:
 
         t0 = time.time()
         try:
-            res = self._asr.transcribe(seg.audio_16k, beam_size=beam_to_use)
+            res = self._asr.transcribe(seg.audio.samples, beam_size=beam_to_use)
             text = (res.get("text") or "").strip()
         except Exception as e:
             self._log_event(

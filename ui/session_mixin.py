@@ -9,9 +9,9 @@ from typing import Any, Dict, List, Optional
 from PySide6.QtCore import QTimer
 
 from application.asr_language import initial_prompt_for_language, normalize_asr_language, runtime_asr_language
-from application.asr_session import ASRRuntime, ASRSessionSettings, build_asr_runtime
+from application.asr_session import ASRRuntime, ASRSessionSettings
 from application.offline_pass import offline_asr_available, run_offline_asr_pass
-from application.recording import wav_recording_available
+from infrastructure.wav_recording import wav_recording_available
 
 
 class SessionMixin:
@@ -92,7 +92,7 @@ class SessionMixin:
         settings = self._read_asr_session_settings()
 
         try:
-            self.asr = build_asr_runtime(
+            self.asr = self.asr_runtime_factory.build(
                 settings,
                 tap_queue=self.tap_q,
                 project_root=self.project_root,
