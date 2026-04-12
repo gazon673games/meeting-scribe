@@ -5,50 +5,28 @@ import shutil
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from application.codex_assistant import (
+    CodexAssistantPort,
+    CodexAssistantRequest,
+    CodexAssistantResult,
+    CodexExecutionSettings,
+)
 from application.codex_config import CodexProfile
 from application.codex_prompting import normalize_model_name, normalize_reasoning_effort
 
 
-@dataclass(frozen=True)
-class CodexCliSettings:
-    command_tokens: List[str]
-    path_hints: List[str]
-    proxy: str
-    timeout_s: int
-
-
-@dataclass(frozen=True)
-class CodexExecRequest:
-    prompt: str
-    profile: CodexProfile
-    original_cmd: str
-    project_root: Path
-
-
-@dataclass(frozen=True)
-class CodexExecResult:
-    ok: bool
-    profile: str
-    cmd: str
-    text: str
-    dt_s: float
-
-
-class CodexCliRunner:
-    def __init__(self, settings: CodexCliSettings):
-        self._settings = settings
-
-    def run(self, request: CodexExecRequest) -> CodexExecResult:
+class CodexCliRunner(CodexAssistantPort):
+    def run(self, request: CodexAssistantRequest) -> CodexAssistantResult:
         t0 = time.time()
         out_path: Optional[Path] = None
         profile = request.profile
+        settings = request.settings
         try:
             env = os.environ.copy()
-            proxy = str(self._settings.proxy or "").strip()
+            proxy = str(settings.proxy or "").strip()
             if proxy:
                 env["HTTP_PROXY"] = proxy
                 env["HTTPS_PROXY"] = proxy
@@ -57,7 +35,7 @@ class CodexCliRunner:
                 env["https_proxy"] = proxy
                 env["all_proxy"] = proxy
 
-            base_cmd, src = self._resolve_base_command()
+            base_cmd, src = self._resolve_base_command(settings)
             if base_cmd is None:
                 return self._result(
                     False,
@@ -98,7 +76,7 @@ class CodexCliRunner:
                 capture_output=True,
                 cwd=str(request.project_root),
                 env=env,
-                timeout=max(10, int(self._settings.timeout_s)),
+                timeout=max(10, int(settings.timeout_s)),
             )
 
             out_text = ""
@@ -125,7 +103,7 @@ class CodexCliRunner:
                 False,
                 profile,
                 request.original_cmd,
-                f"timeout after {int(self._settings.timeout_s)}s",
+                f"timeout after {int(settings.timeout_s)}s",
                 t0,
             )
         except FileNotFoundError:
@@ -148,8 +126,8 @@ class CodexCliRunner:
                 except Exception:
                     pass
 
-    def _resolve_base_command(self) -> Tuple[Optional[List[str]], str]:
-        tokens = [str(x).strip() for x in self._settings.command_tokens if str(x).strip()]
+    def _resolve_base_command(self, settings: CodexExecutionSettings) -> Tuple[Optional[List[str]], str]:
+        tokens = [str(x).strip() for x in settings.command_tokens if str(x).strip()]
         if not tokens:
             tokens = ["codex"]
         base = tokens[0]
@@ -172,7 +150,7 @@ class CodexCliRunner:
             if found_name:
                 return (self._wrap_cmd_for_windows(found_name, tail), f"path:{name}")
 
-        for directory in self._common_search_dirs():
+        for directory in self._common_search_dirs(settings):
             for name in names:
                 candidate = directory / name
                 if candidate.exists():
@@ -198,10 +176,10 @@ class CodexCliRunner:
 
         return (None, "")
 
-    def _common_search_dirs(self) -> List[Path]:
+    def _common_search_dirs(self, settings: CodexExecutionSettings) -> List[Path]:
         out: List[Path] = []
 
-        for raw in self._settings.path_hints:
+        for raw in settings.path_hints:
             path = Path(str(raw).strip())
             if path and str(path).strip():
                 out.append(path)
@@ -251,8 +229,8 @@ class CodexCliRunner:
         original_cmd: str,
         text: str,
         t0: float,
-    ) -> CodexExecResult:
-        return CodexExecResult(
+    ) -> CodexAssistantResult:
+        return CodexAssistantResult(
             ok=bool(ok),
             profile=str(profile.label),
             cmd=str(original_cmd),

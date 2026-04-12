@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List, Protocol, Tuple
 
-from audio.devices import (
-    LOOPBACK_SOURCE_TYPE,
-    MIC_SOURCE_TYPE,
-    list_input_devices as _list_input_devices,
-    list_loopback_devices as _list_loopback_devices,
-)
+LOOPBACK_SOURCE_TYPE = "System audio (WASAPI loopback)"
+MIC_SOURCE_TYPE = "Microphone (input device)"
 
 
-def list_loopback_devices() -> List[Tuple[str, object]]:
-    return _list_loopback_devices()
+class DeviceCatalog(Protocol):
+    def list_loopback_devices(self) -> List[Tuple[str, object]]:
+        ...
 
-
-def list_input_devices() -> List[Tuple[str, int]]:
-    return _list_input_devices()
+    def list_input_devices(self) -> List[Tuple[str, int]]:
+        ...

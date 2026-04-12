@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from application.codex_assistant import CodexAssistantRequest, CodexExecutionSettings
 from application.codex_config import (
     CodexProfile,
     CodexSettings,
@@ -28,7 +29,6 @@ from application.codex_config import (
 )
 from application.codex_logs import read_human_log_tail
 from application.codex_prompting import build_codex_prompt
-from infrastructure.codex_cli import CodexCliRunner, CodexCliSettings, CodexExecRequest
 
 
 class CodexIntegrationMixin:
@@ -296,20 +296,32 @@ class CodexIntegrationMixin:
                 pass
 
     def _run_codex_exec_worker(self, prompt: str, profile: CodexProfile, original_cmd: str) -> None:
-        runner = CodexCliRunner(
-            CodexCliSettings(
-                command_tokens=list(self._codex_command_tokens),
-                path_hints=list(self._codex_path_hints),
-                proxy=str(self._codex_proxy or ""),
-                timeout_s=int(self._codex_timeout_s),
+        assistant = getattr(self, "codex_assistant", None)
+        if assistant is None:
+            self._codex_push_event(
+                {
+                    "type": "codex_result",
+                    "ok": False,
+                    "profile": profile.label,
+                    "cmd": original_cmd,
+                    "text": "codex assistant is not configured",
+                    "dt_s": 0.0,
+                }
             )
-        )
-        result = runner.run(
-            CodexExecRequest(
+            return
+
+        result = assistant.run(
+            CodexAssistantRequest(
                 prompt=prompt,
                 profile=profile,
                 original_cmd=original_cmd,
                 project_root=self.project_root,
+                settings=CodexExecutionSettings(
+                    command_tokens=list(self._codex_command_tokens),
+                    path_hints=list(self._codex_path_hints),
+                    proxy=str(self._codex_proxy or ""),
+                    timeout_s=int(self._codex_timeout_s),
+                ),
             )
         )
         self._codex_push_event(

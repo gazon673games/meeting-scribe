@@ -10,7 +10,6 @@ from typing import Dict, Any
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QApplication,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -36,10 +35,12 @@ from application.asr_profiles import (
     PROFILE_QUALITY as ASR_PROFILE_QUALITY,
     PROFILE_REALTIME as ASR_PROFILE_REALTIME,
 )
+from application.asr_session import ASRRuntimeFactory
+from application.audio_sources import AudioSourceFactory
+from application.codex_assistant import CodexAssistantPort
+from application.device_catalog import DeviceCatalog
 from application.offline_pass import offline_asr_available
-from infrastructure.asr_pipeline_factory import ASRPipelineFactory
-from infrastructure.audio_source_factory import DefaultAudioSourceFactory
-from infrastructure.wav_recording import WavWriterFactory, wav_recording_available
+from application.recording import WavRecorderFactory
 from ui.asr_events_mixin import AsrEventsMixin
 from ui.config_mixin import MainWindowConfigMixin
 from ui.codex_integration import CodexIntegrationMixin
@@ -80,7 +81,15 @@ class MainWindow(
     PROFILE_QUALITY = ASR_PROFILE_QUALITY
     PROFILE_CUSTOM = ASR_PROFILE_CUSTOM
 
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        asr_runtime_factory: ASRRuntimeFactory,
+        audio_source_factory: AudioSourceFactory,
+        device_catalog: DeviceCatalog,
+        wav_recorder_factory: WavRecorderFactory,
+        codex_assistant: CodexAssistantPort,
+    ):
         super().__init__()
         self.setWindowTitle("Meeting Scribe — Audio Mixer + ASR")
         self.resize(1180, 820)
@@ -101,9 +110,11 @@ class MainWindow(
         self.rows: dict[str, SourceRow] = {}
         self.source_objs: Dict[str, Any] = {}
 
-        self.asr_runtime_factory = ASRPipelineFactory()
-        self.audio_source_factory = DefaultAudioSourceFactory()
-        self.wav_recorder_factory = WavWriterFactory()
+        self.asr_runtime_factory = asr_runtime_factory
+        self.audio_source_factory = audio_source_factory
+        self.device_catalog = device_catalog
+        self.wav_recorder_factory = wav_recorder_factory
+        self.codex_assistant = codex_assistant
 
         self.writer = self.wav_recorder_factory.create(self.out_q)
         self.writer.start()
@@ -424,7 +435,7 @@ class MainWindow(
         ]:
             self._wire_config_change(w)
 
-        if not wav_recording_available():
+        if not self._wav_recording_available():
             self.chk_wav.setEnabled(False)
             self.chk_wav.setChecked(False)
 
@@ -476,6 +487,9 @@ class MainWindow(
 
     def _is_running(self) -> bool:
         return self.engine.is_running()
+
+    def _wav_recording_available(self) -> bool:
+        return bool(self.wav_recorder_factory.available())
 
     def _current_output_path(self) -> Path:
         name = (self.txt_output.text() or "").strip()
@@ -576,7 +590,7 @@ class MainWindow(
             self._set_status("Stop before adding devices.")
             return
 
-        dlg = DevicePickerDialog(self)
+        dlg = DevicePickerDialog(self, catalog=self.device_catalog)
         if dlg.exec() != DevicePickerDialog.Accepted:
             return
 
@@ -641,14 +655,3 @@ class MainWindow(
             self._rt_close()
             self._human_log_close()
         event.accept()
-
-
-def main() -> None:
-    app = QApplication(sys.argv)
-    w = MainWindow()
-    w.show()
-    sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    main()

@@ -12,11 +12,3 @@ class WavWriterFactory(WavRecorderFactory):
 
     def create(self, output_queue: Any) -> WavRecorder:
         return WavWriterThread(output_queue)
-
-
-def wav_recording_available() -> bool:
-    return soundfile_available()
-
-
-def create_wav_writer(output_queue: Any) -> WavRecorder:
-    return WavWriterThread(output_queue)
