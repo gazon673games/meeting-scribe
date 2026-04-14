@@ -31,6 +31,8 @@ Inside it, run `meeting-scribe.exe`.
 GitHub Actions builds release archives on `v*` tags for Windows x64/arm64,
 Linux x64/arm64, and macOS x64/arm64, then attaches them to the GitHub Release.
 The build script also runs the packaged app with `--smoke-import` before zipping the release.
+Windows arm64 is currently allowed to fail because `faster-whisper` depends on
+`ctranslate2`, which does not publish a `win_arm64` wheel for this dependency set yet.
 
 Publish a release by pushing a version tag:
 

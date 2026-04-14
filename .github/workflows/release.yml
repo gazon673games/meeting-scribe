@@ -13,6 +13,7 @@ jobs:
   build:
     name: Build ${{ matrix.artifact_suffix }}
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.allow_failure }}
     strategy:
       fail-fast: false
       matrix:
@@ -21,30 +22,57 @@ jobs:
             artifact_suffix: windows-x64
             artifact_name: meeting-scribe-windows-x64
             python_arch: x64
+            allow_failure: false
           - os: windows-11-arm
             artifact_suffix: windows-arm64
             artifact_name: meeting-scribe-windows-arm64
             python_arch: arm64
+            allow_failure: true
           - os: ubuntu-24.04
             artifact_suffix: linux-x64
             artifact_name: meeting-scribe-linux-x64
             python_arch: x64
+            allow_failure: false
           - os: ubuntu-24.04-arm
             artifact_suffix: linux-arm64
             artifact_name: meeting-scribe-linux-arm64
             python_arch: arm64
+            allow_failure: false
           - os: macos-15-intel
             artifact_suffix: macos-x64
             artifact_name: meeting-scribe-macos-x64
             python_arch: x64
+            allow_failure: false
           - os: macos-14
             artifact_suffix: macos-arm64
             artifact_name: meeting-scribe-macos-arm64
             python_arch: arm64
+            allow_failure: false
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install Linux runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libdbus-1-3 \
+            libegl1 \
+            libgl1 \
+            libportaudio2 \
+            libpulse0 \
+            libtiff6 \
+            libxcb-cursor0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-render-util0 \
+            libxcb-shape0 \
+            libxcb-util1 \
+            libxcb-xkb1 \
+            libxkbcommon-x11-0
 
       - name: Set up Python
         uses: actions/setup-python@v5
