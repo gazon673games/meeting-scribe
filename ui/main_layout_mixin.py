@@ -78,9 +78,9 @@ class MainWindowLayoutMixin:
         root.addLayout(asr_row)
 
         hdr = QHBoxLayout()
-        self.btn_asr_toggle = QPushButton("Hide ASR settings")
+        self.btn_asr_toggle = QPushButton("Show ASR settings")
         self.btn_asr_toggle.setCheckable(True)
-        self.btn_asr_toggle.setChecked(True)
+        self.btn_asr_toggle.setChecked(False)
         hdr.addWidget(self.btn_asr_toggle)
 
         hdr.addStretch(1)
@@ -199,8 +199,6 @@ class MainWindowLayoutMixin:
         status_row.addWidget(self.lbl_status, 1)
         root.addLayout(status_row)
 
-        self._build_codex_header(root)
-
         self.splitter = QSplitter(Qt.Vertical)
         self.splitter.setChildrenCollapsible(False)
 
@@ -216,6 +214,7 @@ class MainWindowLayoutMixin:
         self.grp_tr.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         tr_layout.addWidget(self.txt_tr, 1)
+        self._build_codex_header(tr_layout)
         self.splitter.addWidget(self.grp_tr)
 
         self._build_codex_panel(self.splitter)
@@ -241,7 +240,7 @@ class MainWindowLayoutMixin:
         self._load_config_into_ui()
         self._apply_profile_to_fields(self.cmb_profile.currentText(), force=True)
         self._set_custom_enabled(self.cmb_profile.currentText() == self.PROFILE_CUSTOM)
-        self._apply_asr_settings_visibility(expanded=True)
+        self._apply_asr_settings_visibility(expanded=bool(self.btn_asr_toggle.isChecked()))
 
     def _connect_main_signals(self) -> None:
         self.btn_add.clicked.connect(self._add_device_dialog)
