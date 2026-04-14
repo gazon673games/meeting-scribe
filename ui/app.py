@@ -1,6 +1,7 @@
 # --- File: D:\work\own\voice2textTest\ui\app.py ---
 from __future__ import annotations
 
+import json
 import queue
 import sys
 from pathlib import Path
@@ -39,6 +40,47 @@ try:
     import psutil  # type: ignore
 except Exception:
     psutil = None
+
+
+def ensure_runtime_config(project_root: Path, config_path: Path) -> None:
+    if not getattr(sys, "frozen", False):
+        return
+
+    bundled_root = Path(getattr(sys, "_MEIPASS", project_root))
+    bundled_config = bundled_root / "config.json"
+    if not bundled_config.exists():
+        return
+
+    if not config_path.exists():
+        try:
+            config_path.write_text(bundled_config.read_text(encoding="utf-8"), encoding="utf-8")
+        except Exception:
+            pass
+        return
+
+    try:
+        current = json.loads(config_path.read_text(encoding="utf-8"))
+        bundled = json.loads(bundled_config.read_text(encoding="utf-8"))
+    except Exception:
+        return
+
+    if not isinstance(current, dict) or not isinstance(bundled, dict):
+        return
+
+    current_codex = current.get("codex", {})
+    bundled_codex = bundled.get("codex", {})
+    if not isinstance(current_codex, dict) or not isinstance(bundled_codex, dict):
+        return
+
+    has_profiles = bool(current_codex.get("profiles"))
+    if "codex" in current and has_profiles:
+        return
+
+    current["codex"] = bundled_codex
+    try:
+        config_path.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
 
 class MainWindow(
@@ -82,6 +124,7 @@ class MainWindow(
         else:
             self.project_root = Path(__file__).resolve().parents[1]
         self.config_path = self.project_root / "config.json"
+        ensure_runtime_config(self.project_root, self.config_path)
 
         self.fmt = AudioFormat(sample_rate=48000, channels=2, dtype="float32", blocksize=1024)
 
