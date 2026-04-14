@@ -2,9 +2,6 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
-import soundcard as sc
-import sounddevice as sd
-
 LOOPBACK_SOURCE_TYPE = "System audio (WASAPI loopback)"
 MIC_SOURCE_TYPE = "Microphone (input device)"
 
@@ -12,6 +9,8 @@ MIC_SOURCE_TYPE = "Microphone (input device)"
 def list_loopback_devices() -> List[Tuple[str, object]]:
     out: List[Tuple[str, object]] = []
     try:
+        import soundcard as sc
+
         mics = sc.all_microphones(include_loopback=True)
     except Exception:
         mics = []
@@ -54,6 +53,8 @@ def list_loopback_devices() -> List[Tuple[str, object]]:
 def list_input_devices() -> List[Tuple[str, int]]:
     out: List[Tuple[str, int]] = []
     try:
+        import sounddevice as sd
+
         devices = sd.query_devices()
     except Exception:
         devices = []
