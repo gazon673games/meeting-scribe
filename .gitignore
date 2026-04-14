@@ -7,5 +7,8 @@ __pycache__/
 logs/
 human_logs/
 recordings/
+build/
+dist/
+capture_mix.wav
 
 .codex_tmp/
