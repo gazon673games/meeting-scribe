@@ -28,6 +28,11 @@ try {
         throw "Expected executable was not found: $exePath"
     }
 
+    $repairConfig = Start-Process -FilePath $exePath -ArgumentList "--repair-config" -PassThru -Wait
+    if ($repairConfig.ExitCode -ne 0) {
+        throw "Packaged executable config repair failed with exit code $($repairConfig.ExitCode)"
+    }
+
     $smoke = Start-Process -FilePath $exePath -ArgumentList "--smoke-import" -PassThru -Wait
     if ($smoke.ExitCode -ne 0) {
         throw "Packaged executable smoke check failed with exit code $($smoke.ExitCode)"
