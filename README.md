@@ -17,9 +17,9 @@ Desktop app for capturing system audio and microphone input, transcribing speech
 .venv\Scripts\python.exe main.py
 ```
 
-## Windows release build
+## Release build
 
-Build a local release archive:
+Build a local Windows release archive:
 
 ```powershell
 .\scripts\build_exe.ps1 -Version dev
@@ -28,8 +28,16 @@ Build a local release archive:
 The archive is written to `dist\meeting-scribe-<version>-win64.zip`.
 Inside it, run `meeting-scribe.exe`.
 
-GitHub Actions builds the same archive on `v*` tags and attaches it to the GitHub Release.
-The build script also runs `meeting-scribe.exe --smoke-import` before zipping the release.
+GitHub Actions builds release archives on `v*` tags for Windows x64/arm64,
+Linux x64/arm64, and macOS x64/arm64, then attaches them to the GitHub Release.
+The build script also runs the packaged app with `--smoke-import` before zipping the release.
+
+Publish a release by pushing a version tag:
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
 
 Minimal CLI capture example:
 
