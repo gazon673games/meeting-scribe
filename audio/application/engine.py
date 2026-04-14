@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-import queue
 import threading
-import time
-from typing import Dict, List, Optional, Tuple, Set
+from typing import List, Optional
 
 import numpy as np
 
-from audio.application.dsp import apply_filters, rms
 from audio.application.engine_meters import build_meter_snapshot
-from audio.application.mixer import enqueue_source_frame, normalize_source_frame, render_source_block
-from audio.application.source_state import SourceState as _SourceState
-from audio.application.tap import try_emit_tap_packet
+from audio.application.engine_runtime import EngineRuntimeState
+from audio.application.mix_worker import AudioMixWorker, MixLoopSnapshot
+from audio.application.mixer import enqueue_source_frame, normalize_source_frame
+from audio.application.source_registry import SourceRegistry
+from audio.application.tap_config import normalize_tap_config
 from audio.domain.formats import AudioFormat
 from audio.domain.ports import AudioFilter, AudioSource
 from audio.domain.types import TapMode
@@ -48,9 +47,7 @@ class AudioEngine:
         self._out_q = output_queue
         self._max_buf_blocks = int(max_source_buffer_blocks)
 
-        self._sources: List[AudioSource] = []
-        self._state: Dict[str, _SourceState] = {}
-        self._master_filters: List[AudioFilter] = []
+        self._registry = SourceRegistry(format)
 
         self._lock = threading.RLock()
         self._running = False
@@ -58,31 +55,22 @@ class AudioEngine:
         self._mix_thread: Optional[threading.Thread] = None
         self._stop_evt = threading.Event()
 
-        self._master_rms: float = 0.0
-        self._master_last_ts: float = 0.0
-
-        self._dropped_out_blocks: int = 0
-
-        self._t0_mono: float = 0.0
-        self._tick_index: int = 0
-
-        self._tap_q: Optional["queue.Queue[dict]"] = tap_queue
-        self._tap_q_max = int(tap_queue_max)
-        self._dropped_tap_blocks: int = 0
-
-        # tap config
-        self._tap_mode: TapMode = "both"
-        self._tap_sources_filter: Optional[Set[str]] = None
-        self._tap_drop_threshold: float = 0.85  # if tap_q fill ratio >= this, skip packet build/copies
-
-        # autosync (not implemented here, just state)
-        self._autosync_enabled: bool = False
-        self._autosync_ref: Optional[str] = None
-        self._autosync_target: Optional[str] = None
-        self._autosync_last_offset_ms: float = 0.0
-
-        # mix normalization behavior
+        self._runtime = EngineRuntimeState(
+            tap_q=tap_queue,
+            tap_queue_max=int(tap_queue_max),
+        )
         self._mix_active_rms_eps: float = 1e-4
+        self._mix_worker = AudioMixWorker(
+            format=self._fmt,
+            output_queue=self._out_q,
+            stop_event=self._stop_evt,
+            tap_queue_max=self._runtime.tap_queue_max,
+            active_rms_eps=self._mix_active_rms_eps,
+            snapshot_provider=self._build_mix_snapshot,
+            record_master_metrics=self._record_master_metrics,
+            record_output_drop=self._record_output_drop,
+            record_tap_drop=self._record_tap_drop,
+        )
 
     @property
     def format(self) -> AudioFormat:
@@ -94,8 +82,7 @@ class AudioEngine:
 
     def set_tap_queue(self, tap_queue: Optional["queue.Queue[dict]"]) -> None:
         with self._lock:
-            self._tap_q = tap_queue
-            self._dropped_tap_blocks = 0
+            self._runtime.set_tap_queue(tap_queue)
 
     def set_tap_config(
         self,
@@ -117,120 +104,71 @@ class AudioEngine:
         drop_threshold:
           - if tap queue fill ratio >= threshold, we skip building/copying tap packets
         """
-        m = str(mode).strip().lower()
-        if m not in ("mix", "sources", "both"):
-            m = "both"
-
-        thr = float(drop_threshold)
-        if thr < 0.1:
-            thr = 0.1
-        if thr > 0.99:
-            thr = 0.99
-
+        config = normalize_tap_config(
+            mode=mode,
+            sources=sources,
+            drop_threshold=drop_threshold,
+        )
         with self._lock:
-            self._tap_mode = m  # type: ignore[assignment]
-            self._tap_sources_filter = set(sources) if sources else None
-            self._tap_drop_threshold = thr
+            self._runtime.apply_tap_config(config)
 
     def add_source(self, src: AudioSource) -> None:
         with self._lock:
-            if self._running:
-                raise RuntimeError("Cannot add sources while engine is running (MVP).")
-            if src.name in self._state:
-                raise ValueError(f"Source '{src.name}' already exists")
-            self._sources.append(src)
-            st = _SourceState(src=src)
-            st.src_rate = int(src.get_format().sample_rate)
-            self._state[src.name] = st
+            self._registry.add_source(src, running=self._running)
 
     def add_master_filter(self, flt: AudioFilter) -> None:
         with self._lock:
-            self._master_filters.append(flt)
+            self._registry.add_master_filter(flt)
 
     def set_source_enabled(self, name: str, enabled: bool) -> None:
         with self._lock:
-            st = self._state.get(name)
-            if st is None:
-                return
-            new_val = bool(enabled)
-            if st.enabled == new_val:
-                return
-
-            st.enabled = new_val
-
-            # Сбрасываем буферы при любом переключении, чтобы не тащить старое аудио
-            with st.buf_lock:
-                st.buf.clear()
-                st.delay_buf.clear()
-                st.buffer_frames = 0
-
-            if not new_val:
-                # Мгновенно обнуляем метры, чтобы UI не показывал старое
-                st.rms = 0.0
-                st.last_ts = time.monotonic()
+            self._registry.set_source_enabled(name, enabled)
 
     def set_source_delay_ms(self, name: str, delay_ms: float) -> None:
-        if delay_ms < 0:
-            delay_ms = 0.0
-        frames = int(round((delay_ms / 1000.0) * self._fmt.sample_rate))
         with self._lock:
-            st = self._state.get(name)
-            if st is None:
-                return
-            st.delay_frames = frames
-            with st.buf_lock:
-                st.delay_buf.clear()
+            self._registry.set_source_delay_ms(name, delay_ms)
 
     def enable_auto_sync(self, reference_source: str, target_source: str) -> None:
         with self._lock:
-            self._autosync_enabled = True
-            self._autosync_ref = reference_source
-            self._autosync_target = target_source
-            self._autosync_last_offset_ms = 0.0
+            self._runtime.enable_auto_sync(reference_source, target_source)
 
     def disable_auto_sync(self) -> None:
         with self._lock:
-            self._autosync_enabled = False
-            self._autosync_ref = None
-            self._autosync_target = None
-            self._autosync_last_offset_ms = 0.0
+            self._runtime.disable_auto_sync()
 
     def get_meters(self) -> dict:
         with self._lock:
             return build_meter_snapshot(
                 fmt=self._fmt,
-                state=self._state,
-                master_rms=self._master_rms,
-                master_last_ts=self._master_last_ts,
-                dropped_out_blocks=self._dropped_out_blocks,
-                dropped_tap_blocks=self._dropped_tap_blocks,
-                tap_q=self._tap_q,
-                tap_mode=self._tap_mode,
-                tap_sources_filter=self._tap_sources_filter,
-                tap_drop_threshold=self._tap_drop_threshold,
-                tap_queue_max=self._tap_q_max,
-                autosync_enabled=self._autosync_enabled,
-                autosync_ref=self._autosync_ref,
-                autosync_target=self._autosync_target,
-                autosync_last_offset_ms=self._autosync_last_offset_ms,
+                state=self._registry.state,
+                master_rms=self._runtime.master_rms,
+                master_last_ts=self._runtime.master_last_ts,
+                dropped_out_blocks=self._runtime.dropped_out_blocks,
+                dropped_tap_blocks=self._runtime.dropped_tap_blocks,
+                tap_q=self._runtime.tap_q,
+                tap_mode=self._runtime.tap_mode,
+                tap_sources_filter=self._runtime.tap_sources_filter,
+                tap_drop_threshold=self._runtime.tap_drop_threshold,
+                tap_queue_max=self._runtime.tap_queue_max,
+                autosync_enabled=self._runtime.autosync_enabled,
+                autosync_ref=self._runtime.autosync_ref,
+                autosync_target=self._runtime.autosync_target,
+                autosync_last_offset_ms=self._runtime.autosync_last_offset_ms,
             )
 
     def start(self) -> None:
         with self._lock:
             if self._running:
                 return
-            if not self._sources:
+            if not self._registry.has_sources():
                 raise RuntimeError("No sources added")
             self._running = True
             self._stop_evt.clear()
-            self._t0_mono = time.monotonic()
-            self._tick_index = 0
-            self._dropped_out_blocks = 0
-            self._dropped_tap_blocks = 0
+            self._runtime.reset_for_start()
 
         started_sources: List[AudioSource] = []
         try:
-            for src in self._sources:
+            for src in self._registry.sources:
                 try:
                     src.start(self._on_audio_from_source)
                 except Exception:
@@ -239,7 +177,7 @@ class AudioEngine:
                 started_sources.append(src)
 
             self._mix_thread = threading.Thread(
-                target=self._mix_loop,
+                target=self._mix_worker.run,
                 name="audio-mixer",
                 daemon=True,
             )
@@ -267,7 +205,7 @@ class AudioEngine:
             self._running = False
             self._stop_evt.set()
 
-        for src in self._sources:
+        for src in self._registry.sources:
             try:
                 src.stop()
             except Exception:
@@ -283,29 +221,16 @@ class AudioEngine:
     # ---------------- internals ----------------
 
     def _reset_runtime_state_locked(self) -> None:
-        for st in self._state.values():
-            with st.buf_lock:
-                st.buf.clear()
-                st.delay_buf.clear()
-            st.rms = 0.0
-            st.last_ts = 0.0
-            st.dropped_in_frames = 0
-            st.missing_out_frames = 0
-            st.buffer_frames = 0
-        self._master_rms = 0.0
-        self._master_last_ts = 0.0
-        self._dropped_out_blocks = 0
-        self._dropped_tap_blocks = 0
-        self._autosync_last_offset_ms = 0.0
+        self._registry.reset_runtime_state()
+        self._runtime.reset_after_stop()
 
     def _on_audio_from_source(self, source_name: str, frame: np.ndarray) -> None:
         with self._lock:
             if not self._running:
                 return
-            st = self._state.get(source_name)
+            st = self._registry.get_state(source_name)
             if st is None:
                 return
-            # ВАЖНО: если источник muted, не копим аудио в буфере (иначе после unmute будет огромный лаг)
             if not st.enabled:
                 return
 
@@ -315,90 +240,36 @@ class AudioEngine:
             max_buffer_blocks=self._max_buf_blocks,
         )
 
-    def _mix_loop(self) -> None:
-        fmt = self._fmt
-        period_s = fmt.blocksize / float(fmt.sample_rate)
-        next_t = time.monotonic()
+    def _build_mix_snapshot(self, period_s: float) -> MixLoopSnapshot:
+        with self._lock:
+            if not self._running:
+                return MixLoopSnapshot(running=False)
 
-        while not self._stop_evt.is_set():
-            now = time.monotonic()
-            if now < next_t:
-                time.sleep(min(0.002, next_t - now))
-                continue
-            next_t += period_s
+            t_start, t_end = self._runtime.next_mix_window(period_s)
+            return MixLoopSnapshot(
+                running=True,
+                t_start=t_start,
+                t_end=t_end,
+                items=self._registry.source_items(),
+                master_filters=self._registry.master_filters(),
+                tap_q=self._runtime.tap_q,
+                tap_mode=self._runtime.tap_mode,
+                tap_sources_filter=(
+                    set(self._runtime.tap_sources_filter)
+                    if self._runtime.tap_sources_filter
+                    else None
+                ),
+                tap_drop_threshold=self._runtime.tap_drop_threshold,
+            )
 
-            with self._lock:
-                if not self._running:
-                    break
-                items: List[Tuple[str, _SourceState]] = list(self._state.items())
-                master_filters = list(self._master_filters)
-                tap_q = self._tap_q
-                tap_mode = self._tap_mode
-                tap_filter = set(self._tap_sources_filter) if self._tap_sources_filter else None
+    def _record_master_metrics(self, master_rms: float, ts_mono: float) -> None:
+        with self._lock:
+            self._runtime.record_master_metrics(master_rms, ts_mono)
 
-            t_start = float(self._tick_index) * period_s
-            t_end = t_start + period_s
-            self._tick_index += 1
+    def _record_output_drop(self) -> None:
+        with self._lock:
+            self._runtime.record_output_drop()
 
-            mix = np.zeros((fmt.blocksize, fmt.channels), dtype=np.float32)
-
-            want_sources = (tap_q is not None) and (tap_mode in ("sources", "both"))
-            sources_out: Optional[Dict[str, np.ndarray]] = {} if want_sources else None
-
-            active_sources = 0
-            ts_mono = time.monotonic()
-
-            for name, st in items:
-                rendered = render_source_block(
-                    state=st,
-                    engine_format=fmt,
-                    ts_mono=ts_mono,
-                    active_rms_eps=self._mix_active_rms_eps,
-                )
-                block_eng = rendered.block
-
-                if rendered.active:
-                    active_sources += 1
-
-                if sources_out is not None:
-                    if tap_filter is None or name in tap_filter:
-                        sources_out[name] = block_eng
-
-                mix += block_eng
-
-            # Normalize only by actually "active" sources
-            if active_sources > 1:
-                mix *= 1.0 / float(active_sources)
-
-            try:
-                mixed = apply_filters(mix, fmt, master_filters)
-            except Exception:
-                mixed = mix
-
-            mixed = np.clip(mixed, -1.0, 1.0)
-
-            with self._lock:
-                self._master_rms = rms(mixed)
-                self._master_last_ts = ts_mono
-
-            try:
-                self._out_q.put_nowait(mixed)
-            except queue.Full:
-                with self._lock:
-                    self._dropped_out_blocks += 1
-
-            # Tap packet: early drop + minimal copies
-            if tap_q is not None:
-                sent = try_emit_tap_packet(
-                    tap_q=tap_q,
-                    tap_queue_max=self._tap_q_max,
-                    drop_threshold=self._tap_drop_threshold,
-                    t_start=t_start,
-                    t_end=t_end,
-                    mixed=mixed,
-                    sources_out=sources_out,
-                    mode=tap_mode,
-                )
-                if not sent:
-                    with self._lock:
-                        self._dropped_tap_blocks += 1
+    def _record_tap_drop(self) -> None:
+        with self._lock:
+            self._runtime.record_tap_drop()
