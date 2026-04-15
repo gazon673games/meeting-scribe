@@ -6,6 +6,8 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from asr.application.ports import OnlineDiarizerPort
+
 
 @dataclass
 class _Cluster:
@@ -68,7 +70,7 @@ class _NeMoBackend:
 
 
 @dataclass
-class OnlineDiarizer:
+class OnlineDiarizer(OnlineDiarizerPort):
     """
     Online speaker clustering (MVP):
       - each segment -> embedding
@@ -128,59 +130,9 @@ class OnlineDiarizer:
             self._events = [(t, l) for (t, l) in self._events if t >= cutoff]
 
     def assign(self, audio_16k: np.ndarray, ts: Optional[float] = None) -> Tuple[str, Optional[int]]:
-        """
-        Returns:
-          (speaker_label, n_speakers_estimate_or_None)
-        """
-        now = float(ts if ts is not None else time.time())
-
-        dur_s = float(np.asarray(audio_16k).shape[0]) / 16000.0
-        if dur_s < float(self.min_segment_s):
-            self._prune(now)
-            return ("S?", self.estimate_n_speakers(now))
-
-        try:
-            emb = self._lazy_backend().embed(audio_16k)
-            self._last_error = None
-        except Exception as e:
-            self._last_error = f"{type(e).__name__}: {e}"
-            self._prune(now)
-            return (f"S_ERR:{type(e).__name__}", self.estimate_n_speakers(now))
-
-        emb = _l2norm(np.asarray(emb, dtype=np.float32))
-
-        self._prune(now)
-
-        if not self._clusters:
-            label = self._next_label()
-            self._clusters.append(_Cluster(label=label, centroid=emb, n=1, last_ts=now))
-            self._events.append((now, label))
-            return (label, self.estimate_n_speakers(now))
-
-        best_i = -1
-        best_sim = -1.0
-        for i, c in enumerate(self._clusters):
-            sim = _cos_sim(emb, c.centroid)
-            if sim > best_sim:
-                best_sim = sim
-                best_i = i
-
-        if best_i >= 0 and best_sim >= float(self.similarity_threshold):
-            c = self._clusters[best_i]
-            new_centroid = _l2norm((c.centroid * float(c.n) + emb) / float(c.n + 1))
-            c.centroid = new_centroid
-            c.n += 1
-            c.last_ts = now
-            label = c.label
-        else:
-            if len(self._clusters) < int(self.max_speakers):
-                label = self._next_label()
-                self._clusters.append(_Cluster(label=label, centroid=emb, n=1, last_ts=now))
-            else:
-                label = self._clusters[best_i].label if best_i >= 0 else "S?"
-
-        self._events.append((now, label))
-        return (label, self.estimate_n_speakers(now))
+        """Returns: (speaker_label, n_speakers_estimate_or_None)"""
+        label, n_speakers, _, _ = self.assign_with_debug(audio_16k, ts)
+        return (label, n_speakers)
 
     def estimate_n_speakers(self, now: Optional[float] = None) -> Optional[int]:
         if self.window_s <= 0:

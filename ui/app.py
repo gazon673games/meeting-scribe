@@ -35,13 +35,6 @@ from ui.telemetry_mixin import TelemetryMixin
 from ui.transcript_mixin import TranscriptMixin
 from ui.window_helpers_mixin import WindowHelpersMixin
 
-# Optional resource telemetry
-try:
-    import psutil  # type: ignore
-except Exception:
-    psutil = None
-
-
 def ensure_runtime_config(project_root: Path, config_path: Path) -> None:
     if not getattr(sys, "frozen", False):
         return
@@ -149,53 +142,12 @@ class MainWindow(
         self.writer = self.wav_recorder_factory.create(self.out_q)
         self.writer.start()
 
-        self.asr: Any = None
-        self.asr_running: bool = False
-
         self.output_name = "capture_mix.wav"
 
-        self._asr_overload_active: bool = False
-        self._last_warn_ts: float = 0.0
-
-        # session metrics mirror (UI side)
-        self._tap_dropped_total: int = 0
-        self._seg_dropped_total: int = 0
-        self._seg_skipped_total: int = 0
-        self._avg_latency_s: float = 0.0
-        self._p95_latency_s: float = 0.0
-        self._lag_s: float = 0.0
-
-        # silence alert tracking
-        self._silence_eps = 1e-4
-        self._silence_alert_s = 15.0
-        self._desktop_silence_since_mono: float | None = None
-
-        # UI modes
-        self._long_run_mode: bool = False
-        self._ui_interval_normal_ms: int = 120
-        self._ui_interval_long_ms: int = 260
-
-        # transcript file logging (optional)
-        self._rt_tr_to_file: bool = False
-        self._rt_tr_path: Path | None = None
-        self._rt_tr_fh = None
-
-        # human-readable transcript logging (always on during ASR session)
-        self._human_log_path: Path | None = None
-        self._human_log_fh = None
-
+        self._init_session_state()
+        self._init_transcript_state()
         self._init_codex_state()
-        self._closing: bool = False
-        self._offline_pass_active: bool = False
-        self._offline_thread: Any = None
-        self._asr_stop_active: bool = False
-        self._asr_stop_thread: Any = None
+        self._init_telemetry_state()
         self.background_event.connect(self._handle_background_event)
-
-        # resource telemetry (optional)
-        self._proc = psutil.Process() if psutil is not None else None
-        self._last_cpu_poll_mono: float = 0.0
-        self._cpu_pct: float = 0.0
-        self._rss_mb: float = 0.0
 
         self._build_main_layout()

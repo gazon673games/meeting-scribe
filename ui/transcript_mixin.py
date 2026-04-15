@@ -8,6 +8,16 @@ from PySide6.QtGui import QTextCursor
 
 
 class TranscriptMixin:
+    def _init_transcript_state(self) -> None:
+        # realtime transcript file (optional)
+        self._rt_tr_to_file: bool = False
+        self._rt_tr_path: Optional[Path] = None
+        self._rt_tr_fh = None
+
+        # human-readable session log (always on during ASR)
+        self._human_log_path: Optional[Path] = None
+        self._human_log_fh = None
+
     def _clear_transcript(self) -> None:
         self.txt_tr.clear()
 
