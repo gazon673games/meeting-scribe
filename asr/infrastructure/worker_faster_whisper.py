@@ -5,9 +5,11 @@ from typing import Dict, Any, Optional
 
 import numpy as np
 
+from asr.application.ports import AsrBackendPort
+
 
 @dataclass
-class FasterWhisperASR:
+class FasterWhisperASR(AsrBackendPort):
     """
     Wrapper around faster-whisper.
 

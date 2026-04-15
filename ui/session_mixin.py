@@ -13,6 +13,37 @@ from application.session_tasks import OfflinePassRequest, StopAsrRequest
 
 
 class SessionMixin:
+    def _init_session_state(self) -> None:
+        self.asr: Any = None
+        self.asr_running: bool = False
+        self._asr_overload_active: bool = False
+        self._last_warn_ts: float = 0.0
+
+        # session metrics mirror (UI side)
+        self._tap_dropped_total: int = 0
+        self._seg_dropped_total: int = 0
+        self._seg_skipped_total: int = 0
+        self._avg_latency_s: float = 0.0
+        self._p95_latency_s: float = 0.0
+        self._lag_s: float = 0.0
+
+        # silence alert tracking
+        self._silence_eps: float = 1e-4
+        self._silence_alert_s: float = 15.0
+        self._desktop_silence_since_mono: Optional[float] = None
+
+        # UI timing modes
+        self._long_run_mode: bool = False
+        self._ui_interval_normal_ms: int = 120
+        self._ui_interval_long_ms: int = 260
+
+        # lifecycle flags
+        self._closing: bool = False
+        self._offline_pass_active: bool = False
+        self._offline_thread: Any = None
+        self._asr_stop_active: bool = False
+        self._asr_stop_thread: Any = None
+
     def _start_all(self) -> None:
         if self._is_running():
             return

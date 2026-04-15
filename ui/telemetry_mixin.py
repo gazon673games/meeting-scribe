@@ -4,6 +4,16 @@ import time
 
 
 class TelemetryMixin:
+    def _init_telemetry_state(self) -> None:
+        try:
+            import psutil  # type: ignore
+            self._proc = psutil.Process()
+        except Exception:
+            self._proc = None
+        self._last_cpu_poll_mono: float = 0.0
+        self._cpu_pct: float = 0.0
+        self._rss_mb: float = 0.0
+
     def _poll_resources(self) -> None:
         if self._proc is None:
             self._set_label_text_if_changed(self.lbl_resources, "resources: n/a")

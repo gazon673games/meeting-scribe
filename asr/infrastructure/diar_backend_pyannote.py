@@ -4,10 +4,11 @@ from typing import List
 
 import numpy as np
 
+from asr.application.ports import PyannoteDiarizerPort
 from asr.domain.segments import DiarSegment
 
 
-class PyannoteDiarizer:
+class PyannoteDiarizer(PyannoteDiarizerPort):
     def __init__(self, device: str = "cuda") -> None:
         try:
             from pyannote.audio import Pipeline  # type: ignore

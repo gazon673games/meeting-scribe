@@ -6,9 +6,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from asr.application.ports import AsrLoggerPort
+
 
 @dataclass
-class ASRLogger:
+class ASRLogger(AsrLoggerPort):
     root: Path
     session_id: str
     language: str = "ru"

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import queue
 import time
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Tuple
 
 from asr.application.metrics import ASRMetrics
 from asr.application.ports import AsrBackendFactoryPort, AsrBackendPort
@@ -170,13 +170,25 @@ class TranscriptionWorkerRuntime:
     def _transcribe_segment(self, seg: Segment) -> None:
         speaker = self._diar.speaker_for_segment(seg, self._log_event)
         seg_dur_s = max(1e-6, float(seg.duration_s))
+        beam_to_use = self._over.limit_beam(int(self._beam_ctl.cur_beam))
+        queue_wait_s = seg.queue_wait_s(time.time())
 
-        now0 = time.time()
-        queue_wait_s = seg.queue_wait_s(now0)
+        asr_result = self._run_asr(seg, speaker, beam_to_use)
+        if asr_result is None:
+            return
+        text, asr_latency_s = asr_result
 
-        beam_to_use = int(self._beam_ctl.cur_beam)
-        beam_to_use = self._over.limit_beam(beam_to_use)
+        text, removed = self._deduplicate_text(seg, text)
+        total_lag_s = queue_wait_s + asr_latency_s
+        self._metrics.record_latency(asr_latency_s=asr_latency_s, total_lag_s=total_lag_s)
+        self._maybe_update_beam(seg_dur_s, asr_latency_s)
+        self._log_segment_event(seg, speaker, text, asr_latency_s, seg_dur_s, beam_to_use, removed)
+        if self._utt.enabled and text.strip():
+            self._update_utterances(seg, speaker, text)
 
+    def _run_asr(
+        self, seg: Segment, speaker: str, beam_to_use: int
+    ) -> Optional[Tuple[str, float]]:
         t0 = time.time()
         try:
             res = self._asr.transcribe(seg.audio.samples, beam_size=beam_to_use)
@@ -195,12 +207,10 @@ class TranscriptionWorkerRuntime:
                     "ts": time.time(),
                 }
             )
-            return
+            return None
+        return text, time.time() - t0
 
-        asr_latency_s = time.time() - t0
-        total_lag_s = float(queue_wait_s) + float(asr_latency_s)
-
-        removed = 0
+    def _deduplicate_text(self, seg: Segment, text: str) -> Tuple[str, int]:
         if self._text_dedup_enabled:
             prev = self._last_text.get(seg.stream, "")
             trimmed, removed = trim_overlap(prev, text, max_window=self._text_dedup_window, min_match=8)
@@ -208,23 +218,34 @@ class TranscriptionWorkerRuntime:
             if text:
                 self._last_text[seg.stream] = normalize_text(prev + " " + text).strip()
         else:
+            removed = 0
             if text:
                 self._last_text[seg.stream] = normalize_text(text)
+        return text, removed
 
-        self._metrics.record_latency(asr_latency_s=asr_latency_s, total_lag_s=total_lag_s)
+    def _maybe_update_beam(self, seg_dur_s: float, asr_latency_s: float) -> None:
+        if not self._adaptive_beam_enabled:
+            return
+        now = time.time()
+        new_beam, reason = self._beam_ctl.maybe_update(
+            seg_qsize=int(self._seg_q.qsize()),
+            last_latency_s=float(asr_latency_s),
+            last_dur_s=float(seg_dur_s),
+            now=now,
+        )
+        if reason:
+            self._log_event({"type": "asr_beam_update", "beam": int(new_beam), "reason": reason, "ts": now})
 
-        if self._adaptive_beam_enabled:
-            now = time.time()
-            qsz = int(self._seg_q.qsize())
-            new_beam, reason = self._beam_ctl.maybe_update(
-                seg_qsize=qsz,
-                last_latency_s=float(asr_latency_s),
-                last_dur_s=float(seg_dur_s),
-                now=now,
-            )
-            if reason:
-                self._log_event({"type": "asr_beam_update", "beam": int(new_beam), "reason": reason, "ts": now})
-
+    def _log_segment_event(
+        self,
+        seg: Segment,
+        speaker: str,
+        text: str,
+        asr_latency_s: float,
+        seg_dur_s: float,
+        beam_to_use: int,
+        removed: int,
+    ) -> None:
         self._log_event(
             {
                 "type": "segment",
@@ -246,14 +267,14 @@ class TranscriptionWorkerRuntime:
             }
         )
 
-        if self._utt.enabled and text.strip():
-            for event in self._utt.update(
-                stream=str(seg.stream),
-                speaker=str(speaker),
-                t_start=float(seg.t_start),
-                t_end=float(seg.t_end),
-                text=str(text),
-                now=time.time(),
-                overload=bool(self._over.active),
-            ):
-                self._log_event(event)
+    def _update_utterances(self, seg: Segment, speaker: str, text: str) -> None:
+        for event in self._utt.update(
+            stream=str(seg.stream),
+            speaker=str(speaker),
+            t_start=float(seg.t_start),
+            t_end=float(seg.t_end),
+            text=str(text),
+            now=time.time(),
+            overload=bool(self._over.active),
+        ):
+            self._log_event(event)
