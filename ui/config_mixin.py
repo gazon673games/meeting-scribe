@@ -211,7 +211,16 @@ class MainWindowConfigMixin:
                 pass
 
     def _on_profile_changed(self) -> None:
-        self._handle_switch_profile_command(SwitchProfileCommand(profile=self.cmb_profile.currentText()))
+        command = SwitchProfileCommand(profile=self.cmb_profile.currentText())
+        dispatcher = getattr(self, "_command_dispatcher", None)
+        if dispatcher is None:
+            self._handle_switch_profile_command(command)
+            return
+        try:
+            dispatcher.dispatch(command)
+        except KeyError:
+            dispatcher.register(SwitchProfileCommand, self._handle_switch_profile_command)
+            dispatcher.dispatch(command)
 
     def _handle_switch_profile_command(self, command: SwitchProfileCommand) -> None:
         self._apply_profile_to_fields(command.profile, force=True)

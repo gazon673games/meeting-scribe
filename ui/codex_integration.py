@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import queue
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -31,7 +30,8 @@ from application.codex_config import (
 )
 from application.codex_use_case import CodexRequestInput
 from application.commands import InvokeAssistantCommand
-from application.event_types import CodexFallbackStartedEvent, CodexResultEvent, event_from_record
+from application.event_bus import QueuedEventBus
+from application.event_types import CodexFallbackStartedEvent, CodexResultEvent
 from application.job_state import AssistantJobStateMachine
 from application.model_policy import ModelOrchestrator
 
@@ -65,8 +65,14 @@ class CodexIntegrationMixin:
         self._codex_selected_profile_id: str = ""
         self._codex_profile_buttons: Dict[str, QPushButton] = {}
         self._assistant_job_state = AssistantJobStateMachine()
+        self._assistant_supervision_report = None
         self._codex_busy: bool = False
-        self._codex_ui_q: "queue.Queue[object]" = queue.Queue(maxsize=120)
+        self._codex_event_bus = QueuedEventBus(maxsize=120)
+        self._codex_event_bus.subscribe(CodexFallbackStartedEvent, self._handle_codex_fallback_event)
+        self._codex_event_bus.subscribe(CodexResultEvent, self._handle_codex_result_event)
+        dispatcher = getattr(self, "_command_dispatcher", None)
+        if dispatcher is not None:
+            dispatcher.register(InvokeAssistantCommand, self._handle_invoke_assistant_command)
         self.codex_timer: Optional[QTimer] = None
 
     def _build_codex_header(self, root: QVBoxLayout) -> None:
@@ -434,8 +440,16 @@ class CodexIntegrationMixin:
             fallback_timeout_s=fallback_timeout_s,
         )
 
+        dispatcher = getattr(self, "_command_dispatcher", None)
+        if dispatcher is None:
+            self._handle_invoke_assistant_command(command)
+            return
+        dispatcher.dispatch(command)
+
+    def _handle_invoke_assistant_command(self, command: InvokeAssistantCommand) -> None:
         self._append_codex_line(
-            f"[{self._fmt_ts(time.time())}] {source_label} ({profile.label}, {command.context_label}): {req}"
+            f"[{self._fmt_ts(time.time())}] {command.source_label} "
+            f"({command.profile.label}, {command.context_label}): {command.request_text}"
         )
         self._set_codex_busy(True)
 
@@ -472,17 +486,7 @@ class CodexIntegrationMixin:
         return None, None, None, "latest human log"
 
     def _codex_push_event(self, ev: object) -> None:
-        try:
-            self._codex_ui_q.put_nowait(ev)
-        except queue.Full:
-            try:
-                _ = self._codex_ui_q.get_nowait()
-            except Exception:
-                pass
-            try:
-                self._codex_ui_q.put_nowait(ev)
-            except Exception:
-                pass
+        self._codex_event_bus.publish(ev)
 
     def _run_codex_exec_worker(self, command: InvokeAssistantCommand) -> None:
         use_case = getattr(self, "codex_request_use_case", None)
@@ -498,7 +502,8 @@ class CodexIntegrationMixin:
             )
             return
 
-        attempts = AssistantFallbackSupervisor().build_attempts(
+        supervisor = AssistantFallbackSupervisor()
+        attempts = supervisor.build_attempts(
             max_log_chars=command.max_log_chars,
             timeout_s=command.timeout_s,
             fallback_max_log_chars=command.fallback_max_log_chars,
@@ -506,6 +511,7 @@ class CodexIntegrationMixin:
         )
         result = None
         first_error = ""
+        errors: List[str] = []
         for attempt in attempts:
             if attempt.fallback:
                 self._codex_push_event(
@@ -536,13 +542,16 @@ class CodexIntegrationMixin:
                     ),
                 )
             )
-            if result.ok or not attempt.fallback:
-                first_error = result.text
             if result.ok:
+                self._assistant_supervision_report = supervisor.success_report(attempt, errors)
                 break
+            first_error = result.text
+            errors.append(f"{attempt.label}: {result.text}")
 
         if result is None:
             return
+        if not result.ok:
+            self._assistant_supervision_report = supervisor.failure_report(errors)
         self._codex_push_event(
             CodexResultEvent(
                 ok=bool(result.ok),
@@ -554,34 +563,24 @@ class CodexIntegrationMixin:
         )
 
     def _drain_codex_ui_events(self, limit: int = 8) -> None:
-        n = 0
-        while n < limit:
-            try:
-                raw = self._codex_ui_q.get_nowait()
-            except queue.Empty:
-                break
-            n += 1
+        self._codex_event_bus.drain(limit=int(limit))
 
-            ev = event_from_record(raw)
-            if isinstance(ev, CodexFallbackStartedEvent):
-                reason = str(ev.reason).strip()
-                self._append_codex_line(f"[{self._fmt_ts(time.time())}] codex fallback: {reason}")
-                self._set_codex_fallback_active()
-                continue
+    def _handle_codex_fallback_event(self, ev: CodexFallbackStartedEvent) -> None:
+        reason = str(ev.reason).strip()
+        self._append_codex_line(f"[{self._fmt_ts(time.time())}] codex fallback: {reason}")
+        self._set_codex_fallback_active()
 
-            if not isinstance(ev, CodexResultEvent):
-                continue
+    def _handle_codex_result_event(self, ev: CodexResultEvent) -> None:
+        ok = bool(ev.ok)
+        profile = str(ev.profile)
+        dt_s = float(ev.dt_s)
+        text = str(ev.text).strip()
+        tss = self._fmt_ts(time.time())
 
-            ok = bool(ev.ok)
-            profile = str(ev.profile)
-            dt_s = float(ev.dt_s)
-            text = str(ev.text).strip()
-            tss = self._fmt_ts(time.time())
+        if ok:
+            self._append_codex_line(f"[{tss}] codex ({profile}, {dt_s:.1f}s):")
+            self._append_codex_line(text)
+        else:
+            self._append_codex_line(f"[{tss}] codex error ({profile}, {dt_s:.1f}s): {text}")
 
-            if ok:
-                self._append_codex_line(f"[{tss}] codex ({profile}, {dt_s:.1f}s):")
-                self._append_codex_line(text)
-            else:
-                self._append_codex_line(f"[{tss}] codex error ({profile}, {dt_s:.1f}s): {text}")
-
-            self._set_codex_busy(False)
+        self._set_codex_busy(False)

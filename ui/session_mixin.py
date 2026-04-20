@@ -10,7 +10,8 @@ from PySide6.QtCore import QTimer
 from application.asr_language import initial_prompt_for_language, normalize_asr_language, runtime_asr_language
 from application.asr_session import ASRSessionSettings
 from application.asr_supervisor import ASRStartupSupervisor
-from application.commands import StartSessionCommand, StopSessionCommand
+from application.command_bus import CommandDispatcher
+from application.commands import StartSessionCommand, StopSessionCommand, SwitchProfileCommand
 from application.event_types import (
     AsrStopDoneEvent,
     OfflinePassDoneEvent,
@@ -52,9 +53,14 @@ class SessionMixin:
         # lifecycle state
         self._session_state = SessionStateMachine()
         self._transcription_state = TranscriptionJobStateMachine()
+        self._asr_supervision_report = None
         self._closing: bool = False
         self._offline_thread: Any = None
         self._asr_stop_thread: Any = None
+        self._command_dispatcher = CommandDispatcher()
+        self._command_dispatcher.register(StartSessionCommand, self._handle_start_session_command)
+        self._command_dispatcher.register(StopSessionCommand, self._handle_stop_session_command)
+        self._command_dispatcher.register(SwitchProfileCommand, self._handle_switch_profile_command)
 
     def _start_all(self) -> None:
         command = StartSessionCommand(
@@ -64,6 +70,9 @@ class SessionMixin:
             profile=str(self.cmb_profile.currentText()),
             language=normalize_asr_language(self.cmb_lang.currentText()),
         )
+        self._command_dispatcher.dispatch(command)
+
+    def _handle_start_session_command(self, command: StartSessionCommand) -> None:
         if self._is_running():
             return
         if not self._session_state.can_start:
@@ -108,7 +117,7 @@ class SessionMixin:
         if not self._rt_tr_to_file:
             self._rt_close()
 
-        if self.chk_asr.isChecked():
+        if command.asr_enabled:
             self.engine.set_tap_queue(self.tap_q)
 
             mode = "split" if self.cmb_asr_mode.currentIndex() == 1 else "mix"
@@ -172,7 +181,8 @@ class SessionMixin:
             return
 
         settings = self._read_asr_session_settings()
-        attempts = ASRStartupSupervisor().build_attempts(settings)
+        supervisor = ASRStartupSupervisor()
+        attempts = supervisor.build_attempts(settings)
         errors: List[str] = []
         self._transcription_state.begin_start()
 
@@ -194,6 +204,7 @@ class SessionMixin:
                 self.asr.start()
                 self.asr_running = True
                 self._transcription_state.finish_start(degraded=attempt.degraded)
+                self._asr_supervision_report = supervisor.success_report(attempt, errors)
 
                 human_log_path = self._human_log_open_session()
                 if human_log_path is not None:
@@ -214,6 +225,7 @@ class SessionMixin:
                 self.asr_running = False
 
         self._transcription_state.fail_start()
+        self._asr_supervision_report = supervisor.failure_report(errors)
         for msg in errors:
             self._append_transcript_line(f"[{self._fmt_ts(time.time())}] ASR start failed: {msg}")
         self._set_status("ASR start failed after fallback attempts. Audio session continues without ASR.")
@@ -468,6 +480,9 @@ class SessionMixin:
 
     def _stop_all(self, *, run_offline_pass: bool = True, wait: bool = False) -> None:
         command = StopSessionCommand(run_offline_pass=bool(run_offline_pass), wait=bool(wait))
+        self._command_dispatcher.dispatch(command)
+
+    def _handle_stop_session_command(self, command: StopSessionCommand) -> None:
         if self._session_state.is_stopping:
             if command.wait and self._asr_stop_thread is not None:
                 self._asr_stop_thread.join()

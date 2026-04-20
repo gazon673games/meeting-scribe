@@ -6,6 +6,7 @@ from application.asr_session import ASRSessionSettings
 from application.asr_supervisor import ASRStartupSupervisor
 from application.assistant_supervisor import AssistantFallbackSupervisor
 from application.model_policy import ASR_MODEL_RU_PODLODKA_TURBO, ASR_MODEL_SMALL
+from application.supervision import SupervisionStatus
 
 
 def _settings(**overrides) -> ASRSessionSettings:
@@ -64,6 +65,31 @@ class SupervisorTests(unittest.TestCase):
         self.assertTrue(attempts[1].fallback)
         self.assertEqual(attempts[1].max_log_chars, 2000)
         self.assertEqual(attempts[1].timeout_s, 20)
+
+    def test_supervisors_report_degraded_and_failed_status(self) -> None:
+        asr_supervisor = ASRStartupSupervisor()
+        asr_attempts = asr_supervisor.build_attempts(_settings())
+
+        degraded = asr_supervisor.success_report(asr_attempts[1], ["primary failed"])
+        failed = asr_supervisor.failure_report(["primary failed", "fallback failed"])
+
+        self.assertEqual(degraded.status, SupervisionStatus.DEGRADED)
+        self.assertTrue(degraded.degraded)
+        self.assertEqual(degraded.active_attempt, "fast-fallback")
+        self.assertEqual(failed.status, SupervisionStatus.FAILED)
+        self.assertTrue(failed.failed)
+
+        assistant_supervisor = AssistantFallbackSupervisor()
+        assistant_attempts = assistant_supervisor.build_attempts(
+            max_log_chars=4000,
+            timeout_s=35,
+            fallback_max_log_chars=2000,
+            fallback_timeout_s=20,
+        )
+        assistant_report = assistant_supervisor.success_report(assistant_attempts[1], ["timeout"])
+
+        self.assertEqual(assistant_report.status, SupervisionStatus.DEGRADED)
+        self.assertEqual(assistant_report.component, "assistant")
 
 
 if __name__ == "__main__":
