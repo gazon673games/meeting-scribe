@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+from pathlib import Path
+from typing import Any, List, Optional
 
 from asr.application.diarization import DiarizationConfig, DiarizationRuntimeFactoryPort
 from asr.application.ports import (
@@ -106,7 +107,10 @@ def build_segmenter_config(settings: ASRPipelineSettings) -> SegmenterConfig:
     )
 
 
-def build_diarization_config(settings: ASRPipelineSettings) -> DiarizationConfig:
+def build_diarization_config(settings: ASRPipelineSettings, *, project_root: Optional[Any] = None) -> DiarizationConfig:
+    temp_dir = None
+    if project_root is not None:
+        temp_dir = Path(project_root) / "tmp" / "nemo"
     return DiarizationConfig(
         enabled=bool(settings.diarization_enabled),
         backend=settings.diar_backend,
@@ -116,4 +120,5 @@ def build_diarization_config(settings: ASRPipelineSettings) -> DiarizationConfig
         chunk_s=float(settings.diar_chunk_s),
         step_s=float(settings.diar_step_s),
         device=str(settings.device),
+        temp_dir=temp_dir,
     )

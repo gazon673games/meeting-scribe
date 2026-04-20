@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
-import tempfile
+import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -25,6 +26,7 @@ class NeMoTitaNetEmbedder:
     """
     device: str = "cuda"
     model_name: str = "titanet_large"  # common pretrained speaker embedding model
+    temp_dir: Optional[Path] = None
 
     def __post_init__(self) -> None:
         self._model = None
@@ -86,12 +88,10 @@ class NeMoTitaNetEmbedder:
             raise RuntimeError("segment too short for NeMo embedding (<0.8s)")
 
         # Write temp wav (PCM_16 for compatibility)
-        fd = None
         path = None
         try:
-            fd, path = tempfile.mkstemp(prefix="nemo_seg_", suffix=".wav")
-            os.close(fd)
-            fd = None
+            tmp_dir = self._temp_dir()
+            path = str(tmp_dir / f"nemo_seg_{os.getpid()}_{uuid.uuid4().hex}.wav")
 
             self._sf.write(path, x, samplerate=sample_rate, subtype="PCM_16")
 
@@ -103,13 +103,13 @@ class NeMoTitaNetEmbedder:
             return emb
 
         finally:
-            if fd is not None:
-                try:
-                    os.close(fd)
-                except Exception:
-                    pass
             if path is not None:
                 try:
                     os.remove(path)
                 except Exception:
                     pass
+
+    def _temp_dir(self) -> Path:
+        path = Path(self.temp_dir) if self.temp_dir is not None else Path.cwd() / "tmp" / "nemo"
+        path.mkdir(parents=True, exist_ok=True)
+        return path

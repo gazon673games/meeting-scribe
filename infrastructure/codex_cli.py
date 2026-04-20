@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -16,6 +16,7 @@ from application.codex_assistant import (
 )
 from application.codex_config import CodexProfile
 from application.codex_prompting import normalize_model_name, normalize_reasoning_effort
+from application.local_paths import project_runtime_dir
 
 
 class CodexCliRunner(CodexAssistantPort):
@@ -26,6 +27,13 @@ class CodexCliRunner(CodexAssistantPort):
         settings = request.settings
         try:
             env = os.environ.copy()
+            tmp_dir = project_runtime_dir(request.project_root, "codex")
+            for key in ("TMP", "TEMP", "TMPDIR"):
+                env[key] = str(tmp_dir)
+            codex_home = Path(request.project_root).resolve() / ".local" / "codex_home"
+            codex_home.mkdir(parents=True, exist_ok=True)
+            env["CODEX_HOME"] = str(codex_home)
+
             proxy = str(settings.proxy or "").strip()
             if proxy:
                 env["HTTP_PROXY"] = proxy
@@ -61,9 +69,7 @@ class CodexCliRunner(CodexAssistantPort):
             if profile.extra_args:
                 cmd.extend([str(x) for x in profile.extra_args if str(x).strip()])
 
-            fd, tmp = tempfile.mkstemp(prefix="codex_last_", suffix=".txt")
-            os.close(fd)
-            out_path = Path(tmp)
+            out_path = tmp_dir / f"codex_last_{os.getpid()}_{uuid.uuid4().hex}.txt"
             cmd.extend(["-o", str(out_path), "-"])
 
             prompt_safe = request.prompt.encode("utf-8", errors="replace").decode("utf-8")
