@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Optional, Protocol
 
 from asr.domain.segments import Segment
 from asr.domain.types import DiarBackend
@@ -19,6 +19,7 @@ class DiarizationConfig:
     chunk_s: float
     step_s: float
     device: str
+    temp_dir: Optional[Any] = None
 
 
 class DiarizationPort(Protocol):

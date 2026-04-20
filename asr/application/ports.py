@@ -67,6 +67,7 @@ class OnlineDiarizerFactoryPort(Protocol):
         window_s: float,
         backend: str,
         device: str,
+        temp_dir: Optional[Any] = None,
     ) -> OnlineDiarizerPort:
         ...
 

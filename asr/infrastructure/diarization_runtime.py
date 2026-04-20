@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 import numpy as np
@@ -34,6 +35,7 @@ class DiarizationRuntime:
         self.chunk_s = float(config.chunk_s)
         self.step_s = float(config.step_s)
         self.device = str(config.device)
+        self.temp_dir = Path(config.temp_dir) if config.temp_dir is not None else None
         self._online_diarizer_factory = online_diarizer_factory
         self._pyannote_diarizer_factory = pyannote_diarizer_factory
 
@@ -55,6 +57,7 @@ class DiarizationRuntime:
                 window_s=self.window_s,
                 backend=("nemo" if self.backend == "nemo" else "resemblyzer"),
                 device=self.device,
+                temp_dir=self.temp_dir,
             )
 
         if self.backend == "pyannote" and name not in self._ring16:

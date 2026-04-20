@@ -161,7 +161,9 @@ def build_runtime_graph(
         max_segment_s=float(settings.overload_max_segment_s),
         strategy=settings.normalized_overload_strategy,
     )
-    diarization = dependencies.diarization_factory(config=build_diarization_config(settings))
+    diarization = dependencies.diarization_factory(
+        config=build_diarization_config(settings, project_root=project_root)
+    )
     max_beam = settings.resolved_adaptive_beam_max
     beam_controller = AdaptiveBeam(
         min_beam=max(1, int(settings.adaptive_beam_min)),

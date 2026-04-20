@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from pathlib import Path
+from typing import Any, List, Optional, Tuple
 
 import numpy as np
 
@@ -60,10 +61,11 @@ class _NeMoBackend:
     Requires: asr/diar_backend_nemo.py
     """
 
-    def __init__(self, device: str = "cuda") -> None:
+    def __init__(self, device: str = "cuda", temp_dir: Optional[Any] = None) -> None:
         from asr.infrastructure.diar_backend_nemo import NeMoTitaNetEmbedder
 
-        self._emb = NeMoTitaNetEmbedder(device=device)
+        temp_path = Path(temp_dir) if temp_dir is not None else None
+        self._emb = NeMoTitaNetEmbedder(device=device, temp_dir=temp_path)
 
     def embed(self, audio_16k: np.ndarray) -> np.ndarray:
         return self._emb.embed_16k(audio_16k, sample_rate=16000)
@@ -92,6 +94,7 @@ class OnlineDiarizer(OnlineDiarizerPort):
     # backend selection
     backend: str = "resemblyzer"  # "resemblyzer" | "nemo"
     device: str = "cuda"
+    temp_dir: Optional[Any] = None
 
     def __post_init__(self) -> None:
         self._backend: Optional[object] = None
@@ -108,7 +111,7 @@ class OnlineDiarizer(OnlineDiarizerPort):
 
         b = (self.backend or "resemblyzer").strip().lower()
         if b == "nemo":
-            self._backend = _NeMoBackend(device=self.device)
+            self._backend = _NeMoBackend(device=self.device, temp_dir=self.temp_dir)
         else:
             self._backend = _ResemblyzerBackend()
         return self._backend

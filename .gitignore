@@ -10,6 +10,8 @@ recordings/
 build/
 dist/
 capture_mix.wav
+tmp/
+.local/
 
 .codex_tmp/
 
