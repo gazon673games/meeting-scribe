@@ -3,100 +3,99 @@ from __future__ import annotations
 import queue
 import time
 
+from application.event_types import (
+    AsrErrorEvent,
+    AsrInitOkEvent,
+    AsrInitStartEvent,
+    AsrMetricsEvent,
+    AsrOverloadEvent,
+    AsrStartedEvent,
+    AsrStoppedEvent,
+    EventType,
+    SegmentDroppedEvent,
+    SegmentSkippedOverloadEvent,
+    SourceErrorEvent,
+    UtteranceEvent,
+    event_from_record,
+)
+
 
 class AsrEventsMixin:
     def _drain_asr_ui_events(self, limit: int = 140) -> None:
         n = 0
         while n < limit:
             try:
-                ev = self.asr_ui_q.get_nowait()
+                raw = self.asr_ui_q.get_nowait()
             except queue.Empty:
                 break
             n += 1
 
-            typ = str(ev.get("type", ""))
-            ts = float(ev.get("ts", time.time()))
+            ev = event_from_record(raw)
+            typ = ev.event_type
+            ts = float(ev.ts or time.time())
             tss = self._fmt_ts(ts)
 
             lite = bool(self._long_run_mode)
 
-            if typ == "utterance":
-                text = (ev.get("text") or "").strip()
+            if isinstance(ev, UtteranceEvent):
+                text = ev.text.strip()
                 if not text:
                     continue
-                stream = str(ev.get("stream", ""))
-                overload = bool(ev.get("overload", False))
-                if overload:
+                if ev.overload:
                     self._asr_overload_active = True
-                self._append_transcript_line(f"[{tss}] {stream}: {text}")
+                self._append_transcript_line(f"[{tss}] {ev.stream}: {text}")
 
-            elif typ == "source_error":
-                source = str(ev.get("source", ""))
-                error = str(ev.get("error", ""))
-                self._append_transcript_line(f"[{tss}] SOURCE ERROR {source}: {error}")
-                self._set_status(f"Audio source failed: {source}")
+            elif isinstance(ev, SourceErrorEvent):
+                self._append_transcript_line(f"[{tss}] SOURCE ERROR {ev.source}: {ev.error}")
+                self._set_status(f"Audio source failed: {ev.source}")
 
-            elif typ == "asr_overload":
-                active = bool(ev.get("active", False))
-                reason = str(ev.get("reason", ""))
-                qsz = ev.get("seg_qsize", None)
-                beam = ev.get("beam_cur", None)
-                lag = ev.get("lag_s", None)
-                if bool(active):
+            elif isinstance(ev, AsrOverloadEvent):
+                if bool(ev.active):
                     self._asr_overload_active = True
-                    self._append_transcript_line(f"[{tss}] OVERLOAD: {reason} q={qsz} beam={beam} lag={lag}")
+                    self._append_transcript_line(
+                        f"[{tss}] OVERLOAD: {ev.reason} q={ev.seg_qsize} beam={ev.beam_cur} lag={ev.lag_s}"
+                    )
                 else:
                     self._asr_overload_active = False
-                    self._append_transcript_line(f"[{tss}] OVERLOAD OFF: {reason} q={qsz}")
+                    self._append_transcript_line(f"[{tss}] OVERLOAD OFF: {ev.reason} q={ev.seg_qsize}")
 
-            elif typ == "segment_dropped":
-                stream = str(ev.get("stream", ""))
-                reason = str(ev.get("reason", ""))
-                qsz = ev.get("seg_qsize", None)
-                self._warn_throttle(f"ASR dropped segment ({stream}) reason={reason} q={qsz}")
+            elif isinstance(ev, SegmentDroppedEvent):
+                self._warn_throttle(f"ASR dropped segment ({ev.stream}) reason={ev.reason} q={ev.seg_qsize}")
 
-            elif typ == "segment_skipped_overload":
-                cnt = int(ev.get("count", 0))
-                qsz = ev.get("seg_qsize", None)
-                self._warn_throttle(f"ASR skipped {cnt} old segments due to overload (q={qsz})")
+            elif isinstance(ev, SegmentSkippedOverloadEvent):
+                self._warn_throttle(f"ASR skipped {ev.count} old segments due to overload (q={ev.seg_qsize})")
 
-            elif typ == "asr_metrics":
-                self._seg_dropped_total = int(ev.get("seg_dropped_total", self._seg_dropped_total))
-                self._seg_skipped_total = int(ev.get("seg_skipped_total", self._seg_skipped_total))
-                self._avg_latency_s = float(ev.get("avg_latency_s", self._avg_latency_s))
-                self._p95_latency_s = float(ev.get("p95_latency_s", self._p95_latency_s))
-                self._lag_s = float(ev.get("lag_s", self._lag_s))
+            elif isinstance(ev, AsrMetricsEvent):
+                self._seg_dropped_total = int(ev.seg_dropped_total)
+                self._seg_skipped_total = int(ev.seg_skipped_total)
+                self._avg_latency_s = float(ev.avg_latency_s)
+                self._p95_latency_s = float(ev.p95_latency_s)
+                self._lag_s = float(ev.lag_s)
 
-            elif typ in ("segment", "segment_ready", "diar_debug", "asr_beam_update"):
+            elif typ.value in ("segment", "segment_ready", "diar_debug", "asr_beam_update"):
                 if lite:
                     continue
 
-            elif typ == "asr_init_start":
+            elif isinstance(ev, AsrInitStartEvent):
                 if lite:
                     continue
-                model = ev.get("model", "")
-                device = ev.get("device", "")
-                self._append_transcript_line(f"[{tss}] ASR init start ({model}, {device})")
+                self._append_transcript_line(f"[{tss}] ASR init start ({ev.model}, {ev.device})")
 
-            elif typ == "asr_started":
-                model = ev.get("model", "")
-                mode = ev.get("mode", "")
-                lang = ev.get("language", "")
-                osx = ev.get("overload_strategy", "")
-                self._append_transcript_line(f"[{tss}] ASR started (lang={lang}, mode={mode}, model={model}, overload={osx})")
+            elif isinstance(ev, AsrStartedEvent):
+                self._append_transcript_line(
+                    f"[{tss}] ASR started "
+                    f"(lang={ev.language}, mode={ev.mode}, model={ev.model}, overload={ev.overload_strategy})"
+                )
 
-            elif typ == "asr_init_ok":
+            elif isinstance(ev, AsrInitOkEvent):
                 if lite:
                     continue
-                model = ev.get("model", "")
-                self._append_transcript_line(f"[{tss}] ASR init OK ({model})")
+                self._append_transcript_line(f"[{tss}] ASR init OK ({ev.model})")
 
-            elif typ == "error":
-                where = ev.get("where", "")
-                err = ev.get("error", "")
-                self._append_transcript_line(f"[{tss}] ERROR {where}: {err}")
+            elif isinstance(ev, AsrErrorEvent):
+                self._append_transcript_line(f"[{tss}] ERROR {ev.where}: {ev.error}")
 
-            elif typ == "asr_stopped":
+            elif isinstance(ev, AsrStoppedEvent):
                 self._append_transcript_line(f"[{tss}] ASR stopped")
 
             else:

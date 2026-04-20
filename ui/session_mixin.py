@@ -3,12 +3,22 @@ from __future__ import annotations
 import queue
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 from PySide6.QtCore import QTimer
 
 from application.asr_language import initial_prompt_for_language, normalize_asr_language, runtime_asr_language
 from application.asr_session import ASRSessionSettings
+from application.asr_supervisor import ASRStartupSupervisor
+from application.commands import StartSessionCommand, StopSessionCommand
+from application.event_types import (
+    AsrStopDoneEvent,
+    OfflinePassDoneEvent,
+    OfflinePassErrorEvent,
+    OfflinePassStartedEvent,
+    event_from_record,
+)
+from application.job_state import TranscriptionJobStateMachine
 from application.model_download import download_model_async, is_model_cached
 from application.session_state import SessionStateMachine
 from application.session_tasks import OfflinePassRequest, StopAsrRequest
@@ -41,11 +51,19 @@ class SessionMixin:
 
         # lifecycle state
         self._session_state = SessionStateMachine()
+        self._transcription_state = TranscriptionJobStateMachine()
         self._closing: bool = False
         self._offline_thread: Any = None
         self._asr_stop_thread: Any = None
 
     def _start_all(self) -> None:
+        command = StartSessionCommand(
+            source_count=len(self.rows),
+            asr_enabled=bool(self.chk_asr.isChecked()),
+            model_name=self.cmb_model.currentText().strip() or "medium",
+            profile=str(self.cmb_profile.currentText()),
+            language=normalize_asr_language(self.cmb_lang.currentText()),
+        )
         if self._is_running():
             return
         if not self._session_state.can_start:
@@ -60,14 +78,13 @@ class SessionMixin:
                 return
             self._set_status(f"Session is busy: {self._session_state.state.value}")
             return
-        if len(self.rows) == 0:
+        if command.source_count == 0:
             self._set_status("Add at least one device first.")
             return
 
-        if self.chk_asr.isChecked():
-            model_name = self.cmb_model.currentText().strip() or "medium"
-            if not is_model_cached(model_name):
-                self._download_model_then_start(model_name)
+        if command.asr_enabled:
+            if not is_model_cached(command.model_name):
+                self._download_model_then_start(command.model_name)
                 return
 
         self._session_state.begin_start()
@@ -155,22 +172,51 @@ class SessionMixin:
             return
 
         settings = self._read_asr_session_settings()
+        attempts = ASRStartupSupervisor().build_attempts(settings)
+        errors: List[str] = []
+        self._transcription_state.begin_start()
 
-        try:
-            self.asr = self.asr_runtime_factory.build(
-                settings,
-                tap_queue=self.tap_q,
-                project_root=self.project_root,
-                event_queue=self.asr_ui_q,
-            )
-            self.asr.start()
-            self.asr_running = True
+        for index, attempt in enumerate(attempts):
+            if index > 0:
+                self._transcription_state.begin_fallback()
+                self._append_transcript_line(
+                    f"[{self._fmt_ts(time.time())}] ASR fallback: trying {attempt.label} "
+                    f"({attempt.settings.model_name}, {attempt.settings.device}, {attempt.settings.compute_type})"
+                )
 
-            human_log_path = self._human_log_open_session()
-            if human_log_path is not None:
-                self._append_transcript_line(f"[{self._fmt_ts(time.time())}] human log -> {human_log_path}")
-        except Exception as e:
-            self._set_status(f"ASR start failed: {e}")
+            try:
+                self.asr = self.asr_runtime_factory.build(
+                    attempt.settings,
+                    tap_queue=self.tap_q,
+                    project_root=self.project_root,
+                    event_queue=self.asr_ui_q,
+                )
+                self.asr.start()
+                self.asr_running = True
+                self._transcription_state.finish_start(degraded=attempt.degraded)
+
+                human_log_path = self._human_log_open_session()
+                if human_log_path is not None:
+                    self._append_transcript_line(f"[{self._fmt_ts(time.time())}] human log -> {human_log_path}")
+                if attempt.degraded:
+                    self._append_transcript_line(
+                        f"[{self._fmt_ts(time.time())}] ASR running in degraded mode via {attempt.label}"
+                    )
+                return
+            except Exception as e:
+                errors.append(f"{attempt.label}: {type(e).__name__}: {e}")
+                try:
+                    if self.asr is not None:
+                        self.asr.stop()
+                except Exception:
+                    pass
+                self.asr = None
+                self.asr_running = False
+
+        self._transcription_state.fail_start()
+        for msg in errors:
+            self._append_transcript_line(f"[{self._fmt_ts(time.time())}] ASR start failed: {msg}")
+        self._set_status("ASR start failed after fallback attempts. Audio session continues without ASR.")
 
     def _read_asr_session_settings(self) -> ASRSessionSettings:
         mode = "split" if self.cmb_asr_mode.currentIndex() == 1 else "mix"
@@ -324,6 +370,10 @@ class SessionMixin:
     ) -> None:
         if self._session_state.is_stopping:
             self._session_state.finish_stop()
+        if self._transcription_state.is_stopping:
+            self._transcription_state.finish_stop()
+        elif not self.asr_running:
+            self._transcription_state.reset()
         self._asr_stop_thread = None
         self.ui_timer.stop()
 
@@ -407,19 +457,19 @@ class SessionMixin:
         )
 
         self.background_event.emit(
-            {
-                "type": "asr_stop_done",
-                "wav_path": str(result.wav_path),
-                "run_offline_pass": bool(result.run_offline_pass),
-                "offline_model_name": str(result.offline_model_name),
-                "offline_language": result.offline_language,
-                "stop_error": result.stop_error,
-            }
+            AsrStopDoneEvent(
+                wav_path=str(result.wav_path),
+                run_offline_pass=bool(result.run_offline_pass),
+                offline_model_name=str(result.offline_model_name),
+                offline_language=result.offline_language,
+                stop_error=result.stop_error,
+            )
         )
 
     def _stop_all(self, *, run_offline_pass: bool = True, wait: bool = False) -> None:
+        command = StopSessionCommand(run_offline_pass=bool(run_offline_pass), wait=bool(wait))
         if self._session_state.is_stopping:
-            if wait and self._asr_stop_thread is not None:
+            if command.wait and self._asr_stop_thread is not None:
                 self._asr_stop_thread.join()
             else:
                 self._set_status("ASR is still stopping. Wait for it to finish.")
@@ -446,6 +496,8 @@ class SessionMixin:
         asr_to_stop = self.asr
         self.asr = None
         self.asr_running = False
+        if self._transcription_state.can_stop:
+            self._transcription_state.begin_stop()
 
         if self.engine.is_running():
             try:
@@ -464,7 +516,7 @@ class SessionMixin:
         if asr_to_stop is None:
             self._finish_stop_ui(
                 wav_path=Path(wav_path),
-                run_offline_pass=run_offline_pass,
+                run_offline_pass=command.run_offline_pass,
                 offline_model_name=offline_model_name,
                 offline_language=offline_language,
             )
@@ -472,12 +524,12 @@ class SessionMixin:
 
         self._set_status("stopping (waiting for ASR to finish current transcription)...")
 
-        if wait or self._closing:
+        if command.wait or self._closing:
             result = self.stop_asr_use_case.execute(
                 StopAsrRequest(
                     asr=asr_to_stop,
                     wav_path=Path(wav_path),
-                    run_offline_pass=bool(run_offline_pass),
+                    run_offline_pass=bool(command.run_offline_pass),
                     offline_model_name=str(offline_model_name),
                     offline_language=offline_language,
                 )
@@ -497,7 +549,7 @@ class SessionMixin:
             kwargs={
                 "asr_obj": asr_to_stop,
                 "wav_path": Path(wav_path),
-                "run_offline_pass": run_offline_pass,
+                "run_offline_pass": command.run_offline_pass,
                 "offline_model_name": offline_model_name,
                 "offline_language": offline_language,
             },
@@ -525,7 +577,7 @@ class SessionMixin:
 
     def _run_offline_pass_worker(self, wav_path: Path, model_name: str, language: Optional[str]) -> None:
         try:
-            self.background_event.emit({"type": "offline_pass_started"})
+            self.background_event.emit(OfflinePassStartedEvent())
 
             result = self.offline_pass_use_case.execute(
                 OfflinePassRequest(
@@ -536,57 +588,47 @@ class SessionMixin:
                 )
             )
 
-            self.background_event.emit(
-                {
-                    "type": "offline_pass_done",
-                    "out_txt": str(result.out_txt),
-                }
-            )
+            self.background_event.emit(OfflinePassDoneEvent(out_txt=str(result.out_txt)))
         except Exception as e:
-            self.background_event.emit(
-                {
-                    "type": "offline_pass_error",
-                    "error": f"{type(e).__name__}: {e}",
-                }
-            )
+            self.background_event.emit(OfflinePassErrorEvent(error=f"{type(e).__name__}: {e}"))
 
-    def _handle_background_event(self, ev: Dict[str, Any]) -> None:
+    def _handle_background_event(self, ev: object) -> None:
         if self._closing:
             return
 
-        typ = str(ev.get("type", ""))
-        if typ == "asr_stop_done":
-            stop_error_raw = ev.get("stop_error")
+        event = event_from_record(ev)
+        if isinstance(event, AsrStopDoneEvent):
+            stop_error_raw = event.stop_error
             self._finish_stop_ui(
-                wav_path=Path(str(ev.get("wav_path", self._current_output_path()))),
-                run_offline_pass=bool(ev.get("run_offline_pass", False)),
-                offline_model_name=str(ev.get("offline_model_name", self.cmb_model.currentText() or "large-v3")),
-                offline_language=ev.get("offline_language"),
+                wav_path=Path(str(event.wav_path or self._current_output_path())),
+                run_offline_pass=bool(event.run_offline_pass),
+                offline_model_name=str(event.offline_model_name or self.cmb_model.currentText() or "large-v3"),
+                offline_language=event.offline_language,
                 stop_error=(str(stop_error_raw).strip() if stop_error_raw is not None else None),
             )
             return
 
-        if typ == "offline_pass_started":
+        if isinstance(event, OfflinePassStartedEvent):
             self._append_transcript_line(f"[{self._fmt_ts(time.time())}] offline pass: starting...")
             self._set_status("offline pass: running")
             return
 
-        if typ == "offline_pass_done":
+        if isinstance(event, OfflinePassDoneEvent):
             if self._session_state.is_offline_pass:
                 self._session_state.finish_offline_pass()
             self._offline_thread = None
             self.btn_start.setEnabled(True)
-            out_txt = str(ev.get("out_txt", "")).strip()
+            out_txt = str(event.out_txt).strip()
             self._append_transcript_line(f"[{self._fmt_ts(time.time())}] offline pass: done -> {out_txt}")
             self._set_status("offline pass: done")
             return
 
-        if typ == "offline_pass_error":
+        if isinstance(event, OfflinePassErrorEvent):
             if self._session_state.is_offline_pass:
                 self._session_state.finish_offline_pass()
             self._offline_thread = None
             self.btn_start.setEnabled(True)
-            err = str(ev.get("error", "unknown error"))
+            err = str(event.error or "unknown error")
             self._append_transcript_line(f"[{self._fmt_ts(time.time())}] offline pass: ERROR {err}")
             self._set_status("offline pass: failed")
             return
