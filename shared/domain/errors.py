@@ -1,0 +1,2 @@
+class InvalidJobTransition(RuntimeError):
+    pass
