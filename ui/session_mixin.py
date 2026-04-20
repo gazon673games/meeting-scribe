@@ -10,6 +10,7 @@ from PySide6.QtCore import QTimer
 from application.asr_language import initial_prompt_for_language, normalize_asr_language, runtime_asr_language
 from application.asr_session import ASRSessionSettings
 from application.model_download import download_model_async, is_model_cached
+from application.session_state import SessionStateMachine
 from application.session_tasks import OfflinePassRequest, StopAsrRequest
 
 
@@ -38,21 +39,26 @@ class SessionMixin:
         self._ui_interval_normal_ms: int = 120
         self._ui_interval_long_ms: int = 260
 
-        # lifecycle flags
+        # lifecycle state
+        self._session_state = SessionStateMachine()
         self._closing: bool = False
-        self._offline_pass_active: bool = False
         self._offline_thread: Any = None
-        self._asr_stop_active: bool = False
         self._asr_stop_thread: Any = None
 
     def _start_all(self) -> None:
         if self._is_running():
             return
-        if self._asr_stop_active:
-            self._set_status("ASR is still stopping. Wait for it to finish first.")
-            return
-        if self._offline_pass_active:
-            self._set_status("Offline pass is still running. Wait for it to finish first.")
+        if not self._session_state.can_start:
+            if self._session_state.is_stopping:
+                self._set_status("ASR is still stopping. Wait for it to finish first.")
+                return
+            if self._session_state.is_offline_pass:
+                self._set_status("Offline pass is still running. Wait for it to finish first.")
+                return
+            if self._session_state.is_downloading_model:
+                self._set_status("Model download is still running. Wait for it to finish first.")
+                return
+            self._set_status(f"Session is busy: {self._session_state.state.value}")
             return
         if len(self.rows) == 0:
             self._set_status("Add at least one device first.")
@@ -63,6 +69,8 @@ class SessionMixin:
             if not is_model_cached(model_name):
                 self._download_model_then_start(model_name)
                 return
+
+        self._session_state.begin_start()
 
         self._human_log_close()
         self._reset_session_metrics()
@@ -97,6 +105,7 @@ class SessionMixin:
         try:
             self.engine.start()
         except Exception as e:
+            self._session_state.fail_start()
             self._set_status(f"Engine start failed: {e}")
             return
 
@@ -108,10 +117,12 @@ class SessionMixin:
         self._start_wav_if_enabled()
         self._set_session_controls_running()
 
+        self._session_state.finish_start()
         self.ui_timer.start()
         self._set_status(f"running: ASR={'on' if self.asr_running else 'off'}, WAV={'on' if self.writer.is_recording() else 'off'}")
 
     def _download_model_then_start(self, model_name: str) -> None:
+        self._session_state.begin_model_download()
         self.btn_start.setEnabled(False)
         self._set_status(f"Downloading model {model_name}... please wait")
 
@@ -119,6 +130,7 @@ class SessionMixin:
             self._set_status(msg)
 
         def on_done(error: Optional[str]) -> None:
+            self._session_state.finish_model_download()
             if error:
                 self._set_status(f"Model download failed: {error}")
                 self.btn_start.setEnabled(True)
@@ -310,7 +322,8 @@ class SessionMixin:
         offline_language: Optional[str],
         stop_error: Optional[str] = None,
     ) -> None:
-        self._asr_stop_active = False
+        if self._session_state.is_stopping:
+            self._session_state.finish_stop()
         self._asr_stop_thread = None
         self.ui_timer.stop()
 
@@ -405,12 +418,22 @@ class SessionMixin:
         )
 
     def _stop_all(self, *, run_offline_pass: bool = True, wait: bool = False) -> None:
-        if self._asr_stop_active:
+        if self._session_state.is_stopping:
             if wait and self._asr_stop_thread is not None:
                 self._asr_stop_thread.join()
             else:
                 self._set_status("ASR is still stopping. Wait for it to finish.")
             return
+        if self._session_state.is_offline_pass:
+            self._set_status("Offline pass is still running. Wait for it to finish.")
+            return
+        if not self._session_state.can_stop:
+            if not self.engine.is_running() and self.asr is None and not self.writer.is_recording():
+                return
+            self._set_status(f"Cannot stop session while state is {self._session_state.state.value}.")
+            return
+
+        self._session_state.begin_stop()
 
         wav_path = self.writer.target_path() or self._current_output_path()
         offline_model_name = str(self.cmb_model.currentText() or "large-v3")
@@ -447,7 +470,6 @@ class SessionMixin:
             )
             return
 
-        self._asr_stop_active = True
         self._set_status("stopping (waiting for ASR to finish current transcription)...")
 
         if wait or self._closing:
@@ -482,14 +504,17 @@ class SessionMixin:
         )
 
     def _start_offline_pass(self, wav_path: Path, *, model_name: str, language: Optional[str]) -> None:
-        if self._offline_pass_active:
+        if self._session_state.is_offline_pass:
             self._set_status("Offline pass is already running.")
             return
         if not self._offline_asr_available():
             self._set_status("Offline pass is unavailable.")
             return
+        if not self._session_state.can_start:
+            self._set_status(f"Cannot start offline pass while state is {self._session_state.state.value}.")
+            return
 
-        self._offline_pass_active = True
+        self._session_state.begin_offline_pass()
         self.btn_start.setEnabled(False)
 
         self._offline_thread = self.background_task_runner.start(
@@ -547,7 +572,8 @@ class SessionMixin:
             return
 
         if typ == "offline_pass_done":
-            self._offline_pass_active = False
+            if self._session_state.is_offline_pass:
+                self._session_state.finish_offline_pass()
             self._offline_thread = None
             self.btn_start.setEnabled(True)
             out_txt = str(ev.get("out_txt", "")).strip()
@@ -556,7 +582,8 @@ class SessionMixin:
             return
 
         if typ == "offline_pass_error":
-            self._offline_pass_active = False
+            if self._session_state.is_offline_pass:
+                self._session_state.finish_offline_pass()
             self._offline_thread = None
             self.btn_start.setEnabled(True)
             err = str(ev.get("error", "unknown error"))

@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QLineEdit
 
 from application.asr_language import SUPPORTED_ASR_LANGUAGES
 from application.asr_profiles import profile_defaults
+from application.model_policy import ASR_MODEL_NAMES, ModelOrchestrator
 
 CONFIG_VERSION = 2
 
@@ -96,12 +97,7 @@ class MainWindowConfigMixin:
             if "asr_mode" in ui:
                 idx = int(ui.get("asr_mode", 1))
                 self.cmb_asr_mode.setCurrentIndex(1 if idx == 1 else 0)
-            if "model" in ui and str(ui.get("model")) in (
-                "large-v3", "large-v3-turbo",
-                "bzikst/faster-whisper-large-v3-russian",
-                "bzikst/faster-whisper-podlodka-turbo",
-                "medium", "small",
-            ):
+            if "model" in ui and str(ui.get("model")) in ASR_MODEL_NAMES:
                 self.cmb_model.setCurrentText(str(ui.get("model")))
             if "profile" in ui and str(ui.get("profile")) in (
                 self.PROFILE_REALTIME,
@@ -183,6 +179,7 @@ class MainWindowConfigMixin:
             self.txt_over_maxseg.setText(str(float(defaults["overload_max_segment_s"])))
             self.txt_over_overlap.setText(str(float(defaults["overload_overlap_ms"])))
 
+            self._apply_model_policy_to_ui(profile, mark_dirty=force)
             self._set_custom_enabled(False)
             self._mark_config_dirty()
             return
@@ -215,6 +212,31 @@ class MainWindowConfigMixin:
     def _on_profile_changed(self) -> None:
         profile = self.cmb_profile.currentText()
         self._apply_profile_to_fields(profile, force=True)
+
+    def _on_policy_input_changed(self) -> None:
+        profile = self.cmb_profile.currentText()
+        if (profile or "") == self.PROFILE_CUSTOM:
+            self._mark_config_dirty()
+            return
+        self._apply_model_policy_to_ui(profile, mark_dirty=True)
+        self._mark_config_dirty()
+
+    def _apply_model_policy_to_ui(self, profile: str, *, mark_dirty: bool) -> None:
+        available_models = [self.cmb_model.itemText(i) for i in range(self.cmb_model.count())]
+        decision = ModelOrchestrator().recommend(
+            asr_profile=profile,
+            language=str(self.cmb_lang.currentText()),
+            current_asr_model=str(self.cmb_model.currentText()),
+            available_asr_models=available_models,
+            codex_profiles=list(getattr(self, "_codex_profiles", [])),
+            current_codex_profile_id=str(getattr(self, "_codex_selected_profile_id", "")),
+        )
+
+        if decision.asr_model and decision.asr_model != self.cmb_model.currentText():
+            self.cmb_model.setCurrentText(decision.asr_model)
+
+        if decision.codex_profile_id and hasattr(self, "_set_codex_selected_profile"):
+            self._set_codex_selected_profile(decision.codex_profile_id, mark_dirty=mark_dirty)
 
     def _apply_asr_settings_visibility(self, *, expanded: bool) -> None:
         self.grp_asr_cfg.setVisible(bool(expanded))

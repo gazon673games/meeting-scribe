@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from application.asr_profiles import PROFILE_QUALITY, PROFILE_REALTIME
 from application.codex_assistant import CodexExecutionSettings
 from application.codex_config import (
     CodexProfile,
@@ -27,6 +28,16 @@ from application.codex_config import (
     parse_codex_settings,
 )
 from application.codex_use_case import CodexRequestInput
+from application.model_policy import ModelOrchestrator
+
+FAST_ANSWER_LOG_CHARS = 4000
+FAST_ANSWER_TIMEOUT_S = 35
+SUMMARY_LOG_CHARS = 200000
+SUMMARY_TIMEOUT_S = 180
+SUMMARY_REQUEST = (
+    "Summarize the whole session context. "
+    "Focus on decisions, open questions, risks, and the most useful next actions."
+)
 
 
 class CodexIntegrationMixin:
@@ -66,6 +77,17 @@ class CodexIntegrationMixin:
         self.codex_profiles_row = QHBoxLayout()
         codex_layout.addLayout(self.codex_profiles_row)
 
+        codex_actions_row = QHBoxLayout()
+        self.btn_codex_answer = QPushButton("Answer")
+        self.btn_codex_answer.setToolTip("Fast answer from recent context")
+        codex_actions_row.addWidget(self.btn_codex_answer, 0)
+
+        self.btn_codex_summary = QPushButton("Summary")
+        self.btn_codex_summary.setToolTip("Deep summary from full context")
+        codex_actions_row.addWidget(self.btn_codex_summary, 0)
+        codex_actions_row.addStretch(1)
+        codex_layout.addLayout(codex_actions_row)
+
         self.txt_codex = QTextEdit()
         self.txt_codex.setReadOnly(True)
         self.txt_codex.setPlaceholderText("Codex output will appear here")
@@ -88,12 +110,16 @@ class CodexIntegrationMixin:
 
     def _connect_codex_signals(self) -> None:
         self.btn_codex_toggle.clicked.connect(self._toggle_codex_console)
+        self.btn_codex_answer.clicked.connect(self._on_codex_answer_clicked)
+        self.btn_codex_summary.clicked.connect(self._on_codex_summary_clicked)
         self.btn_codex_send.clicked.connect(self._on_codex_send_clicked)
         self.txt_codex_input.returnPressed.connect(self._on_codex_send_clicked)
 
     def _set_codex_inputs_enabled(self, enabled: bool) -> None:
         self.txt_codex_input.setEnabled(bool(enabled))
         self.btn_codex_send.setEnabled(bool(enabled))
+        self.btn_codex_answer.setEnabled(bool(enabled))
+        self.btn_codex_summary.setEnabled(bool(enabled))
 
     def _start_codex_timer(self) -> None:
         self.codex_timer = QTimer(self)
@@ -228,6 +254,17 @@ class CodexIntegrationMixin:
                 return p
         return self._codex_profiles[0] if self._codex_profiles else None
 
+    def _get_codex_policy_profile(self, policy_profile: str) -> Optional[CodexProfile]:
+        profile_id = ModelOrchestrator().recommend_codex_profile_id(
+            asr_profile=policy_profile,
+            profiles=list(self._codex_profiles),
+            current_profile_id=str(self._codex_selected_profile_id or ""),
+        )
+        for profile in self._codex_profiles:
+            if profile.id == profile_id:
+                return profile
+        return self._get_selected_codex_profile()
+
     def _set_codex_busy(self, busy: bool) -> None:
         self._codex_busy = bool(busy)
         can_send = bool(self._codex_enabled and (not self._codex_busy) and len(self._codex_profiles) > 0)
@@ -236,29 +273,64 @@ class CodexIntegrationMixin:
             self.lbl_codex_status.setText("busy..." if self._codex_busy else "idle")
 
     def _on_codex_send_clicked(self) -> None:
+        req = (self.txt_codex_input.text() or "").strip()
+        if not req:
+            return
+
+        profile = self._get_selected_codex_profile()
+        self._start_codex_request(profile=profile, request_text=req, source_label="you")
+        self.txt_codex_input.clear()
+
+    def _on_codex_answer_clicked(self) -> None:
+        profile = self._get_codex_policy_profile(PROFILE_REALTIME)
+        self._start_codex_request(
+            profile=profile,
+            request_text=self._codex_answer_keyword,
+            source_label="answer",
+            max_log_chars=FAST_ANSWER_LOG_CHARS,
+            timeout_s=FAST_ANSWER_TIMEOUT_S,
+        )
+
+    def _on_codex_summary_clicked(self) -> None:
+        profile = self._get_codex_policy_profile(PROFILE_QUALITY)
+        self._start_codex_request(
+            profile=profile,
+            request_text=SUMMARY_REQUEST,
+            source_label="summary",
+            max_log_chars=SUMMARY_LOG_CHARS,
+            timeout_s=SUMMARY_TIMEOUT_S,
+        )
+
+    def _start_codex_request(
+        self,
+        *,
+        profile: Optional[CodexProfile],
+        request_text: str,
+        source_label: str,
+        max_log_chars: Optional[int] = None,
+        timeout_s: Optional[int] = None,
+    ) -> None:
         if not self._codex_enabled:
             return
         if self._codex_busy:
             self._append_codex_line(f"[{self._fmt_ts(time.time())}] busy: wait for current request")
             return
 
-        req = (self.txt_codex_input.text() or "").strip()
+        req = str(request_text or "").strip()
         if not req:
             return
 
-        profile = self._get_selected_codex_profile()
         if profile is None:
             self._append_codex_line(f"[{self._fmt_ts(time.time())}] no codex profile configured")
             return
 
-        self._append_codex_line(f"[{self._fmt_ts(time.time())}] you ({profile.label}): {req}")
-        self.txt_codex_input.clear()
+        self._append_codex_line(f"[{self._fmt_ts(time.time())}] {source_label} ({profile.label}): {req}")
         self._set_codex_busy(True)
 
         self.background_task_runner.start(
             name="codex-helper-worker",
             target=self._run_codex_exec_worker,
-            args=(profile, req),
+            args=(profile, req, max_log_chars, timeout_s),
         )
 
     def _codex_push_event(self, ev: Dict[str, Any]) -> None:
@@ -274,7 +346,13 @@ class CodexIntegrationMixin:
             except Exception:
                 pass
 
-    def _run_codex_exec_worker(self, profile: CodexProfile, original_cmd: str) -> None:
+    def _run_codex_exec_worker(
+        self,
+        profile: CodexProfile,
+        original_cmd: str,
+        max_log_chars: Optional[int] = None,
+        timeout_s: Optional[int] = None,
+    ) -> None:
         use_case = getattr(self, "codex_request_use_case", None)
         if use_case is None:
             self._codex_push_event(
@@ -296,13 +374,13 @@ class CodexIntegrationMixin:
                 project_root=self.project_root,
                 human_log_path=Path(self._human_log_path) if self._human_log_path is not None else None,
                 human_log_fh=self._human_log_fh,
-                max_log_chars=int(self._codex_max_log_chars),
+                max_log_chars=int(max_log_chars if max_log_chars is not None else self._codex_max_log_chars),
                 answer_keyword=self._codex_answer_keyword,
                 execution_settings=CodexExecutionSettings(
                     command_tokens=list(self._codex_command_tokens),
                     path_hints=list(self._codex_path_hints),
                     proxy=str(self._codex_proxy or ""),
-                    timeout_s=int(self._codex_timeout_s),
+                    timeout_s=int(timeout_s if timeout_s is not None else self._codex_timeout_s),
                 ),
             )
         )
