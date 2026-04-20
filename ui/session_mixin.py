@@ -9,6 +9,7 @@ from PySide6.QtCore import QTimer
 
 from application.asr_language import initial_prompt_for_language, normalize_asr_language, runtime_asr_language
 from application.asr_session import ASRSessionSettings
+from application.model_download import download_model_async, is_model_cached
 from application.session_tasks import OfflinePassRequest, StopAsrRequest
 
 
@@ -57,6 +58,12 @@ class SessionMixin:
             self._set_status("Add at least one device first.")
             return
 
+        if self.chk_asr.isChecked():
+            model_name = self.cmb_model.currentText().strip() or "medium"
+            if not is_model_cached(model_name):
+                self._download_model_then_start(model_name)
+                return
+
         self._human_log_close()
         self._reset_session_metrics()
         self._desktop_silence_since_mono = None
@@ -103,6 +110,23 @@ class SessionMixin:
 
         self.ui_timer.start()
         self._set_status(f"running: ASR={'on' if self.asr_running else 'off'}, WAV={'on' if self.writer.is_recording() else 'off'}")
+
+    def _download_model_then_start(self, model_name: str) -> None:
+        self.btn_start.setEnabled(False)
+        self._set_status(f"Downloading model {model_name}... please wait")
+
+        def on_progress(msg: str) -> None:
+            self._set_status(msg)
+
+        def on_done(error: Optional[str]) -> None:
+            if error:
+                self._set_status(f"Model download failed: {error}")
+                self.btn_start.setEnabled(True)
+            else:
+                self._set_status(f"Model {model_name} ready.")
+                self._start_all()
+
+        download_model_async(model_name, on_progress=on_progress, on_done=on_done)
 
     def _reset_session_metrics(self) -> None:
         self._asr_overload_active = False

@@ -96,7 +96,12 @@ class MainWindowConfigMixin:
             if "asr_mode" in ui:
                 idx = int(ui.get("asr_mode", 1))
                 self.cmb_asr_mode.setCurrentIndex(1 if idx == 1 else 0)
-            if "model" in ui and str(ui.get("model")) in ("large-v3", "medium", "small"):
+            if "model" in ui and str(ui.get("model")) in (
+                "large-v3", "large-v3-turbo",
+                "bzikst/faster-whisper-large-v3-russian",
+                "bzikst/faster-whisper-podlodka-turbo",
+                "medium", "small",
+            ):
                 self.cmb_model.setCurrentText(str(ui.get("model")))
             if "profile" in ui and str(ui.get("profile")) in (
                 self.PROFILE_REALTIME,

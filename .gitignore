@@ -12,3 +12,6 @@ dist/
 capture_mix.wav
 
 .codex_tmp/
+
+# model weights
+models/
