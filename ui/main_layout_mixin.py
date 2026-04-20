@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from application.model_policy import ASR_MODEL_NAMES
+
 
 class MainWindowLayoutMixin:
     def _build_main_layout(self) -> None:
@@ -70,14 +72,7 @@ class MainWindowLayoutMixin:
 
         asr_row.addWidget(QLabel("Model:"))
         self.cmb_model = QComboBox()
-        self.cmb_model.addItems([
-            "large-v3",
-            "large-v3-turbo",
-            "bzikst/faster-whisper-large-v3-russian",
-            "bzikst/faster-whisper-podlodka-turbo",
-            "medium",
-            "small",
-        ])
+        self.cmb_model.addItems(list(ASR_MODEL_NAMES))
         self.cmb_model.setCurrentText("medium")
         asr_row.addWidget(self.cmb_model)
 
@@ -256,6 +251,7 @@ class MainWindowLayoutMixin:
         self.btn_stop.clicked.connect(self._stop_all)
         self.btn_clear.clicked.connect(self._clear_transcript)
         self.cmb_profile.currentIndexChanged.connect(self._on_profile_changed)
+        self.cmb_lang.currentIndexChanged.connect(self._on_policy_input_changed)
         self.chk_longrun.stateChanged.connect(self._on_longrun_changed)
         self.btn_asr_toggle.clicked.connect(self._toggle_asr_settings)
         self._connect_codex_signals()

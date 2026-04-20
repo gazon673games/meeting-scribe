@@ -38,6 +38,9 @@ class WindowHelpersMixin:
             pass
 
     def _is_running(self) -> bool:
+        session_state = getattr(self, "_session_state", None)
+        if session_state is not None:
+            return bool(session_state.is_running)
         return self.engine.is_running()
 
     def _wav_recording_available(self) -> bool:
