@@ -9,6 +9,7 @@ from application.model_policy import (
     ASR_MODEL_RU_PODLODKA_TURBO,
     ASR_MODEL_SMALL,
 )
+from application.supervision import SupervisionReport, supervision_report
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,8 @@ class ASRStartupAttempt:
 
 
 class ASRStartupSupervisor:
+    component = "asr"
+
     def build_attempts(self, primary: ASRSessionSettings) -> List[ASRStartupAttempt]:
         attempts = [ASRStartupAttempt(label="primary", settings=primary, degraded=False)]
 
@@ -52,6 +55,23 @@ class ASRStartupSupervisor:
         )
         self._append_unique(attempts, ASRStartupAttempt(label="cpu-small-fallback", settings=cpu_settings, degraded=True))
         return attempts
+
+    def success_report(self, attempt: ASRStartupAttempt, errors: List[str]) -> SupervisionReport:
+        return supervision_report(
+            component=self.component,
+            active_attempt=attempt.label,
+            fallback_used=bool(attempt.degraded),
+            errors=errors,
+        )
+
+    def failure_report(self, errors: List[str]) -> SupervisionReport:
+        return supervision_report(
+            component=self.component,
+            active_attempt="none",
+            fallback_used=True,
+            errors=errors,
+            failed=True,
+        )
 
     @staticmethod
     def _fast_model_for_language(language: str) -> str:

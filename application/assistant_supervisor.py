@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional
 
+from application.supervision import SupervisionReport, supervision_report
+
 
 @dataclass(frozen=True)
 class AssistantAttempt:
@@ -13,6 +15,8 @@ class AssistantAttempt:
 
 
 class AssistantFallbackSupervisor:
+    component = "assistant"
+
     def build_attempts(
         self,
         *,
@@ -39,3 +43,20 @@ class AssistantFallbackSupervisor:
                 )
             )
         return attempts
+
+    def success_report(self, attempt: AssistantAttempt, errors: List[str]) -> SupervisionReport:
+        return supervision_report(
+            component=self.component,
+            active_attempt=attempt.label,
+            fallback_used=bool(attempt.fallback),
+            errors=errors,
+        )
+
+    def failure_report(self, errors: List[str]) -> SupervisionReport:
+        return supervision_report(
+            component=self.component,
+            active_attempt="none",
+            fallback_used=True,
+            errors=errors,
+            failed=True,
+        )
