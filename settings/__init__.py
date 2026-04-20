@@ -1,0 +1,1 @@
+"""Settings bounded context."""
