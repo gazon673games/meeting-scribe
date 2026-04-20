@@ -12,7 +12,6 @@ class TranscriptMixin:
         # realtime transcript file (optional)
         self._rt_tr_to_file: bool = False
         self._rt_tr_path: Optional[Path] = None
-        self._rt_tr_fh = None
 
         # human-readable session log (always on during ASR)
         self._human_log_path: Optional[Path] = None
@@ -59,70 +58,33 @@ class TranscriptMixin:
         self._append_transcript_line(f"[{self._fmt_ts(now)}] WARNING: {msg}")
 
     def _human_log_open_session(self) -> Optional[Path]:
-        self._human_log_close()
-        try:
-            directory = self.project_root / "human_logs"
-            directory.mkdir(parents=True, exist_ok=True)
-            ts = time.strftime("%Y%m%d_%H%M%S")
-            self._human_log_path = directory / f"chat_{ts}.txt"
-            self._human_log_fh = self._human_log_path.open("a", encoding="utf-8")
-            self._human_log_fh.write(f"# Meeting Scribe chat log: {ts}\n")
-            self._human_log_fh.flush()
-            return self._human_log_path
-        except Exception:
-            self._human_log_fh = None
-            self._human_log_path = None
-            return None
+        path = self.transcript_store.open_human_log()
+        self._sync_transcript_store_refs()
+        return path
 
     def _human_log_close(self) -> None:
-        try:
-            if self._human_log_fh is not None:
-                self._human_log_fh.flush()
-                self._human_log_fh.close()
-        except Exception:
-            pass
-        self._human_log_fh = None
-        self._human_log_path = None
+        self.transcript_store.close_human_log()
+        self._sync_transcript_store_refs()
 
     def _human_log_write_line(self, line: str) -> None:
-        if self._human_log_fh is None:
-            return
-        try:
-            self._human_log_fh.write(line + "\n")
-            self._human_log_fh.flush()
-        except Exception:
-            pass
+        self.transcript_store.write_human_line(line)
+        self._sync_transcript_store_refs()
 
     def _rt_open_if_needed(self) -> None:
-        if not self._rt_tr_to_file:
-            return
-        if self._rt_tr_fh is not None:
-            return
-        try:
-            directory = self.project_root / "logs"
-            directory.mkdir(parents=True, exist_ok=True)
-            ts = time.strftime("%Y%m%d_%H%M%S")
-            self._rt_tr_path = directory / f"transcript_{ts}.txt"
-            self._rt_tr_fh = self._rt_tr_path.open("a", encoding="utf-8")
-        except Exception:
-            self._rt_tr_fh = None
-            self._rt_tr_path = None
+        self.transcript_store.set_realtime_enabled(self._rt_tr_to_file)
+        self._sync_transcript_store_refs()
 
     def _rt_close(self) -> None:
-        try:
-            if self._rt_tr_fh is not None:
-                self._rt_tr_fh.flush()
-                self._rt_tr_fh.close()
-        except Exception:
-            pass
-        self._rt_tr_fh = None
-        self._rt_tr_path = None
+        self.transcript_store.set_realtime_enabled(False)
+        self.transcript_store.close_realtime_transcript()
+        self._sync_transcript_store_refs()
 
     def _rt_write_line(self, line: str) -> None:
         self._rt_open_if_needed()
-        if self._rt_tr_fh is None:
-            return
-        try:
-            self._rt_tr_fh.write(line + "\n")
-        except Exception:
-            pass
+        self.transcript_store.write_realtime_line(line)
+        self._sync_transcript_store_refs()
+
+    def _sync_transcript_store_refs(self) -> None:
+        self._human_log_path = self.transcript_store.current_human_log_path
+        self._human_log_fh = self.transcript_store.current_human_log_handle
+        self._rt_tr_path = self.transcript_store.realtime_transcript_path

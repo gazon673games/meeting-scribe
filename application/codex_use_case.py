@@ -11,8 +11,8 @@ from application.codex_assistant import (
     CodexExecutionSettings,
 )
 from application.codex_config import CodexProfile
-from application.codex_logs import read_human_log_tail, trim_text_tail
 from application.codex_prompting import build_codex_prompt
+from transcription.application.transcript_context import TranscriptContextReader, trim_text_tail
 
 
 @dataclass(frozen=True)
@@ -29,14 +29,15 @@ class CodexRequestInput:
 
 
 class CodexRequestUseCase:
-    def __init__(self, assistant: CodexAssistantPort) -> None:
+    def __init__(self, assistant: CodexAssistantPort, context_reader: TranscriptContextReader) -> None:
         self._assistant = assistant
+        self._context_reader = context_reader
 
     def execute(self, request: CodexRequestInput) -> CodexAssistantResult:
         if request.context_text is not None:
             log_text = trim_text_tail(request.context_text, max_chars=int(request.max_log_chars))
         else:
-            log_text = read_human_log_tail(
+            log_text = self._context_reader.read_human_log_tail(
                 project_root=Path(request.project_root),
                 human_log_path=request.human_log_path,
                 human_log_fh=request.human_log_fh,

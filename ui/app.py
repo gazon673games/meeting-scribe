@@ -1,7 +1,6 @@
 # --- File: D:\work\own\voice2textTest\ui\app.py ---
 from __future__ import annotations
 
-import json
 import queue
 import sys
 from pathlib import Path
@@ -21,10 +20,13 @@ from application.asr_session import ASRRuntimeFactory
 from application.background_tasks import BackgroundTaskRunner
 from application.audio_runtime import AudioRuntimeFactory
 from application.audio_sources import AudioSourceFactory
-from application.codex_use_case import CodexRequestUseCase
 from application.device_catalog import DeviceCatalog
 from application.recording import WavRecorderFactory
 from application.session_tasks import OfflinePassUseCase, StopAsrSessionUseCase
+from assistant.application.service import AssistantApplicationService
+from settings.application.config_repository import ConfigRepository
+from transcription.application.startup_service import TranscriptionStartupService
+from transcription.application.transcript_store import TranscriptStore
 from ui.asr_events_mixin import AsrEventsMixin
 from ui.config_mixin import MainWindowConfigMixin
 from ui.codex_integration import CodexIntegrationMixin
@@ -34,46 +36,6 @@ from ui.source_controls_mixin import SourceControlsMixin, SourceRow
 from ui.telemetry_mixin import TelemetryMixin
 from ui.transcript_mixin import TranscriptMixin
 from ui.window_helpers_mixin import WindowHelpersMixin
-
-def ensure_runtime_config(project_root: Path, config_path: Path) -> None:
-    if not getattr(sys, "frozen", False):
-        return
-
-    bundled_root = Path(getattr(sys, "_MEIPASS", project_root))
-    bundled_config = bundled_root / "config.json"
-    if not bundled_config.exists():
-        return
-
-    if not config_path.exists():
-        try:
-            config_path.write_text(bundled_config.read_text(encoding="utf-8"), encoding="utf-8")
-        except Exception:
-            pass
-        return
-
-    try:
-        current = json.loads(config_path.read_text(encoding="utf-8"))
-        bundled = json.loads(bundled_config.read_text(encoding="utf-8"))
-    except Exception:
-        return
-
-    if not isinstance(current, dict) or not isinstance(bundled, dict):
-        return
-
-    current_codex = current.get("codex", {})
-    bundled_codex = bundled.get("codex", {})
-    if not isinstance(current_codex, dict) or not isinstance(bundled_codex, dict):
-        return
-
-    has_profiles = bool(current_codex.get("profiles"))
-    if "codex" in current and has_profiles:
-        return
-
-    current["codex"] = bundled_codex
-    try:
-        config_path.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
-        pass
 
 
 class MainWindow(
@@ -104,7 +66,10 @@ class MainWindow(
         background_task_runner: BackgroundTaskRunner,
         device_catalog: DeviceCatalog,
         wav_recorder_factory: WavRecorderFactory,
-        codex_request_use_case: CodexRequestUseCase,
+        assistant_service: AssistantApplicationService,
+        transcription_startup_service: TranscriptionStartupService,
+        config_repository: ConfigRepository,
+        transcript_store: TranscriptStore,
         stop_asr_use_case: StopAsrSessionUseCase,
         offline_pass_use_case: OfflinePassUseCase,
     ):
@@ -117,7 +82,6 @@ class MainWindow(
         else:
             self.project_root = Path(__file__).resolve().parents[1]
         self.config_path = self.project_root / "config.json"
-        ensure_runtime_config(self.project_root, self.config_path)
 
         self.fmt = AudioFormat(sample_rate=48000, channels=2, dtype="float32", blocksize=1024)
 
@@ -135,7 +99,10 @@ class MainWindow(
         self.background_task_runner = background_task_runner
         self.device_catalog = device_catalog
         self.wav_recorder_factory = wav_recorder_factory
-        self.codex_request_use_case = codex_request_use_case
+        self.assistant_service = assistant_service
+        self.transcription_startup_service = transcription_startup_service
+        self.config_repository = config_repository
+        self.transcript_store = transcript_store
         self.stop_asr_use_case = stop_asr_use_case
         self.offline_pass_use_case = offline_pass_use_case
 
