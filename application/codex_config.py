@@ -32,6 +32,7 @@ class CodexSettings:
     max_log_chars: int = 24000
     command_tokens: List[str] = None  # type: ignore[assignment]
     path_hints: List[str] = None  # type: ignore[assignment]
+    context_source: str = "transcript"
     console_expanded: bool = False
     selected_profile_id: str = ""
     profiles: List[CodexProfile] = None  # type: ignore[assignment]
@@ -147,6 +148,7 @@ def parse_codex_settings(raw: Any) -> CodexSettings:
         max_log_chars=_safe_int(codex.get("max_log_chars", 24000), default=24000, lo=2000, hi=200000),
         command_tokens=parse_codex_command_tokens(codex.get("command", "codex")),
         path_hints=parse_codex_list(codex.get("path_hints", [])),
+        context_source=str(codex.get("context_source", "transcript") or "transcript").strip() or "transcript",
         console_expanded=bool(codex.get("console_expanded", False)),
         selected_profile_id=str(codex.get("selected_profile", "")).strip(),
         profiles=parse_codex_profiles(codex.get("profiles", [])),
@@ -162,6 +164,7 @@ def codex_settings_to_dict(settings: CodexSettings) -> Dict[str, Any]:
         "max_log_chars": int(settings.max_log_chars),
         "command": codex_command_config_value(settings.command_tokens),
         "path_hints": [str(x) for x in settings.path_hints if str(x).strip()],
+        "context_source": str(settings.context_source or "transcript"),
         "console_expanded": bool(settings.console_expanded),
         "selected_profile": str(settings.selected_profile_id or ""),
         "profiles": [codex_profile_to_dict(profile) for profile in settings.profiles],

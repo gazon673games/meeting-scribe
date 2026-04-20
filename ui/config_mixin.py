@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QLineEdit
 
 from application.asr_language import SUPPORTED_ASR_LANGUAGES
 from application.asr_profiles import profile_defaults
+from application.commands import SwitchProfileCommand
 from application.model_policy import ASR_MODEL_NAMES, ModelOrchestrator
 
 CONFIG_VERSION = 2
@@ -210,8 +211,10 @@ class MainWindowConfigMixin:
                 pass
 
     def _on_profile_changed(self) -> None:
-        profile = self.cmb_profile.currentText()
-        self._apply_profile_to_fields(profile, force=True)
+        self._handle_switch_profile_command(SwitchProfileCommand(profile=self.cmb_profile.currentText()))
+
+    def _handle_switch_profile_command(self, command: SwitchProfileCommand) -> None:
+        self._apply_profile_to_fields(command.profile, force=True)
 
     def _on_policy_input_changed(self) -> None:
         profile = self.cmb_profile.currentText()

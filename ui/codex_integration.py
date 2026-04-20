@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
+    QComboBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from application.asr_profiles import PROFILE_QUALITY, PROFILE_REALTIME
+from application.assistant_supervisor import AssistantFallbackSupervisor
 from application.codex_assistant import CodexExecutionSettings
 from application.codex_config import (
     CodexProfile,
@@ -28,16 +30,25 @@ from application.codex_config import (
     parse_codex_settings,
 )
 from application.codex_use_case import CodexRequestInput
+from application.commands import InvokeAssistantCommand
+from application.event_types import CodexFallbackStartedEvent, CodexResultEvent, event_from_record
+from application.job_state import AssistantJobStateMachine
 from application.model_policy import ModelOrchestrator
 
 FAST_ANSWER_LOG_CHARS = 4000
 FAST_ANSWER_TIMEOUT_S = 35
+FAST_ANSWER_FALLBACK_LOG_CHARS = 2000
+FAST_ANSWER_FALLBACK_TIMEOUT_S = 20
 SUMMARY_LOG_CHARS = 200000
 SUMMARY_TIMEOUT_S = 180
 SUMMARY_REQUEST = (
     "Summarize the whole session context. "
     "Focus on decisions, open questions, risks, and the most useful next actions."
 )
+CODEX_CONTEXT_TRANSCRIPT = "transcript"
+CODEX_CONTEXT_CURRENT_HUMAN_LOG = "current_human_log"
+CODEX_CONTEXT_LATEST_HUMAN_LOG = "latest_human_log"
+CODEX_CONTEXT_FILE_PREFIX = "human_log:"
 
 
 class CodexIntegrationMixin:
@@ -49,11 +60,13 @@ class CodexIntegrationMixin:
         self._codex_max_log_chars: int = 24000
         self._codex_command_tokens: List[str] = ["codex"]
         self._codex_path_hints: List[str] = []
+        self._codex_context_source: str = CODEX_CONTEXT_TRANSCRIPT
         self._codex_profiles: List[CodexProfile] = []
         self._codex_selected_profile_id: str = ""
         self._codex_profile_buttons: Dict[str, QPushButton] = {}
+        self._assistant_job_state = AssistantJobStateMachine()
         self._codex_busy: bool = False
-        self._codex_ui_q: "queue.Queue[dict]" = queue.Queue(maxsize=120)
+        self._codex_ui_q: "queue.Queue[object]" = queue.Queue(maxsize=120)
         self.codex_timer: Optional[QTimer] = None
 
     def _build_codex_header(self, root: QVBoxLayout) -> None:
@@ -76,6 +89,15 @@ class CodexIntegrationMixin:
 
         self.codex_profiles_row = QHBoxLayout()
         codex_layout.addLayout(self.codex_profiles_row)
+
+        context_row = QHBoxLayout()
+        context_row.addWidget(QLabel("Context:"))
+        self.cmb_codex_context = QComboBox()
+        context_row.addWidget(self.cmb_codex_context, 1)
+        self.btn_codex_context_refresh = QPushButton("Refresh")
+        context_row.addWidget(self.btn_codex_context_refresh, 0)
+        codex_layout.addLayout(context_row)
+        self._refresh_codex_context_sources()
 
         codex_actions_row = QHBoxLayout()
         self.btn_codex_answer = QPushButton("Answer")
@@ -112,6 +134,8 @@ class CodexIntegrationMixin:
         self.btn_codex_toggle.clicked.connect(self._toggle_codex_console)
         self.btn_codex_answer.clicked.connect(self._on_codex_answer_clicked)
         self.btn_codex_summary.clicked.connect(self._on_codex_summary_clicked)
+        self.btn_codex_context_refresh.clicked.connect(self._refresh_codex_context_sources)
+        self.cmb_codex_context.currentIndexChanged.connect(self._on_codex_context_changed)
         self.btn_codex_send.clicked.connect(self._on_codex_send_clicked)
         self.txt_codex_input.returnPressed.connect(self._on_codex_send_clicked)
 
@@ -120,6 +144,8 @@ class CodexIntegrationMixin:
         self.btn_codex_send.setEnabled(bool(enabled))
         self.btn_codex_answer.setEnabled(bool(enabled))
         self.btn_codex_summary.setEnabled(bool(enabled))
+        self.cmb_codex_context.setEnabled(bool(enabled))
+        self.btn_codex_context_refresh.setEnabled(bool(enabled))
 
     def _start_codex_timer(self) -> None:
         self.codex_timer = QTimer(self)
@@ -146,6 +172,7 @@ class CodexIntegrationMixin:
             max_log_chars=int(self._codex_max_log_chars),
             command_tokens=list(self._codex_command_tokens),
             path_hints=list(self._codex_path_hints),
+            context_source=self._codex_context_source_from_ui(),
             console_expanded=bool(self.btn_codex_toggle.isChecked()),
             selected_profile_id=str(self._codex_selected_profile_id or ""),
             profiles=list(self._codex_profiles),
@@ -158,6 +185,7 @@ class CodexIntegrationMixin:
         self._codex_max_log_chars = int(settings.max_log_chars)
         self._codex_command_tokens = list(settings.command_tokens)
         self._codex_path_hints = list(settings.path_hints)
+        self._set_codex_context_source(settings.context_source)
         self._codex_profiles = list(settings.profiles)
 
         self._refresh_codex_profile_buttons()
@@ -218,6 +246,57 @@ class CodexIntegrationMixin:
         if mark_dirty:
             self._mark_config_dirty()
 
+    def _refresh_codex_context_sources(self) -> None:
+        selected = self._codex_context_source_from_ui(default=self._codex_context_source)
+        self.cmb_codex_context.blockSignals(True)
+        self.cmb_codex_context.clear()
+        self.cmb_codex_context.addItem("Current transcript", CODEX_CONTEXT_TRANSCRIPT)
+        self.cmb_codex_context.addItem("Current session human log", CODEX_CONTEXT_CURRENT_HUMAN_LOG)
+        self.cmb_codex_context.addItem("Latest human log", CODEX_CONTEXT_LATEST_HUMAN_LOG)
+
+        logs_dir = self.project_root / "human_logs"
+        try:
+            files = [x for x in logs_dir.glob("chat_*.txt") if x.is_file()]
+            files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        except Exception:
+            files = []
+
+        for path in files[:30]:
+            self.cmb_codex_context.addItem(f"Log: {path.name}", f"{CODEX_CONTEXT_FILE_PREFIX}{path.name}")
+
+        self._set_codex_context_source(selected, mark_dirty=False)
+        self.cmb_codex_context.blockSignals(False)
+
+    def _codex_context_source_from_ui(self, default: str = CODEX_CONTEXT_TRANSCRIPT) -> str:
+        combo = getattr(self, "cmb_codex_context", None)
+        if combo is None:
+            return str(default or CODEX_CONTEXT_TRANSCRIPT)
+        data = combo.currentData()
+        return str(data or default or CODEX_CONTEXT_TRANSCRIPT)
+
+    def _set_codex_context_source(self, source: str, *, mark_dirty: bool = False) -> None:
+        wanted = str(source or CODEX_CONTEXT_TRANSCRIPT)
+        idx = self.cmb_codex_context.findData(wanted)
+        if idx < 0 and wanted.startswith(CODEX_CONTEXT_FILE_PREFIX):
+            name = Path(wanted[len(CODEX_CONTEXT_FILE_PREFIX):]).name
+            path = self.project_root / "human_logs" / name
+            if path.exists():
+                self.cmb_codex_context.addItem(f"Log: {path.name}", f"{CODEX_CONTEXT_FILE_PREFIX}{path.name}")
+                idx = self.cmb_codex_context.findData(f"{CODEX_CONTEXT_FILE_PREFIX}{path.name}")
+            else:
+                idx = self.cmb_codex_context.findData(CODEX_CONTEXT_LATEST_HUMAN_LOG)
+        if idx < 0:
+            idx = self.cmb_codex_context.findData(CODEX_CONTEXT_TRANSCRIPT)
+        if idx >= 0:
+            self.cmb_codex_context.setCurrentIndex(idx)
+        self._codex_context_source = self._codex_context_source_from_ui(default=wanted)
+        if mark_dirty:
+            self._mark_config_dirty()
+
+    def _on_codex_context_changed(self) -> None:
+        self._codex_context_source = self._codex_context_source_from_ui()
+        self._mark_config_dirty()
+
     def _apply_codex_console_visibility(self, *, expanded: bool) -> None:
         show = bool(self._codex_enabled and expanded)
         self.grp_codex.setVisible(show)
@@ -266,11 +345,22 @@ class CodexIntegrationMixin:
         return self._get_selected_codex_profile()
 
     def _set_codex_busy(self, busy: bool) -> None:
-        self._codex_busy = bool(busy)
+        if busy and not self._assistant_job_state.is_busy:
+            self._assistant_job_state.begin()
+        elif not busy and self._assistant_job_state.is_busy:
+            self._assistant_job_state.finish()
+        self._codex_busy = self._assistant_job_state.is_busy
         can_send = bool(self._codex_enabled and (not self._codex_busy) and len(self._codex_profiles) > 0)
         self._set_codex_inputs_enabled(can_send)
         if self._codex_enabled:
             self.lbl_codex_status.setText("busy..." if self._codex_busy else "idle")
+
+    def _set_codex_fallback_active(self) -> None:
+        self._assistant_job_state.begin_fallback()
+        self._codex_busy = True
+        self._set_codex_inputs_enabled(False)
+        if self._codex_enabled:
+            self.lbl_codex_status.setText("fallback...")
 
     def _on_codex_send_clicked(self) -> None:
         req = (self.txt_codex_input.text() or "").strip()
@@ -289,6 +379,8 @@ class CodexIntegrationMixin:
             source_label="answer",
             max_log_chars=FAST_ANSWER_LOG_CHARS,
             timeout_s=FAST_ANSWER_TIMEOUT_S,
+            fallback_max_log_chars=FAST_ANSWER_FALLBACK_LOG_CHARS,
+            fallback_timeout_s=FAST_ANSWER_FALLBACK_TIMEOUT_S,
         )
 
     def _on_codex_summary_clicked(self) -> None:
@@ -309,6 +401,8 @@ class CodexIntegrationMixin:
         source_label: str,
         max_log_chars: Optional[int] = None,
         timeout_s: Optional[int] = None,
+        fallback_max_log_chars: Optional[int] = None,
+        fallback_timeout_s: Optional[int] = None,
     ) -> None:
         if not self._codex_enabled:
             return
@@ -324,16 +418,60 @@ class CodexIntegrationMixin:
             self._append_codex_line(f"[{self._fmt_ts(time.time())}] no codex profile configured")
             return
 
-        self._append_codex_line(f"[{self._fmt_ts(time.time())}] {source_label} ({profile.label}): {req}")
+        context_text, human_log_path, human_log_fh, context_label = self._resolve_codex_context()
+        command = InvokeAssistantCommand(
+            profile=profile,
+            request_text=req,
+            source_label=source_label,
+            context_source=self._codex_context_source_from_ui(),
+            context_label=context_label,
+            context_text=context_text,
+            human_log_path=human_log_path,
+            human_log_fh=human_log_fh,
+            max_log_chars=max_log_chars,
+            timeout_s=timeout_s,
+            fallback_max_log_chars=fallback_max_log_chars,
+            fallback_timeout_s=fallback_timeout_s,
+        )
+
+        self._append_codex_line(
+            f"[{self._fmt_ts(time.time())}] {source_label} ({profile.label}, {command.context_label}): {req}"
+        )
         self._set_codex_busy(True)
 
         self.background_task_runner.start(
             name="codex-helper-worker",
             target=self._run_codex_exec_worker,
-            args=(profile, req, max_log_chars, timeout_s),
+            args=(command,),
         )
 
-    def _codex_push_event(self, ev: Dict[str, Any]) -> None:
+    def _resolve_codex_context(self) -> tuple[Optional[str], Optional[Path], Any, str]:
+        source = self._codex_context_source_from_ui()
+        self._codex_context_source = source
+
+        if source == CODEX_CONTEXT_TRANSCRIPT:
+            return self.txt_tr.toPlainText(), None, None, "current transcript"
+
+        if source == CODEX_CONTEXT_CURRENT_HUMAN_LOG:
+            if self._human_log_path is not None:
+                try:
+                    if self._human_log_fh is not None:
+                        self._human_log_fh.flush()
+                except Exception:
+                    pass
+                return None, Path(self._human_log_path), self._human_log_fh, "current human log"
+            return "", None, None, "current human log (empty)"
+
+        if source.startswith(CODEX_CONTEXT_FILE_PREFIX):
+            name = Path(source[len(CODEX_CONTEXT_FILE_PREFIX):]).name
+            path = self.project_root / "human_logs" / name
+            if not path.exists():
+                return "", None, None, f"human log {name} (missing)"
+            return None, path, None, f"human log {name}"
+
+        return None, None, None, "latest human log"
+
+    def _codex_push_event(self, ev: object) -> None:
         try:
             self._codex_ui_q.put_nowait(ev)
         except queue.Full:
@@ -346,71 +484,98 @@ class CodexIntegrationMixin:
             except Exception:
                 pass
 
-    def _run_codex_exec_worker(
-        self,
-        profile: CodexProfile,
-        original_cmd: str,
-        max_log_chars: Optional[int] = None,
-        timeout_s: Optional[int] = None,
-    ) -> None:
+    def _run_codex_exec_worker(self, command: InvokeAssistantCommand) -> None:
         use_case = getattr(self, "codex_request_use_case", None)
         if use_case is None:
             self._codex_push_event(
-                {
-                    "type": "codex_result",
-                    "ok": False,
-                    "profile": profile.label,
-                    "cmd": original_cmd,
-                    "text": "codex request use case is not configured",
-                    "dt_s": 0.0,
-                }
+                CodexResultEvent(
+                    ok=False,
+                    profile=command.profile.label,
+                    cmd=command.request_text,
+                    text="codex request use case is not configured",
+                    dt_s=0.0,
+                )
             )
             return
 
-        result = use_case.execute(
-            CodexRequestInput(
-                user_text=original_cmd,
-                profile=profile,
-                project_root=self.project_root,
-                human_log_path=Path(self._human_log_path) if self._human_log_path is not None else None,
-                human_log_fh=self._human_log_fh,
-                max_log_chars=int(max_log_chars if max_log_chars is not None else self._codex_max_log_chars),
-                answer_keyword=self._codex_answer_keyword,
-                execution_settings=CodexExecutionSettings(
-                    command_tokens=list(self._codex_command_tokens),
-                    path_hints=list(self._codex_path_hints),
-                    proxy=str(self._codex_proxy or ""),
-                    timeout_s=int(timeout_s if timeout_s is not None else self._codex_timeout_s),
-                ),
-            )
+        attempts = AssistantFallbackSupervisor().build_attempts(
+            max_log_chars=command.max_log_chars,
+            timeout_s=command.timeout_s,
+            fallback_max_log_chars=command.fallback_max_log_chars,
+            fallback_timeout_s=command.fallback_timeout_s,
         )
+        result = None
+        first_error = ""
+        for attempt in attempts:
+            if attempt.fallback:
+                self._codex_push_event(
+                    CodexFallbackStartedEvent(
+                        profile=command.profile.label,
+                        cmd=command.request_text,
+                        reason=first_error or "primary attempt failed",
+                    )
+                )
+
+            result = use_case.execute(
+                CodexRequestInput(
+                    user_text=command.request_text,
+                    profile=command.profile,
+                    project_root=self.project_root,
+                    human_log_path=command.human_log_path,
+                    human_log_fh=command.human_log_fh,
+                    max_log_chars=int(
+                        attempt.max_log_chars if attempt.max_log_chars is not None else self._codex_max_log_chars
+                    ),
+                    answer_keyword=self._codex_answer_keyword,
+                    context_text=command.context_text,
+                    execution_settings=CodexExecutionSettings(
+                        command_tokens=list(self._codex_command_tokens),
+                        path_hints=list(self._codex_path_hints),
+                        proxy=str(self._codex_proxy or ""),
+                        timeout_s=int(attempt.timeout_s if attempt.timeout_s is not None else self._codex_timeout_s),
+                    ),
+                )
+            )
+            if result.ok or not attempt.fallback:
+                first_error = result.text
+            if result.ok:
+                break
+
+        if result is None:
+            return
         self._codex_push_event(
-            {
-                "type": "codex_result",
-                "ok": bool(result.ok),
-                "profile": result.profile,
-                "cmd": result.cmd,
-                "text": result.text,
-                "dt_s": float(result.dt_s),
-            }
+            CodexResultEvent(
+                ok=bool(result.ok),
+                profile=result.profile,
+                cmd=result.cmd,
+                text=result.text,
+                dt_s=float(result.dt_s),
+            )
         )
 
     def _drain_codex_ui_events(self, limit: int = 8) -> None:
         n = 0
         while n < limit:
             try:
-                ev = self._codex_ui_q.get_nowait()
+                raw = self._codex_ui_q.get_nowait()
             except queue.Empty:
                 break
             n += 1
 
-            if str(ev.get("type", "")) != "codex_result":
+            ev = event_from_record(raw)
+            if isinstance(ev, CodexFallbackStartedEvent):
+                reason = str(ev.reason).strip()
+                self._append_codex_line(f"[{self._fmt_ts(time.time())}] codex fallback: {reason}")
+                self._set_codex_fallback_active()
                 continue
 
-            ok = bool(ev.get("ok", False))
-            profile = str(ev.get("profile", ""))
-            dt_s = float(ev.get("dt_s", 0.0))
-            text = str(ev.get("text", "")).strip()
+            if not isinstance(ev, CodexResultEvent):
+                continue
+
+            ok = bool(ev.ok)
+            profile = str(ev.profile)
+            dt_s = float(ev.dt_s)
+            text = str(ev.text).strip()
             tss = self._fmt_ts(time.time())
 
             if ok:

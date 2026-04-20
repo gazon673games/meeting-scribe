@@ -88,7 +88,7 @@ class MainWindow(
     WindowHelpersMixin,
     QWidget,
 ):
-    background_event = Signal(dict)
+    background_event = Signal(object)
 
     PROFILE_REALTIME = ASR_PROFILE_REALTIME
     PROFILE_BALANCED = ASR_PROFILE_BALANCED
@@ -123,7 +123,7 @@ class MainWindow(
 
         self.out_q: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=400)
         self.tap_q: "queue.Queue[dict]" = queue.Queue(maxsize=200)
-        self.asr_ui_q: "queue.Queue[dict]" = queue.Queue(maxsize=600)
+        self.asr_ui_q: "queue.Queue[object]" = queue.Queue(maxsize=600)
 
         self.engine = audio_runtime_factory.create(format=self.fmt, output_queue=self.out_q, tap_queue=self.tap_q)
         self.rows: dict[str, SourceRow] = {}

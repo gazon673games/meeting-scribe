@@ -5,6 +5,14 @@ from pathlib import Path
 from typing import Any, Optional
 
 
+def trim_text_tail(text: str, *, max_chars: int) -> str:
+    max_chars = max(2000, int(max_chars))
+    out = str(text or "")
+    if len(out) > max_chars:
+        out = "[context tail]\n" + out[-max_chars:]
+    return out.strip()
+
+
 def read_human_log_tail(
     *,
     project_root: Path,
@@ -36,10 +44,7 @@ def read_human_log_tail(
         return ""
 
     text = raw.decode("utf-8", errors="ignore")
-    if len(text) > max_chars:
-        text = text[-max_chars:]
-        text = "[log tail]\n" + text
-    return text.strip()
+    return trim_text_tail(text, max_chars=max_chars).replace("[context tail]", "[log tail]", 1)
 
 
 def _resolve_human_log_path(*, project_root: Path, human_log_path: Optional[Path]) -> Optional[Path]:

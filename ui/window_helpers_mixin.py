@@ -5,6 +5,8 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QLabel, QLineEdit, QProgressBar
 
+from application.event_types import SourceErrorEvent
+
 
 class WindowHelpersMixin:
     def _set_status(self, text: str) -> None:
@@ -26,12 +28,7 @@ class WindowHelpersMixin:
             edit.setText(text)
 
     def _on_source_error(self, source: str, error: str) -> None:
-        ev = {
-            "type": "source_error",
-            "source": str(source),
-            "error": str(error),
-            "ts": time.time(),
-        }
+        ev = SourceErrorEvent(source=str(source), error=str(error), ts=time.time())
         try:
             self.asr_ui_q.put_nowait(ev)
         except Exception:
