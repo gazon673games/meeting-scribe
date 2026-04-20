@@ -70,7 +70,14 @@ class MainWindowLayoutMixin:
 
         asr_row.addWidget(QLabel("Model:"))
         self.cmb_model = QComboBox()
-        self.cmb_model.addItems(["large-v3", "medium", "small"])
+        self.cmb_model.addItems([
+            "large-v3",
+            "large-v3-turbo",
+            "bzikst/faster-whisper-large-v3-russian",
+            "bzikst/faster-whisper-podlodka-turbo",
+            "medium",
+            "small",
+        ])
         self.cmb_model.setCurrentText("medium")
         asr_row.addWidget(self.cmb_model)
 
