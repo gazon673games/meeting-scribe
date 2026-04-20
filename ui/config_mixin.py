@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any, Dict
 
 from PySide6.QtWidgets import QCheckBox, QComboBox, QLineEdit
@@ -38,9 +37,7 @@ class MainWindowConfigMixin:
         self._cfg_save_timer.stop()
         try:
             cfg = self._build_config_from_ui()
-            tmp = self.config_path.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp.replace(self.config_path)
+            self.config_repository.write(cfg)
         except Exception:
             pass
 
@@ -79,10 +76,10 @@ class MainWindowConfigMixin:
         }
 
     def _load_config_into_ui(self) -> None:
-        if not self.config_path.exists():
+        if not self.config_repository.exists():
             return
         try:
-            cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
+            cfg = self.config_repository.read()
         except Exception:
             return
 

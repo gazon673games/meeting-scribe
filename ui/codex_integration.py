@@ -20,20 +20,18 @@ from PySide6.QtWidgets import (
 )
 
 from application.asr_profiles import PROFILE_QUALITY, PROFILE_REALTIME
-from application.assistant_supervisor import AssistantFallbackSupervisor
-from application.codex_assistant import CodexExecutionSettings
 from application.codex_config import (
     CodexProfile,
     CodexSettings,
     codex_settings_to_dict,
     parse_codex_settings,
 )
-from application.codex_use_case import CodexRequestInput
 from application.commands import InvokeAssistantCommand
 from application.event_bus import QueuedEventBus
 from application.event_types import CodexFallbackStartedEvent, CodexResultEvent
-from application.job_state import AssistantJobStateMachine
 from application.model_policy import ModelOrchestrator
+from assistant.application.service import AssistantRuntimeOptions
+from assistant.domain.aggregate import AssistantJobAggregate
 
 FAST_ANSWER_LOG_CHARS = 4000
 FAST_ANSWER_TIMEOUT_S = 35
@@ -64,7 +62,7 @@ class CodexIntegrationMixin:
         self._codex_profiles: List[CodexProfile] = []
         self._codex_selected_profile_id: str = ""
         self._codex_profile_buttons: Dict[str, QPushButton] = {}
-        self._assistant_job_state = AssistantJobStateMachine()
+        self._assistant_job_state = AssistantJobAggregate()
         self._assistant_supervision_report = None
         self._codex_busy: bool = False
         self._codex_event_bus = QueuedEventBus(maxsize=120)
@@ -352,7 +350,8 @@ class CodexIntegrationMixin:
 
     def _set_codex_busy(self, busy: bool) -> None:
         if busy and not self._assistant_job_state.is_busy:
-            self._assistant_job_state.begin()
+            profile = getattr(self, "_codex_selected_profile_id", "")
+            self._assistant_job_state.begin(profile=str(profile), source_label="ui")
         elif not busy and self._assistant_job_state.is_busy:
             self._assistant_job_state.finish()
         self._codex_busy = self._assistant_job_state.is_busy
@@ -362,7 +361,7 @@ class CodexIntegrationMixin:
             self.lbl_codex_status.setText("busy..." if self._codex_busy else "idle")
 
     def _set_codex_fallback_active(self) -> None:
-        self._assistant_job_state.begin_fallback()
+        self._assistant_job_state.begin_fallback(reason="codex fallback")
         self._codex_busy = True
         self._set_codex_inputs_enabled(False)
         if self._codex_enabled:
@@ -467,6 +466,7 @@ class CodexIntegrationMixin:
             return self.txt_tr.toPlainText(), None, None, "current transcript"
 
         if source == CODEX_CONTEXT_CURRENT_HUMAN_LOG:
+            self._sync_transcript_store_refs()
             if self._human_log_path is not None:
                 try:
                     if self._human_log_fh is not None:
@@ -489,78 +489,33 @@ class CodexIntegrationMixin:
         self._codex_event_bus.publish(ev)
 
     def _run_codex_exec_worker(self, command: InvokeAssistantCommand) -> None:
-        use_case = getattr(self, "codex_request_use_case", None)
-        if use_case is None:
+        service = getattr(self, "assistant_service", None)
+        if service is None:
             self._codex_push_event(
                 CodexResultEvent(
                     ok=False,
                     profile=command.profile.label,
                     cmd=command.request_text,
-                    text="codex request use case is not configured",
+                    text="assistant service is not configured",
                     dt_s=0.0,
                 )
             )
             return
 
-        supervisor = AssistantFallbackSupervisor()
-        attempts = supervisor.build_attempts(
-            max_log_chars=command.max_log_chars,
-            timeout_s=command.timeout_s,
-            fallback_max_log_chars=command.fallback_max_log_chars,
-            fallback_timeout_s=command.fallback_timeout_s,
+        service.execute(
+            command,
+            options=AssistantRuntimeOptions(
+                project_root=self.project_root,
+                default_max_log_chars=int(self._codex_max_log_chars),
+                answer_keyword=str(self._codex_answer_keyword),
+                command_tokens=list(self._codex_command_tokens),
+                path_hints=list(self._codex_path_hints),
+                proxy=str(self._codex_proxy or ""),
+                default_timeout_s=int(self._codex_timeout_s),
+            ),
+            publish_event=self._codex_push_event,
         )
-        result = None
-        first_error = ""
-        errors: List[str] = []
-        for attempt in attempts:
-            if attempt.fallback:
-                self._codex_push_event(
-                    CodexFallbackStartedEvent(
-                        profile=command.profile.label,
-                        cmd=command.request_text,
-                        reason=first_error or "primary attempt failed",
-                    )
-                )
-
-            result = use_case.execute(
-                CodexRequestInput(
-                    user_text=command.request_text,
-                    profile=command.profile,
-                    project_root=self.project_root,
-                    human_log_path=command.human_log_path,
-                    human_log_fh=command.human_log_fh,
-                    max_log_chars=int(
-                        attempt.max_log_chars if attempt.max_log_chars is not None else self._codex_max_log_chars
-                    ),
-                    answer_keyword=self._codex_answer_keyword,
-                    context_text=command.context_text,
-                    execution_settings=CodexExecutionSettings(
-                        command_tokens=list(self._codex_command_tokens),
-                        path_hints=list(self._codex_path_hints),
-                        proxy=str(self._codex_proxy or ""),
-                        timeout_s=int(attempt.timeout_s if attempt.timeout_s is not None else self._codex_timeout_s),
-                    ),
-                )
-            )
-            if result.ok:
-                self._assistant_supervision_report = supervisor.success_report(attempt, errors)
-                break
-            first_error = result.text
-            errors.append(f"{attempt.label}: {result.text}")
-
-        if result is None:
-            return
-        if not result.ok:
-            self._assistant_supervision_report = supervisor.failure_report(errors)
-        self._codex_push_event(
-            CodexResultEvent(
-                ok=bool(result.ok),
-                profile=result.profile,
-                cmd=result.cmd,
-                text=result.text,
-                dt_s=float(result.dt_s),
-            )
-        )
+        self._assistant_supervision_report = service.last_supervision_report
 
     def _drain_codex_ui_events(self, limit: int = 8) -> None:
         self._codex_event_bus.drain(limit=int(limit))

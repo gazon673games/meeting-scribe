@@ -7,6 +7,7 @@ from pathlib import Path
 from application.codex_assistant import CodexAssistantRequest, CodexAssistantResult, CodexExecutionSettings
 from application.codex_config import CodexProfile
 from application.codex_use_case import CodexRequestInput, CodexRequestUseCase
+from transcription.infrastructure.file_transcript_context import FileTranscriptContextReader
 
 
 class _CapturingAssistant:
@@ -61,7 +62,7 @@ class CodexContextTests(unittest.TestCase):
         (logs / "chat_old.txt").write_text("old interview question", encoding="utf-8")
 
         assistant, request = self._request(root, context_text="")
-        CodexRequestUseCase(assistant).execute(request)
+        CodexRequestUseCase(assistant, FileTranscriptContextReader()).execute(request)
 
         self.assertIn("(log is empty)", assistant.last_prompt)
         self.assertNotIn("old interview question", assistant.last_prompt)
@@ -73,7 +74,7 @@ class CodexContextTests(unittest.TestCase):
         (logs / "chat_old.txt").write_text("old interview question", encoding="utf-8")
 
         assistant, request = self._request(root, context_text="current transcript question")
-        CodexRequestUseCase(assistant).execute(request)
+        CodexRequestUseCase(assistant, FileTranscriptContextReader()).execute(request)
 
         self.assertIn("current transcript question", assistant.last_prompt)
         self.assertNotIn("old interview question", assistant.last_prompt)
@@ -85,7 +86,7 @@ class CodexContextTests(unittest.TestCase):
         (logs / "chat_old.txt").write_text("old interview question", encoding="utf-8")
 
         assistant, request = self._request(root, context_text=None)
-        CodexRequestUseCase(assistant).execute(request)
+        CodexRequestUseCase(assistant, FileTranscriptContextReader()).execute(request)
 
         self.assertIn("old interview question", assistant.last_prompt)
 
