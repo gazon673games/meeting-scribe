@@ -48,6 +48,25 @@ class EventTypesTests(unittest.TestCase):
         decoded = event_from_record(record)
         self.assertIsInstance(decoded, CodexResultEvent)
 
+    def test_asr_started_event_keeps_runtime_diagnostics(self) -> None:
+        event = event_from_record(
+            {
+                "type": "asr_started",
+                "model": "large-v3",
+                "mode": "split",
+                "language": "ru",
+                "device": "cuda",
+                "compute_type": "float16",
+                "beam_size": 5,
+                "overload_strategy": "drop_old",
+                "ts": 2.0,
+            }
+        )
+
+        self.assertEqual(event_to_record(event)["device"], "cuda")
+        self.assertEqual(event_to_record(event)["compute_type"], "float16")
+        self.assertEqual(event_to_record(event)["beam_size"], 5)
+
     def test_asr_publisher_logs_dict_and_publishes_typed_event(self) -> None:
         q: queue.Queue[object] = queue.Queue()
         logger = _Logger()
