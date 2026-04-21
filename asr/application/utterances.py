@@ -1,12 +1,33 @@
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import TYPE_CHECKING, Dict, List, Tuple
+
+if TYPE_CHECKING:
+    from asr.application.pipeline_config import ASRPipelineSettings
 
 from asr.domain.utterances import UtteranceState
 from asr.domain.text import normalize_text
 
 
 class UtteranceAggregator:
+    @classmethod
+    def from_settings(cls, settings: ASRPipelineSettings) -> UtteranceAggregator:
+        return cls(
+            enabled=bool(settings.utterance_enabled),
+            gap_s=float(settings.utterance_gap_s),
+            max_s=float(settings.utterance_max_s),
+            flush_s=float(settings.utterance_flush_s),
+            log_speaker_labels=bool(settings.log_speaker_labels),
+        )
+
+    def to_event_dict(self) -> dict:
+        return {
+            "utterance_enabled": self.enabled,
+            "utterance_gap_s": self.gap_s,
+            "utterance_max_s": self.max_s,
+            "utterance_flush_s": self.flush_s,
+        }
+
     def __init__(
         self,
         *,

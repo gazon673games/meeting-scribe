@@ -21,6 +21,7 @@ from asr.application.ports import AsrLoggerPort, RealtimeWorkerRunnerPort, StopS
 from asr.application.segmentation import AudioSegmenterPort, SegmenterConfig
 from asr.application.transcription_worker import TranscriptionWorkerRuntime
 from asr.application.utterances import UtteranceAggregator
+from asr.application.worker_config import TranscriptionWorkerConfig
 from asr.domain.segments import Segment
 
 
@@ -48,7 +49,7 @@ class ASRRuntimeGraph:
         self.segmenter.reset_runtime()
         self.worker.reset_runtime()
 
-        self.events.log(self.start_event(settings=settings, session_id=session_id))
+        self.events.log(self._build_started_event(settings=settings, session_id=session_id))
         self.ingest_worker = self.worker_runner.start_worker(name="asr-ingest", target=self.ingest.run_safe)
         self.transcription_worker = self.worker_runner.start_worker(
             name="asr-worker",
@@ -80,8 +81,7 @@ class ASRRuntimeGraph:
             overlap_ms=settings.overlap_ms,
         )
 
-    def start_event(self, *, settings: ASRPipelineSettings, session_id: str) -> dict:
-        cfg = self.segmenter_config
+    def _build_started_event(self, *, settings: ASRPipelineSettings, session_id: str) -> dict:
         return {
             "type": "asr_started",
             "session_id": session_id,
@@ -95,34 +95,14 @@ class ASRRuntimeGraph:
             "max_segment_s": settings.max_segment_s,
             "overlap_ms": settings.overlap_ms,
             "overload_strategy": self.overload.strategy,
-            "vad": {
-                "energy_threshold": cfg.vad_energy_threshold,
-                "hangover_ms": cfg.vad_hangover_ms,
-                "min_speech_ms": cfg.vad_min_speech_ms,
-                "band_ratio_min": cfg.vad_band_ratio_min,
-                "voiced_min": cfg.vad_voiced_min,
-                "pre_speech_ms": cfg.vad_pre_speech_ms,
-                "min_end_silence_ms": cfg.vad_min_end_silence_ms,
-                "min_segment_ms": cfg.min_segment_ms,
-            },
-            "overload": {
-                "enter_qsize": self.overload.enter_qsize,
-                "exit_qsize": self.overload.exit_qsize,
-                "hard_drop_qsize": self.overload.hard_qsize,
-                "hold_s": self.overload.hold_s,
-                "beam_cap": self.overload.beam_cap,
-                "overlap_ms": self.overload.overlap_ms,
-                "max_segment_s": self.overload.max_segment_s,
-            },
+            "vad": self.segmenter_config.to_event_dict(),
+            "overload": self.overload.to_event_dict(),
             "diarization_enabled": self.diarization.enabled,
             "diar_backend": self.diarization.backend,
-            "agc_enabled": cfg.agc_enabled,
+            "agc_enabled": self.segmenter_config.agc_enabled,
             "text_dedup_enabled": settings.text_dedup_enabled,
             "adaptive_beam_enabled": settings.adaptive_beam_enabled,
-            "utterance_enabled": self.utterances.enabled,
-            "utterance_gap_s": self.utterances.gap_s,
-            "utterance_max_s": self.utterances.max_s,
-            "utterance_flush_s": self.utterances.flush_s,
+            **self.utterances.to_event_dict(),
             "log_rotation": {"max_bytes": self.logger.max_bytes, "backup_count": self.logger.backup_count},
             "log_speaker_labels": settings.log_speaker_labels,
             "asr_language": settings.asr_language,
@@ -143,6 +123,7 @@ def build_runtime_graph(
 ) -> ASRRuntimeGraph:
     stop = dependencies.worker_runner.create_stop_signal()
     segment_queue: "queue.Queue[Segment]" = queue.Queue(maxsize=50)
+
     logger = dependencies.logger_factory(
         root=project_root,
         session_id=session_id,
@@ -150,38 +131,20 @@ def build_runtime_graph(
         max_bytes=int(settings.log_max_bytes),
         backup_count=int(settings.log_backup_count),
     )
-    events = ASREventPublisher(logger=logger, event_queue=event_queue if event_queue is not None else ui_queue)
-    overload = OverloadController(
-        enter_qsize=int(settings.overload_enter_qsize),
-        exit_qsize=int(settings.overload_exit_qsize),
-        hard_qsize=int(settings.overload_hard_drop_qsize),
-        hold_s=float(settings.overload_hold_s),
-        beam_cap=max(1, int(settings.overload_beam_cap)),
-        overlap_ms=float(settings.overload_overlap_ms),
-        max_segment_s=float(settings.overload_max_segment_s),
-        strategy=settings.normalized_overload_strategy,
+    events = ASREventPublisher(
+        logger=logger,
+        event_queue=event_queue if event_queue is not None else ui_queue,
     )
+
+    overload = OverloadController.from_settings(settings)
+    beam_controller = AdaptiveBeam.from_settings(settings)
+    utterances = UtteranceAggregator.from_settings(settings)
+    metrics = ASRMetrics.from_settings(settings)
+    segmenter_config = build_segmenter_config(settings)
+
     diarization = dependencies.diarization_factory(
         config=build_diarization_config(settings, project_root=project_root)
     )
-    max_beam = settings.resolved_adaptive_beam_max
-    beam_controller = AdaptiveBeam(
-        min_beam=max(1, int(settings.adaptive_beam_min)),
-        max_beam=max_beam,
-        cur_beam=max(1, min(int(settings.beam_size), max_beam)),
-    )
-    utterances = UtteranceAggregator(
-        enabled=bool(settings.utterance_enabled),
-        gap_s=float(settings.utterance_gap_s),
-        max_s=float(settings.utterance_max_s),
-        flush_s=float(settings.utterance_flush_s),
-        log_speaker_labels=bool(settings.log_speaker_labels),
-    )
-    metrics = ASRMetrics(
-        latency_window=int(settings.metrics_latency_window),
-        emit_interval_s=float(settings.metrics_emit_interval_s),
-    )
-    segmenter_config = build_segmenter_config(settings)
 
     def segmentation_params() -> Tuple[float, float, float]:
         return overload.segmentation_params(
@@ -199,6 +162,7 @@ def build_runtime_graph(
         segmentation_params=segmentation_params,
     )
     worker = TranscriptionWorkerRuntime(
+        config=TranscriptionWorkerConfig.from_settings(settings),
         segment_queue=segment_queue,
         stop_event=stop,
         log_event=events.log,
@@ -207,17 +171,7 @@ def build_runtime_graph(
         beam_controller=beam_controller,
         diarization=diarization,
         utterances=utterances,
-        model_name=settings.asr_model_name,
-        language=settings.asr_language,
-        device=settings.device,
-        compute_type=settings.compute_type,
-        beam_size=int(settings.beam_size),
-        initial_prompt=settings.asr_initial_prompt,
         asr_backend_factory=dependencies.asr_backend_factory,
-        text_dedup_enabled=bool(settings.text_dedup_enabled),
-        text_dedup_window=int(settings.text_dedup_window),
-        adaptive_beam_enabled=bool(settings.adaptive_beam_enabled),
-        log_speaker_labels=bool(settings.log_speaker_labels),
     )
     ingest = TapIngestRuntime(
         tap_queue=tap_queue,

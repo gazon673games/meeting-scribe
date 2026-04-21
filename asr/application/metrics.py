@@ -2,10 +2,20 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from typing import Deque
+from typing import TYPE_CHECKING, Deque
+
+if TYPE_CHECKING:
+    from asr.application.pipeline_config import ASRPipelineSettings
 
 
 class ASRMetrics:
+    @classmethod
+    def from_settings(cls, settings: ASRPipelineSettings) -> ASRMetrics:
+        return cls(
+            latency_window=int(settings.metrics_latency_window),
+            emit_interval_s=float(settings.metrics_emit_interval_s),
+        )
+
     def __init__(self, *, latency_window: int, emit_interval_s: float) -> None:
         self._lat_samples: Deque[float] = deque(maxlen=max(20, int(latency_window)))
         self._emit_interval_s = max(0.25, float(emit_interval_s))

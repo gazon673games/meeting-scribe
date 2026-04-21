@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
+
+if TYPE_CHECKING:
+    from asr.application.pipeline_config import ASRPipelineSettings
 
 
 @dataclass
@@ -9,6 +12,15 @@ class AdaptiveBeam:
     min_beam: int = 1
     max_beam: int = 5
     cur_beam: int = 5
+
+    @classmethod
+    def from_settings(cls, settings: ASRPipelineSettings) -> AdaptiveBeam:
+        max_beam = settings.resolved_adaptive_beam_max
+        return cls(
+            min_beam=max(1, int(settings.adaptive_beam_min)),
+            max_beam=max_beam,
+            cur_beam=max(1, min(int(settings.beam_size), max_beam)),
+        )
 
     backlog_hi: int = 12
     backlog_lo: int = 2
