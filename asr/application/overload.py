@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import TYPE_CHECKING, List, Tuple
 
 from asr.domain.types import OverloadStrategy
+
+if TYPE_CHECKING:
+    from asr.application.pipeline_config import ASRPipelineSettings
 
 
 @dataclass
@@ -26,12 +29,36 @@ class OverloadController:
     hard_active: bool = False
     hard_since_ts: float = 0.0
 
+    @classmethod
+    def from_settings(cls, settings: ASRPipelineSettings) -> OverloadController:
+        return cls(
+            enter_qsize=int(settings.overload_enter_qsize),
+            exit_qsize=int(settings.overload_exit_qsize),
+            hard_qsize=int(settings.overload_hard_drop_qsize),
+            hold_s=float(settings.overload_hold_s),
+            beam_cap=max(1, int(settings.overload_beam_cap)),
+            overlap_ms=float(settings.overload_overlap_ms),
+            max_segment_s=float(settings.overload_max_segment_s),
+            strategy=settings.normalized_overload_strategy,
+        )
+
     def reset(self) -> None:
         self.active = False
         self.since_ts = 0.0
         self.last_event_ts = 0.0
         self.hard_active = False
         self.hard_since_ts = 0.0
+
+    def to_event_dict(self) -> dict:
+        return {
+            "enter_qsize": self.enter_qsize,
+            "exit_qsize": self.exit_qsize,
+            "hard_drop_qsize": self.hard_qsize,
+            "hold_s": self.hold_s,
+            "beam_cap": self.beam_cap,
+            "overlap_ms": self.overlap_ms,
+            "max_segment_s": self.max_segment_s,
+        }
 
     def update(self, *, seg_qsize: int, beam_cur: int, lag_s: float, now: float) -> List[dict]:
         events: List[dict] = []

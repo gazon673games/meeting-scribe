@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import queue
 from dataclasses import dataclass
-from typing import Optional, Set, Tuple
+from typing import Any, Dict, Optional, Set, Tuple
 
 from audio.application.tap_config import TapConfig
+from audio.domain.formats import AudioFormat
 from audio.domain.types import TapMode
 
 
@@ -72,3 +73,23 @@ class EngineRuntimeState:
 
     def record_tap_drop(self) -> None:
         self.dropped_tap_blocks += 1
+
+    def meter_snapshot(self, fmt: AudioFormat, registry_state: Dict[str, Any]) -> dict:
+        from audio.application.engine_meters import build_meter_snapshot
+        return build_meter_snapshot(
+            fmt=fmt,
+            state=registry_state,
+            master_rms=self.master_rms,
+            master_last_ts=self.master_last_ts,
+            dropped_out_blocks=self.dropped_out_blocks,
+            dropped_tap_blocks=self.dropped_tap_blocks,
+            tap_q=self.tap_q,
+            tap_mode=self.tap_mode,
+            tap_sources_filter=self.tap_sources_filter,
+            tap_drop_threshold=self.tap_drop_threshold,
+            tap_queue_max=self.tap_queue_max,
+            autosync_enabled=self.autosync_enabled,
+            autosync_ref=self.autosync_ref,
+            autosync_target=self.autosync_target,
+            autosync_last_offset_ms=self.autosync_last_offset_ms,
+        )
