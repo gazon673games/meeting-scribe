@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from application.job_state import (
+from assistant.domain.job_state import (
     AssistantJobState,
     AssistantJobStateMachine,
-    InvalidJobTransition,
-    TranscriptionJobState,
-    TranscriptionJobStateMachine,
 )
+from shared.domain.errors import InvalidJobTransition
+from transcription.domain.job_state import TranscriptionJobState, TranscriptionJobStateMachine
 
 
 class JobStateMachineTests(unittest.TestCase):
