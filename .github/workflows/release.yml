@@ -22,7 +22,7 @@ jobs:
             artifact_suffix: windows-x64
             artifact_name: meeting-scribe-windows-x64
             python_arch: x64
-            requirements_file: requirements-build.txt
+            requirements_file: requirements/requirements-build.txt
             allow_failure: false
           - os: windows-11-arm
             artifact_suffix: windows-arm64
@@ -30,31 +30,31 @@ jobs:
             python_arch: arm64
             # ctranslate2 has no win_arm64 wheel; build without faster-whisper
             # ASR is lazy-loaded so the binary starts fine, shows error only on ASR use
-            requirements_file: requirements-build-no-asr.txt
+            requirements_file: requirements/requirements-build-no-asr.txt
             allow_failure: false
           - os: ubuntu-24.04
             artifact_suffix: linux-x64
             artifact_name: meeting-scribe-linux-x64
             python_arch: x64
-            requirements_file: requirements-build.txt
+            requirements_file: requirements/requirements-build.txt
             allow_failure: false
           - os: ubuntu-24.04-arm
             artifact_suffix: linux-arm64
             artifact_name: meeting-scribe-linux-arm64
             python_arch: arm64
-            requirements_file: requirements-build.txt
+            requirements_file: requirements/requirements-build.txt
             allow_failure: false
           - os: macos-15-intel
             artifact_suffix: macos-x64
             artifact_name: meeting-scribe-macos-x64
             python_arch: x64
-            requirements_file: requirements-build.txt
+            requirements_file: requirements/requirements-build.txt
             allow_failure: false
           - os: macos-14
             artifact_suffix: macos-arm64
             artifact_name: meeting-scribe-macos-arm64
             python_arch: arm64
-            requirements_file: requirements-build.txt
+            requirements_file: requirements/requirements-build.txt
             allow_failure: false
 
     steps:
@@ -98,7 +98,7 @@ jobs:
         run: python -m unittest discover -s tests -v
 
       - name: Build executable
-        run: python scripts/build_release.py --version "${{ github.ref_name }}" --artifact-suffix "${{ matrix.artifact_suffix }}"
+        run: python -m tools.release.build_release --version "${{ github.ref_name }}" --artifact-suffix "${{ matrix.artifact_suffix }}"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4

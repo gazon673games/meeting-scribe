@@ -17,12 +17,15 @@ Desktop app for capturing system audio and microphone input, transcribing speech
 .venv\Scripts\python.exe main.py
 ```
 
+Runtime files are kept under `.local/`.
+Model caches stay in `models/`.
+
 ## Release build
 
 Build a local Windows release archive:
 
 ```powershell
-.\scripts\build_exe.ps1 -Version dev
+.\tools\release\build_exe.ps1 -Version dev
 ```
 
 The archive is written to `dist\meeting-scribe-<version>-win64.zip`.
@@ -44,7 +47,7 @@ git push origin v0.1.0
 Minimal CLI capture example:
 
 ```powershell
-.venv\Scripts\python.exe capture_cli.py
+.venv\Scripts\python.exe -m tools.audio.capture_cli
 ```
 
 ## Notes

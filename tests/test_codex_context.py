@@ -6,6 +6,7 @@ from pathlib import Path
 
 from application.codex_assistant import CodexAssistantRequest, CodexAssistantResult, CodexExecutionSettings
 from application.codex_config import CodexProfile
+from application.local_paths import project_human_logs_dir
 from application.codex_use_case import CodexRequestInput, CodexRequestUseCase
 from transcription.infrastructure.file_transcript_context import FileTranscriptContextReader
 
@@ -57,8 +58,7 @@ class CodexContextTests(unittest.TestCase):
 
     def test_empty_current_transcript_does_not_fall_back_to_latest_human_log(self) -> None:
         root = self._project_root("empty_transcript")
-        logs = root / "human_logs"
-        logs.mkdir()
+        logs = project_human_logs_dir(root, create=True)
         (logs / "chat_old.txt").write_text("old interview question", encoding="utf-8")
 
         assistant, request = self._request(root, context_text="")
@@ -69,8 +69,7 @@ class CodexContextTests(unittest.TestCase):
 
     def test_current_transcript_is_used_when_provided(self) -> None:
         root = self._project_root("current_transcript")
-        logs = root / "human_logs"
-        logs.mkdir()
+        logs = project_human_logs_dir(root, create=True)
         (logs / "chat_old.txt").write_text("old interview question", encoding="utf-8")
 
         assistant, request = self._request(root, context_text="current transcript question")
@@ -81,8 +80,7 @@ class CodexContextTests(unittest.TestCase):
 
     def test_latest_human_log_is_still_available_when_context_text_is_not_set(self) -> None:
         root = self._project_root("latest_human_log")
-        logs = root / "human_logs"
-        logs.mkdir()
+        logs = project_human_logs_dir(root, create=True)
         (logs / "chat_old.txt").write_text("old interview question", encoding="utf-8")
 
         assistant, request = self._request(root, context_text=None)

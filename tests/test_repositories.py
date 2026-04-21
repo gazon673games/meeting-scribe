@@ -4,6 +4,7 @@ import shutil
 import unittest
 from pathlib import Path
 
+from application.local_paths import project_human_logs_dir
 from settings.infrastructure.json_config_repository import JsonConfigRepository
 from transcription.infrastructure.file_transcript_store import FileTranscriptStore
 
@@ -43,7 +44,7 @@ class RepositoryTests(unittest.TestCase):
 
         self.assertIsNotNone(path)
         assert path is not None
-        self.assertEqual(path.parent, root / "human_logs")
+        self.assertEqual(path.parent, project_human_logs_dir(root))
         self.assertIn("hello", path.read_text(encoding="utf-8"))
 
 

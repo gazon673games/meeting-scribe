@@ -3,6 +3,7 @@ __pycache__/
 
 .venv/
 .idea/
+.claude/
 
 logs/
 human_logs/
@@ -11,6 +12,8 @@ build/
 dist/
 capture_mix.wav
 tmp/
+.tmp_tests/
+probe_tmp/
 .local/
 
 .codex_tmp/

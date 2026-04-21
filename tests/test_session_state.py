@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from application.session_state import InvalidSessionTransition, SessionState, SessionStateMachine
+from session.domain.state import InvalidSessionTransition, SessionState, SessionStateMachine
 
 
 class SessionStateMachineTests(unittest.TestCase):
