@@ -8,19 +8,28 @@ from application.asr_language import SUPPORTED_ASR_LANGUAGES
 from application.asr_profiles import profile_defaults
 from application.commands import SwitchProfileCommand
 from application.model_policy import ASR_MODEL_NAMES, ModelOrchestrator
+from ui.asr_field_defs import (
+    _ASR_ALL_FIELDS,
+    _ASR_COMBO_FIELDS,
+    _ASR_CUSTOM_WIDGET_ATTRS,
+    _ASR_FLOAT_FIELDS,
+    _ASR_INT_FIELDS,
+)
 
 CONFIG_VERSION = 2
 
 
 class MainWindowConfigMixin:
+    # ── dirty tracking ─────────────────────────────────────────────────
+
     def _wire_config_change(self, w) -> None:
         try:
             if isinstance(w, QLineEdit):
-                w.textChanged.connect(lambda _t: self._mark_config_dirty())
+                w.textChanged.connect(lambda _: self._mark_config_dirty())
             elif isinstance(w, QCheckBox):
-                w.stateChanged.connect(lambda _s: self._mark_config_dirty())
+                w.stateChanged.connect(lambda _: self._mark_config_dirty())
             elif isinstance(w, QComboBox):
-                w.currentIndexChanged.connect(lambda _i: self._mark_config_dirty())
+                w.currentIndexChanged.connect(lambda _: self._mark_config_dirty())
         except Exception:
             pass
 
@@ -36,44 +45,44 @@ class MainWindowConfigMixin:
         self._cfg_dirty = False
         self._cfg_save_timer.stop()
         try:
-            cfg = self._build_config_from_ui()
-            self.config_repository.write(cfg)
+            self.config_repository.write(self._build_config_from_ui())
         except Exception:
             pass
+
+    # ── config ↔ UI ────────────────────────────────────────────────────
 
     def _build_config_from_ui(self) -> Dict[str, Any]:
         return {
             "version": CONFIG_VERSION,
-            "ui": {
-                "asr_enabled": bool(self.chk_asr.isChecked()),
-                "lang": str(self.cmb_lang.currentText()),
-                "asr_mode": int(self.cmb_asr_mode.currentIndex()),
-                "model": str(self.cmb_model.currentText()),
-                "profile": str(self.cmb_profile.currentText()),
-                "wav_enabled": bool(self.chk_wav.isChecked()),
-                "output_file": str(self.txt_output.text() or "").strip(),
-                "long_run": bool(self.chk_longrun.isChecked()),
-                "rt_transcript_to_file": bool(self.chk_rt_transcript_file.isChecked()),
-                "offline_on_stop": bool(self.chk_offline_on_stop.isChecked()),
-                "asr_settings_expanded": bool(self.btn_asr_toggle.isChecked()),
-            },
-            "asr": {
-                "compute_type": str(self.cmb_compute.currentText()),
-                "beam_size": self._safe_int(self.txt_beam.text(), 5, 1, 20),
-                "endpoint_silence_ms": self._safe_float(self.txt_endpoint.text(), 650.0, 50.0, 5000.0),
-                "max_segment_s": self._safe_float(self.txt_maxseg.text(), 7.0, 1.0, 60.0),
-                "overlap_ms": self._safe_float(self.txt_overlap.text(), 200.0, 0.0, 2000.0),
-                "vad_energy_threshold": self._safe_float(self.txt_vad_thr.text(), 0.0055, 1e-5, 1.0),
-                "overload_strategy": str(self.cmb_overload_strategy.currentText()),
-                "overload_enter_qsize": self._safe_int(self.txt_over_enter.text(), 18, 1, 999),
-                "overload_exit_qsize": self._safe_int(self.txt_over_exit.text(), 6, 1, 999),
-                "overload_hard_qsize": self._safe_int(self.txt_over_hard.text(), 28, 1, 999),
-                "overload_beam_cap": self._safe_int(self.txt_over_beamcap.text(), 2, 1, 20),
-                "overload_max_segment_s": self._safe_float(self.txt_over_maxseg.text(), 5.0, 0.5, 60.0),
-                "overload_overlap_ms": self._safe_float(self.txt_over_overlap.text(), 120.0, 0.0, 2000.0),
-            },
+            "ui": self._read_ui_section(),
+            "asr": self._read_asr_section(),
             "codex": self._build_codex_config(),
         }
+
+    def _read_ui_section(self) -> Dict[str, Any]:
+        return {
+            "asr_enabled":           bool(self.chk_asr.isChecked()),
+            "lang":                  str(self.cmb_lang.currentText()),
+            "asr_mode":              int(self.cmb_asr_mode.currentIndex()),
+            "model":                 str(self.cmb_model.currentText()),
+            "profile":               str(self.cmb_profile.currentText()),
+            "wav_enabled":           bool(self.chk_wav.isChecked()),
+            "output_file":           str(self.txt_output.text() or "").strip(),
+            "long_run":              bool(self.chk_longrun.isChecked()),
+            "rt_transcript_to_file": bool(self.chk_rt_transcript_file.isChecked()),
+            "offline_on_stop":       bool(self.chk_offline_on_stop.isChecked()),
+            "asr_settings_expanded": bool(self.btn_asr_toggle.isChecked()),
+        }
+
+    def _read_asr_section(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {}
+        for key, widget, default, lo, hi in _ASR_INT_FIELDS:
+            data[key] = self._safe_int(getattr(self, widget).text(), default, lo, hi)
+        for key, widget, default, lo, hi in _ASR_FLOAT_FIELDS:
+            data[key] = self._safe_float(getattr(self, widget).text(), default, lo, hi)
+        for key, widget in _ASR_COMBO_FIELDS:
+            data[key] = getattr(self, widget).currentText()
+        return data
 
     def _load_config_into_ui(self) -> None:
         if not self.config_repository.exists():
@@ -82,130 +91,82 @@ class MainWindowConfigMixin:
             cfg = self.config_repository.read()
         except Exception:
             return
-
-        ui = cfg.get("ui", {}) if isinstance(cfg, dict) else {}
-        asr = cfg.get("asr", {}) if isinstance(cfg, dict) else {}
+        ui    = cfg.get("ui",    {}) if isinstance(cfg, dict) else {}
+        asr   = cfg.get("asr",   {}) if isinstance(cfg, dict) else {}
         codex = cfg.get("codex", {}) if isinstance(cfg, dict) else {}
-
         try:
-            if "asr_enabled" in ui:
-                self.chk_asr.setChecked(bool(ui.get("asr_enabled")))
-            if "lang" in ui and str(ui.get("lang")) in SUPPORTED_ASR_LANGUAGES:
-                self.cmb_lang.setCurrentText(str(ui.get("lang")))
-            if "asr_mode" in ui:
-                idx = int(ui.get("asr_mode", 1))
-                self.cmb_asr_mode.setCurrentIndex(1 if idx == 1 else 0)
-            if "model" in ui and str(ui.get("model")) in ASR_MODEL_NAMES:
-                self.cmb_model.setCurrentText(str(ui.get("model")))
-            if "profile" in ui and str(ui.get("profile")) in (
-                self.PROFILE_REALTIME,
-                self.PROFILE_BALANCED,
-                self.PROFILE_QUALITY,
-                self.PROFILE_CUSTOM,
-            ):
-                self.cmb_profile.setCurrentText(str(ui.get("profile")))
-            if "wav_enabled" in ui and self._wav_recording_available():
-                self.chk_wav.setChecked(bool(ui.get("wav_enabled")))
-            if "output_file" in ui:
-                val = str(ui.get("output_file") or "").strip()
-                if val:
-                    self.txt_output.setText(val)
-            if "long_run" in ui:
-                self.chk_longrun.setChecked(bool(ui.get("long_run")))
-            if "rt_transcript_to_file" in ui:
-                self.chk_rt_transcript_file.setChecked(bool(ui.get("rt_transcript_to_file")))
-            if "offline_on_stop" in ui and self.chk_offline_on_stop.isEnabled():
-                self.chk_offline_on_stop.setChecked(bool(ui.get("offline_on_stop")))
-            if "asr_settings_expanded" in ui:
-                expanded = bool(ui.get("asr_settings_expanded"))
-                self.btn_asr_toggle.setChecked(expanded)
-                self._apply_asr_settings_visibility(expanded=expanded)
+            self._write_ui_section(ui)
         except Exception:
             pass
-
         try:
-            if "compute_type" in asr:
-                v = str(asr.get("compute_type"))
-                if v:
-                    self.cmb_compute.setCurrentText(v)
-            if "beam_size" in asr:
-                self.txt_beam.setText(str(int(asr.get("beam_size"))))
-            if "endpoint_silence_ms" in asr:
-                self.txt_endpoint.setText(str(float(asr.get("endpoint_silence_ms"))))
-            if "max_segment_s" in asr:
-                self.txt_maxseg.setText(str(float(asr.get("max_segment_s"))))
-            if "overlap_ms" in asr:
-                self.txt_overlap.setText(str(float(asr.get("overlap_ms"))))
-            if "vad_energy_threshold" in asr:
-                self.txt_vad_thr.setText(str(float(asr.get("vad_energy_threshold"))))
-            if "overload_strategy" in asr:
-                v = str(asr.get("overload_strategy")).strip().lower()
-                self.cmb_overload_strategy.setCurrentText("keep_all" if v == "keep_all" else "drop_old")
-            if "overload_enter_qsize" in asr:
-                self.txt_over_enter.setText(str(int(asr.get("overload_enter_qsize"))))
-            if "overload_exit_qsize" in asr:
-                self.txt_over_exit.setText(str(int(asr.get("overload_exit_qsize"))))
-            if "overload_hard_qsize" in asr:
-                self.txt_over_hard.setText(str(int(asr.get("overload_hard_qsize"))))
-            if "overload_beam_cap" in asr:
-                self.txt_over_beamcap.setText(str(int(asr.get("overload_beam_cap"))))
-            if "overload_max_segment_s" in asr:
-                self.txt_over_maxseg.setText(str(float(asr.get("overload_max_segment_s"))))
-            if "overload_overlap_ms" in asr:
-                self.txt_over_overlap.setText(str(float(asr.get("overload_overlap_ms"))))
+            self._write_asr_section(asr)
         except Exception:
             pass
-
         self._load_codex_from_config(codex)
         self._on_longrun_changed()
 
+    def _write_ui_section(self, ui: dict) -> None:
+        if "asr_enabled" in ui:
+            self.chk_asr.setChecked(bool(ui["asr_enabled"]))
+        if "lang" in ui and str(ui["lang"]) in SUPPORTED_ASR_LANGUAGES:
+            self.cmb_lang.setCurrentText(str(ui["lang"]))
+        if "asr_mode" in ui:
+            self.cmb_asr_mode.setCurrentIndex(1 if int(ui["asr_mode"]) == 1 else 0)
+        if "model" in ui and str(ui["model"]) in ASR_MODEL_NAMES:
+            self.cmb_model.setCurrentText(str(ui["model"]))
+        if "profile" in ui and str(ui["profile"]) in self._valid_profiles():
+            self.cmb_profile.setCurrentText(str(ui["profile"]))
+        if "wav_enabled" in ui and self._wav_recording_available():
+            self.chk_wav.setChecked(bool(ui["wav_enabled"]))
+        if "output_file" in ui:
+            val = str(ui["output_file"] or "").strip()
+            if val:
+                self.txt_output.setText(val)
+        if "long_run" in ui:
+            self.chk_longrun.setChecked(bool(ui["long_run"]))
+        if "rt_transcript_to_file" in ui:
+            self.chk_rt_transcript_file.setChecked(bool(ui["rt_transcript_to_file"]))
+        if "offline_on_stop" in ui and self.chk_offline_on_stop.isEnabled():
+            self.chk_offline_on_stop.setChecked(bool(ui["offline_on_stop"]))
+        if "asr_settings_expanded" in ui:
+            expanded = bool(ui["asr_settings_expanded"])
+            self.btn_asr_toggle.setChecked(expanded)
+            self._apply_asr_settings_visibility(expanded=expanded)
+
+    def _write_asr_section(self, asr: dict) -> None:
+        for key, widget, default, *_ in _ASR_ALL_FIELDS:
+            if key in asr:
+                cast = int if isinstance(default, int) else float
+                getattr(self, widget).setText(str(cast(asr[key])))
+        for key, widget in _ASR_COMBO_FIELDS:
+            if key in asr:
+                v = str(asr[key])
+                if key == "overload_strategy":
+                    v = "keep_all" if v.strip().lower() == "keep_all" else "drop_old"
+                if v:
+                    getattr(self, widget).setCurrentText(v)
+
+    # ── profile ────────────────────────────────────────────────────────
+
     def _apply_profile_to_fields(self, profile: str, *, force: bool = False) -> None:
-        if (profile or "") != self.PROFILE_CUSTOM:
-            defaults = profile_defaults(profile)
-            self.cmb_compute.setCurrentText(str(defaults["compute_type"]))
-            self.txt_beam.setText(str(int(defaults["beam_size"])))
-            self.txt_endpoint.setText(str(float(defaults["endpoint_silence_ms"])))
-            self.txt_maxseg.setText(str(float(defaults["max_segment_s"])))
-            self.txt_overlap.setText(str(float(defaults["overlap_ms"])))
-            self.txt_vad_thr.setText(str(float(defaults["vad_energy_threshold"])))
-
-            self.cmb_overload_strategy.setCurrentText(str(defaults["overload_strategy"]))
-            self.txt_over_enter.setText(str(int(defaults["overload_enter_qsize"])))
-            self.txt_over_exit.setText(str(int(defaults["overload_exit_qsize"])))
-            self.txt_over_hard.setText(str(int(defaults["overload_hard_qsize"])))
-            self.txt_over_beamcap.setText(str(int(defaults["overload_beam_cap"])))
-            self.txt_over_maxseg.setText(str(float(defaults["overload_max_segment_s"])))
-            self.txt_over_overlap.setText(str(float(defaults["overload_overlap_ms"])))
-
-            self._apply_model_policy_to_ui(profile, mark_dirty=force)
-            self._set_custom_enabled(False)
-            self._mark_config_dirty()
+        if (profile or "") == self.PROFILE_CUSTOM:
+            self._set_custom_enabled(True)
+            if force:
+                self._mark_config_dirty()
             return
-
-        self._set_custom_enabled(True)
-        if force:
-            self._mark_config_dirty()
+        self._write_asr_section(profile_defaults(profile))
+        self._apply_model_policy_to_ui(profile, mark_dirty=force)
+        self._set_custom_enabled(False)
+        self._mark_config_dirty()
 
     def _set_custom_enabled(self, enabled: bool) -> None:
-        for widget in [
-            self.cmb_compute,
-            self.txt_beam,
-            self.txt_endpoint,
-            self.txt_maxseg,
-            self.txt_overlap,
-            self.txt_vad_thr,
-            self.cmb_overload_strategy,
-            self.txt_over_enter,
-            self.txt_over_exit,
-            self.txt_over_hard,
-            self.txt_over_beamcap,
-            self.txt_over_maxseg,
-            self.txt_over_overlap,
-        ]:
-            try:
-                widget.setEnabled(bool(enabled))
-            except Exception:
-                pass
+        for attr in _ASR_CUSTOM_WIDGET_ATTRS:
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                try:
+                    widget.setEnabled(bool(enabled))
+                except Exception:
+                    pass
 
     def _on_profile_changed(self) -> None:
         command = SwitchProfileCommand(profile=self.cmb_profile.currentText())
@@ -231,21 +192,21 @@ class MainWindowConfigMixin:
         self._mark_config_dirty()
 
     def _apply_model_policy_to_ui(self, profile: str, *, mark_dirty: bool) -> None:
-        available_models = [self.cmb_model.itemText(i) for i in range(self.cmb_model.count())]
+        available = [self.cmb_model.itemText(i) for i in range(self.cmb_model.count())]
         decision = ModelOrchestrator().recommend(
             asr_profile=profile,
             language=str(self.cmb_lang.currentText()),
             current_asr_model=str(self.cmb_model.currentText()),
-            available_asr_models=available_models,
+            available_asr_models=available,
             codex_profiles=list(getattr(self, "_codex_profiles", [])),
             current_codex_profile_id=str(getattr(self, "_codex_selected_profile_id", "")),
         )
-
         if decision.asr_model and decision.asr_model != self.cmb_model.currentText():
             self.cmb_model.setCurrentText(decision.asr_model)
-
         if decision.codex_profile_id and hasattr(self, "_set_codex_selected_profile"):
             self._set_codex_selected_profile(decision.codex_profile_id, mark_dirty=mark_dirty)
+
+    # ── visibility / long-run ──────────────────────────────────────────
 
     def _apply_asr_settings_visibility(self, *, expanded: bool) -> None:
         self.grp_asr_cfg.setVisible(bool(expanded))
@@ -261,3 +222,6 @@ class MainWindowConfigMixin:
         interval = self._ui_interval_long_ms if self._long_run_mode else self._ui_interval_normal_ms
         self.ui_timer.setInterval(int(interval))
         self._mark_config_dirty()
+
+    def _valid_profiles(self) -> tuple:
+        return (self.PROFILE_REALTIME, self.PROFILE_BALANCED, self.PROFILE_QUALITY, self.PROFILE_CUSTOM)
