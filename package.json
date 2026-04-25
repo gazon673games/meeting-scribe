@@ -5,10 +5,12 @@
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
+    "start": "node electron/run-electron.cjs",
     "dev": "concurrently -k \"vite --config vite.config.js --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && node electron/run-electron.cjs\"",
     "dev:renderer": "vite --config vite.config.js --host 127.0.0.1",
     "dev:electron": "node electron/run-electron.cjs",
-    "build": "vite build --config vite.config.js"
+    "build": "vite build --config vite.config.js",
+    "package": "python -m tools.release.build_release --version dev"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",

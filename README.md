@@ -21,14 +21,23 @@ npm run dev
 Runtime files are kept under `.local/`.
 Model caches stay in `models/`.
 
-## Electron UI
-
-The Electron UI runs as a desktop shell and talks to the Python backend over
-stdin/stdout:
+The Python backend can be run directly for bridge/debug work:
 
 ```powershell
 .venv\Scripts\python.exe main_electron_backend.py
 ```
+
+`main.py` now defaults to the Electron dev shell. The old PySide UI remains
+available only as a legacy fallback:
+
+```powershell
+.venv\Scripts\python.exe main.py --qt
+```
+
+## Electron UI
+
+The Electron UI runs as a desktop shell and talks to the Python backend over
+stdin/stdout.
 
 Install the Electron/React dependencies and start the new desktop shell:
 
@@ -74,12 +83,16 @@ Build a local Windows release archive:
 .\tools\release\build_exe.ps1 -Version dev
 ```
 
-The archive is written to `dist\meeting-scribe-<version>-win64.zip`.
-Inside it, run `meeting-scribe.exe`.
+The release builder creates a portable Electron app, bundles the Python backend
+as `resources\backend\meeting-scribe-backend.exe`, and writes
+`dist\meeting-scribe-<version>-win64.zip`. Inside it, run `meeting-scribe.exe`.
+If a developer shell has `ELECTRON_RUN_AS_NODE=1` set, use
+`meeting-scribe.cmd`; it clears that variable before starting the same app.
 
 GitHub Actions builds release archives on `v*` tags for Windows x64/arm64,
 Linux x64/arm64, and macOS x64/arm64, then attaches them to the GitHub Release.
-The build script also runs the packaged app with `--smoke-import` before zipping the release.
+The build script runs the packaged Python backend with `--repair-config` and
+`--smoke-import` before zipping the release.
 Windows arm64 is currently allowed to fail because `faster-whisper` depends on
 `ctranslate2`, which does not publish a `win_arm64` wheel for this dependency set yet.
 
@@ -101,3 +114,4 @@ Minimal CLI capture example:
 - built for Windows audio capture workflows
 - ASR uses `faster-whisper`
 - UI uses Electron/React; the saved Qt branch is `qt-interface-before-electron`
+- PySide is optional legacy-only dependency via `requirements/requirements-qt.txt`

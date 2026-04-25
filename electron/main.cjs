@@ -3,11 +3,15 @@ const { spawn } = require("node:child_process");
 const { existsSync } = require("node:fs");
 const path = require("node:path");
 
-const projectRoot = path.resolve(__dirname, "..");
+const appRoot = app.isPackaged ? path.join(process.resourcesPath, "app") : path.resolve(__dirname, "..");
+const backendRoot = app.isPackaged ? path.join(process.resourcesPath, "backend") : appRoot;
+const runtimeRoot = app.isPackaged ? path.dirname(process.execPath) : appRoot;
 
 class PythonBackend {
-  constructor(root) {
+  constructor({ root, backendRoot, runtimeRoot }) {
     this.root = root;
+    this.backendRoot = backendRoot;
+    this.runtimeRoot = runtimeRoot;
     this.process = null;
     this.nextId = 1;
     this.pending = new Map();
@@ -25,14 +29,15 @@ class PythonBackend {
     if (this.process) {
       return;
     }
-    const python = this.findPython();
-    const entrypoint = path.join(this.root, "main_electron_backend.py");
-    this.process = spawn(python, [entrypoint], {
-      cwd: this.root,
+    const command = this.findBackendCommand();
+    this.process = spawn(command.executable, command.args, {
+      cwd: command.cwd,
       env: {
         ...process.env,
+        MEETING_SCRIBE_RUNTIME_ROOT: this.runtimeRoot,
         PYTHONUNBUFFERED: "1"
       },
+      windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"]
     });
 
@@ -155,9 +160,26 @@ class PythonBackend {
         : [path.join(this.root, ".venv", "bin", "python"), "python3", "python"];
     return candidates.find((candidate) => candidate.includes(path.sep) ? existsSync(candidate) : true) || "python";
   }
+
+  findBackendCommand() {
+    if (app.isPackaged) {
+      const executableName = process.platform === "win32" ? "meeting-scribe-backend.exe" : "meeting-scribe-backend";
+      const executable = path.join(this.backendRoot, executableName);
+      if (!existsSync(executable)) {
+        throw new Error(`Packaged Python backend was not found: ${executable}`);
+      }
+      return { executable, args: [], cwd: this.runtimeRoot };
+    }
+
+    return {
+      executable: this.findPython(),
+      args: [path.join(this.root, "main_electron_backend.py")],
+      cwd: this.root
+    };
+  }
 }
 
-const backend = new PythonBackend(projectRoot);
+const backend = new PythonBackend({ root: appRoot, backendRoot, runtimeRoot });
 
 function createWindow() {
   const window = new BrowserWindow({
@@ -180,7 +202,7 @@ function createWindow() {
 
   const rendererUrl = process.env.ELECTRON_RENDERER_URL || "http://127.0.0.1:5173";
   if (app.isPackaged && !process.env.ELECTRON_RENDERER_URL) {
-    window.loadFile(path.join(projectRoot, "build", "electron-renderer", "index.html"));
+    window.loadFile(path.join(appRoot, "build", "electron-renderer", "index.html"));
   } else {
     window.loadURL(rendererUrl);
   }
@@ -207,4 +229,3 @@ app.on("window-all-closed", () => {
     app.quit();
   }
 });
-
