@@ -27,12 +27,7 @@ The Python backend can be run directly for bridge/debug work:
 .venv\Scripts\python.exe main_electron_backend.py
 ```
 
-`main.py` now defaults to the Electron dev shell. The old PySide UI remains
-available only as a legacy fallback:
-
-```powershell
-.venv\Scripts\python.exe main.py --qt
-```
+`main.py` now defaults to the Electron dev shell.
 
 ## Electron UI
 
@@ -113,5 +108,4 @@ Minimal CLI capture example:
 
 - built for Windows audio capture workflows
 - ASR uses `faster-whisper`
-- UI uses Electron/React; the saved Qt branch is `qt-interface-before-electron`
-- PySide is optional legacy-only dependency via `requirements/requirements-qt.txt`
+- UI uses Electron/React
