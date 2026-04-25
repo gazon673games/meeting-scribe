@@ -370,6 +370,30 @@ class ElectronInterfaceTests(unittest.TestCase):
         self.assertFalse(messages[2]["ok"])
         self.assertEqual(messages[2]["error"]["type"], "KeyError")
 
+    def test_jsonl_bridge_preserves_unicode_payloads(self) -> None:
+        text = "\u041f\u0440\u0438\u0432\u0435\u0442, \u043c\u0438\u0440"
+        reply_prefix = "\u041e\u0442\u0432\u0435\u0442:"
+        stdin = io.StringIO(
+            json.dumps(
+                {"id": "ru", "method": "echo", "params": {"text": text}},
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        def handler(method, params):  # noqa: ANN001
+            self.assertEqual(method, "echo")
+            return {"reply": f"{reply_prefix} {params['text']}"}
+
+        JsonLineBridge(handler, stdin=stdin, stdout=stdout, stderr=stderr).serve_forever()
+        raw_output = stdout.getvalue()
+        messages = [json.loads(line) for line in raw_output.splitlines()]
+
+        self.assertEqual(messages[1]["result"]["reply"], f"{reply_prefix} {text}")
+        self.assertIn(text, raw_output)
+
 
 if __name__ == "__main__":
     unittest.main()

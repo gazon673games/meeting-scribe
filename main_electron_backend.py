@@ -10,6 +10,20 @@ if _SRC_ROOT.exists():
     if src_text not in sys.path:
         sys.path.insert(0, src_text)
 
+
+def _configure_utf8_stdio() -> None:
+    for stream_name in ("stdin", "stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is None or not hasattr(stream, "reconfigure"):
+            continue
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+_configure_utf8_stdio()
+
 from application.codex_use_case import CodexRequestUseCase
 from application.local_paths import application_root, configure_project_local_io
 from application.session_tasks import OfflinePassUseCase, StopAsrSessionUseCase

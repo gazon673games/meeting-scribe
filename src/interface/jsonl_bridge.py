@@ -15,9 +15,9 @@ BackendHandler = Callable[[str, Dict[str, Any] | None], Any]
 @dataclass
 class JsonLineBridge:
     handler: BackendHandler
-    stdin: TextIO = sys.stdin
-    stdout: TextIO = sys.stdout
-    stderr: TextIO = sys.stderr
+    stdin: TextIO = field(default_factory=lambda: sys.stdin)
+    stdout: TextIO = field(default_factory=lambda: sys.stdout)
+    stderr: TextIO = field(default_factory=lambda: sys.stderr)
     _write_lock: threading.RLock = field(default_factory=threading.RLock)
 
     def serve_forever(self) -> None:

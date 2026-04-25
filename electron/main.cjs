@@ -35,7 +35,9 @@ class PythonBackend {
       env: {
         ...process.env,
         MEETING_SCRIBE_RUNTIME_ROOT: this.runtimeRoot,
-        PYTHONUNBUFFERED: "1"
+        PYTHONIOENCODING: "utf-8",
+        PYTHONUNBUFFERED: "1",
+        PYTHONUTF8: "1"
       },
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"]
