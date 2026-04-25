@@ -20,6 +20,7 @@ from application.session_tasks import OfflinePassRequest, OfflinePassUseCase, St
 from audio.domain.formats import AudioFormat
 from session.domain.aggregate import SessionAggregate
 from transcription.application.startup_service import TranscriptionStartupService
+from transcription.application.transcript_store import TranscriptStore
 from transcription.domain.aggregate import TranscriptionJobAggregate
 
 
@@ -47,6 +48,7 @@ class HeadlessSessionController:
         transcription_startup_service: Optional[TranscriptionStartupService] = None,
         stop_asr_use_case: Optional[StopAsrSessionUseCase] = None,
         offline_pass_use_case: Optional[OfflinePassUseCase] = None,
+        transcript_store: Optional[TranscriptStore] = None,
         event_sink: Optional[EventSink] = None,
     ) -> None:
         self.project_root = Path(project_root)
@@ -57,6 +59,7 @@ class HeadlessSessionController:
         self.transcription_startup_service = transcription_startup_service
         self.stop_asr_use_case = stop_asr_use_case or StopAsrSessionUseCase()
         self.offline_pass_use_case = offline_pass_use_case
+        self.transcript_store = transcript_store
         self.event_sink = event_sink
 
         self.format = AudioFormat(sample_rate=48000, channels=2, dtype="float32", blocksize=1024)
@@ -85,6 +88,9 @@ class HeadlessSessionController:
         self._asr_event_stop = threading.Event()
         self._asr_event_thread: Optional[threading.Thread] = None
         self._transcript_lines: list[Dict[str, Any]] = []
+        self._realtime_transcript_enabled = False
+        self._human_log_path: Optional[Path] = None
+        self._realtime_transcript_path: Optional[Path] = None
         self._asr_metrics: Dict[str, Any] = {
             "segDroppedTotal": 0,
             "segSkippedTotal": 0,
@@ -128,6 +134,17 @@ class HeadlessSessionController:
             self._emit("source_added", {"source": self._source_record(source_name)})
             return self._source_record(source_name)
 
+    def remove_source(self, *, name: str) -> Dict[str, Any]:
+        with self._lock:
+            self._ensure_not_running("remove a source")
+            record = self._source_record(name)
+            self.engine.remove_source(record["name"])
+            self._source_objs.pop(record["name"], None)
+            self._sources.pop(record["name"], None)
+            self._status = f"removed {record['name']}"
+            self._emit("source_removed", {"source": record})
+            return record
+
     def set_source_enabled(self, *, name: str, enabled: bool) -> Dict[str, Any]:
         with self._lock:
             source = self._require_source(name)
@@ -148,6 +165,12 @@ class HeadlessSessionController:
             self.engine.set_source_delay_ms(source.name, value)
             self._emit("source_updated", {"source": self._source_record(source.name)})
             return self._source_record(source.name)
+
+    def clear_transcript(self) -> Dict[str, Any]:
+        with self._lock:
+            self._transcript_lines.clear()
+            self._emit("transcript_cleared", {})
+            return self.snapshot()
 
     def start_session(self, params: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
@@ -185,6 +208,7 @@ class HeadlessSessionController:
             asr_error = ""
             if asr_enabled:
                 asr_error = self._start_asr_locked(params)
+            self._configure_transcript_files_locked(params)
 
             self._session_state.finish_start(asr_running=self._asr_running, wav_recording=self.writer.is_recording())
             self._status = "running"
@@ -223,6 +247,7 @@ class HeadlessSessionController:
 
             self._asr_requested = False
             self._asr_running = False
+            self._close_transcript_files_locked()
             self._session_state.finish_stop("")
             self._status = "idle"
             if self._should_run_offline_pass(stop_params, Path(wav_path)):
@@ -251,6 +276,8 @@ class HeadlessSessionController:
                     "running": bool(self._offline_pass_running),
                     "result": dict(self._offline_pass_result),
                 },
+                "humanLogPath": str(self._human_log_path or ""),
+                "realtimeTranscriptPath": str(self._realtime_transcript_path or ""),
                 "transcript": list(self._transcript_lines[-200:]),
                 "sources": [self._source_record(name, meters=meters) for name in self._sources],
             }
@@ -277,6 +304,8 @@ class HeadlessSessionController:
                 self.writer.stop()
             except Exception:
                 pass
+            with self._lock:
+                self._close_transcript_files_locked()
 
     def _start_wav_if_requested(self, params: Dict[str, Any]) -> str:
         wav_enabled = bool(params.get("wavEnabled", params.get("wav_enabled", False)))
@@ -291,6 +320,66 @@ class HeadlessSessionController:
         except Exception as exc:
             return f"WAV recording could not start: {type(exc).__name__}: {exc}"
         return ""
+
+    def _configure_transcript_files_locked(self, params: Dict[str, Any]) -> None:
+        self._realtime_transcript_enabled = bool(
+            params.get(
+                "realtimeTranscriptToFile",
+                params.get("rtTranscriptToFile", params.get("rt_transcript_to_file", False)),
+            )
+        )
+        store = self.transcript_store
+        if store is None:
+            return
+        try:
+            store.set_realtime_enabled(self._realtime_transcript_enabled)
+            if self._asr_running:
+                self._human_log_path = store.open_human_log()
+            else:
+                self._human_log_path = None
+            self._sync_transcript_store_paths_locked()
+        except Exception:
+            self._human_log_path = None
+            self._realtime_transcript_path = None
+
+    def _close_transcript_files_locked(self) -> None:
+        store = self.transcript_store
+        if store is None:
+            self._human_log_path = None
+            self._realtime_transcript_path = None
+            return
+        try:
+            store.close_human_log()
+            store.close_realtime_transcript()
+        finally:
+            self._realtime_transcript_enabled = False
+            self._sync_transcript_store_paths_locked()
+
+    def _write_transcript_line_locked(self, line: Dict[str, Any]) -> None:
+        store = self.transcript_store
+        if store is None:
+            return
+        text = str(line.get("text", "")).strip()
+        if not text:
+            return
+        formatted = (
+            f"[{time.strftime('%H:%M:%S', time.localtime(float(line.get('ts', time.time()))))}] "
+            f"{line.get('stream', 'mix')}: {text}"
+        )
+        try:
+            store.write_human_line(formatted)
+            if self._realtime_transcript_enabled:
+                store.write_realtime_line(formatted)
+            self._sync_transcript_store_paths_locked()
+        except Exception:
+            pass
+
+    def _sync_transcript_store_paths_locked(self) -> None:
+        store = self.transcript_store
+        if store is None:
+            return
+        self._human_log_path = store.current_human_log_path
+        self._realtime_transcript_path = store.realtime_transcript_path
 
     def _start_asr_locked(self, params: Dict[str, Any]) -> str:
         if self.asr_runtime_factory is None or self.transcription_startup_service is None:
@@ -469,6 +558,7 @@ class HeadlessSessionController:
                     if len(self._transcript_lines) > 500:
                         del self._transcript_lines[:-500]
                     record["line"] = line
+                    self._write_transcript_line_locked(line)
             elif isinstance(event, AsrMetricsEvent):
                 self._asr_metrics = {
                     "segDroppedTotal": int(event.seg_dropped_total),

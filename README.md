@@ -14,16 +14,16 @@ Desktop app for capturing system audio and microphone input, transcribing speech
 ## Run
 
 ```powershell
-.venv\Scripts\python.exe main.py
+npm install
+npm run dev
 ```
 
 Runtime files are kept under `.local/`.
 Model caches stay in `models/`.
 
-## Electron UI experiment
+## Electron UI
 
-The Electron rewrite is being introduced beside the existing PySide UI. The
-first bridge process is Qt-free and speaks newline-delimited JSON over
+The Electron UI runs as a desktop shell and talks to the Python backend over
 stdin/stdout:
 
 ```powershell
@@ -61,10 +61,10 @@ For the desktop shell only, with an already running renderer server:
 npm run dev:electron
 ```
 
-The current Electron bridge exposes backend health, config, device discovery,
-source add/toggle controls, audio session start/stop, live ASR startup/stop,
-ASR metrics, transcript streaming, assistant actions, and offline pass handling
-through headless controllers.
+The Electron bridge exposes backend health, config, device discovery, source
+add/remove/toggle/delay controls, audio session start/stop, live ASR
+startup/stop, ASR settings, WAV recording, transcript streaming/files,
+assistant actions, and offline pass handling through headless controllers.
 
 ## Release build
 
@@ -100,4 +100,4 @@ Minimal CLI capture example:
 
 - built for Windows audio capture workflows
 - ASR uses `faster-whisper`
-- UI uses `PySide6`
+- UI uses Electron/React; the saved Qt branch is `qt-interface-before-electron`

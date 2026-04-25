@@ -30,6 +30,9 @@ class AudioRuntimePort(Protocol):
     def add_source(self, src: AudioSource) -> None:
         ...
 
+    def remove_source(self, name: str) -> None:
+        ...
+
     def add_master_filter(self, flt: AudioFilter) -> None:
         ...
 

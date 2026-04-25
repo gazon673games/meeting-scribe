@@ -28,6 +28,7 @@ from settings.infrastructure.json_config_repository import JsonConfigRepository
 from settings.infrastructure.runtime_config import ensure_runtime_config
 from transcription.application.startup_service import TranscriptionStartupService
 from transcription.infrastructure.file_transcript_context import FileTranscriptContextReader
+from transcription.infrastructure.file_transcript_store import FileTranscriptStore
 
 
 def create_backend() -> ElectronBackend:
@@ -44,6 +45,7 @@ def create_backend() -> ElectronBackend:
         transcription_startup_service=TranscriptionStartupService(),
         stop_asr_use_case=StopAsrSessionUseCase(),
         offline_pass_use_case=OfflinePassUseCase(FasterWhisperOfflineAsrRunner()),
+        transcript_store=FileTranscriptStore(project_root),
     )
     assistant_service = AssistantApplicationService(
         CodexRequestUseCase(CodexCliRunner(), FileTranscriptContextReader())

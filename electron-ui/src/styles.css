@@ -25,6 +25,12 @@ button {
   font: inherit;
 }
 
+input,
+select,
+textarea {
+  font: inherit;
+}
+
 .app-shell {
   min-height: 100vh;
   display: flex;
@@ -116,7 +122,8 @@ h1 {
 
 .icon-button,
 .primary-action,
-.danger-action {
+.danger-action,
+.icon-action {
   height: 34px;
   display: inline-flex;
   align-items: center;
@@ -132,6 +139,15 @@ h1 {
 .icon-button {
   width: 36px;
   padding: 0;
+}
+
+.icon-action {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  padding: 0;
+  color: #ffd7de;
+  background: #22171a;
 }
 
 .primary-action,
@@ -309,6 +325,7 @@ h3 {
 
 .source-row {
   gap: 8px;
+  padding: 5px 0;
 }
 
 .source-main {
@@ -339,6 +356,26 @@ h3 {
   height: 100%;
   border-radius: inherit;
   background: #61d1bd;
+}
+
+.delay-control {
+  flex: 0 0 74px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+  color: #a9a398;
+  font-size: 12px;
+}
+
+.delay-control input {
+  width: 48px;
+  height: 28px;
+  border: 1px solid #3a3933;
+  border-radius: 8px;
+  background: #11110f;
+  color: #f4f1ea;
+  padding: 0 6px;
 }
 
 .toggle-dot {
@@ -377,6 +414,91 @@ code {
   font-size: 12px;
 }
 
+.processing-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.settings-grid.advanced {
+  margin-top: 10px;
+}
+
+.field {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.field span,
+.check-row span,
+.delay-control span {
+  color: #a9a398;
+  font-size: 12px;
+}
+
+.field input,
+.field select,
+.assistant-controls select,
+.assistant-panel textarea {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  border: 1px solid #3a3933;
+  border-radius: 8px;
+  background: #11110f;
+  color: #f4f1ea;
+  padding: 6px 9px;
+}
+
+.field input,
+.field select {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.check-row {
+  min-width: 0;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #2d2b27;
+  border-radius: 8px;
+  padding: 0 9px;
+  background: #141411;
+}
+
+.check-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: #61d1bd;
+}
+
+.settings-save {
+  align-self: end;
+  width: 100%;
+}
+
+.advanced-settings {
+  border: 1px solid #292824;
+  border-radius: 8px;
+  padding: 9px;
+  background: #141411;
+}
+
+.advanced-settings summary {
+  cursor: pointer;
+  color: #d5cfc4;
+  font-size: 13px;
+  font-weight: 650;
+}
+
 .kv-list {
   display: grid;
   grid-template-columns: minmax(110px, 0.8fr) minmax(120px, 1fr);
@@ -407,8 +529,33 @@ code {
   color: #827c72;
 }
 
-.transcript-lines {
+.transcript-panel {
   height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.transcript-tools {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.transcript-tools span {
+  min-width: 0;
+  color: #a9a398;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transcript-lines {
+  flex: 1;
   min-height: 320px;
   display: flex;
   flex-direction: column;
@@ -462,19 +609,9 @@ code {
   gap: 8px;
 }
 
-.assistant-controls select,
-.assistant-panel textarea {
-  width: 100%;
-  border: 1px solid #3a3933;
-  border-radius: 8px;
-  background: #11110f;
-  color: #f4f1ea;
-  padding: 8px 10px;
-  font: inherit;
-}
-
 .assistant-panel textarea {
   min-height: 78px;
+  height: auto;
   resize: vertical;
 }
 
@@ -604,5 +741,18 @@ code {
 
   .panel.large {
     grid-column: auto;
+  }
+
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .source-row {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .source-meter {
+    flex-basis: 100%;
   }
 }
