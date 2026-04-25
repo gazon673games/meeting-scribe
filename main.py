@@ -32,13 +32,6 @@ def _run_backend() -> None:
     backend_main()
 
 
-def _run_legacy_qt() -> None:
-    configure_project_local_io(_runtime_root())
-    from app_bootstrap import main as qt_main
-
-    qt_main()
-
-
 def _run_electron_dev() -> None:
     if not (_PROJECT_ROOT / "package.json").exists():
         raise SystemExit("Electron package.json was not found.")
@@ -53,7 +46,5 @@ if __name__ == "__main__":
         raise SystemExit(0)
     if "--backend" in sys.argv:
         _run_backend()
-    elif "--qt" in sys.argv:
-        _run_legacy_qt()
     else:
         _run_electron_dev()
