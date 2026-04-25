@@ -4,7 +4,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from application.asr_language import SUPPORTED_ASR_LANGUAGES
+from application.asr_profiles import PROFILE_BALANCED, PROFILE_CUSTOM, PROFILE_QUALITY, PROFILE_REALTIME, profile_defaults
 from application.device_catalog import DeviceCatalog
+from application.model_policy import ASR_MODEL_NAMES
 from interface.assistant_controller import AssistantController
 from interface.session_controller import HeadlessSessionController
 from settings.application.config_repository import ConfigRepository
@@ -63,6 +66,23 @@ class ElectronBackend:
                 "codexEnabled": bool(codex.get("enabled", False)) if isinstance(codex, dict) else False,
                 "codexProfiles": len(profiles) if isinstance(profiles, list) else 0,
             },
+            "options": {
+                "languages": list(SUPPORTED_ASR_LANGUAGES),
+                "asrProfiles": [PROFILE_REALTIME, PROFILE_BALANCED, PROFILE_QUALITY, PROFILE_CUSTOM],
+                "asrModels": list(ASR_MODEL_NAMES),
+                "asrModes": [
+                    {"id": "mix", "label": "MIX (master)"},
+                    {"id": "split", "label": "SPLIT (all sources)"},
+                ],
+                "computeTypes": ["int8_float16", "float16", "int8", "int8_float32", "float32"],
+                "overloadStrategies": ["drop_old", "keep_all"],
+                "profileDefaults": {
+                    PROFILE_REALTIME: profile_defaults(PROFILE_REALTIME),
+                    PROFILE_BALANCED: profile_defaults(PROFILE_BALANCED),
+                    PROFILE_QUALITY: profile_defaults(PROFILE_QUALITY),
+                    PROFILE_CUSTOM: profile_defaults(PROFILE_BALANCED),
+                },
+            },
             "capabilities": {
                 "config": True,
                 "devices": True,
@@ -111,6 +131,9 @@ class ElectronBackend:
             name=str(params.get("name") or ""),
         )
 
+    def remove_source(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        return self._require_session_controller().remove_source(name=str(params.get("name", "")))
+
     def set_source_enabled(self, params: Dict[str, Any]) -> Dict[str, Any]:
         return self._require_session_controller().set_source_enabled(
             name=str(params.get("name", "")),
@@ -136,6 +159,9 @@ class ElectronBackend:
         merged.update(params)
         return self._require_session_controller().stop_session(merged)
 
+    def clear_transcript(self) -> Dict[str, Any]:
+        return self._require_session_controller().clear_transcript()
+
     def invoke_assistant(self, params: Dict[str, Any]) -> Dict[str, Any]:
         if self.assistant_controller is None:
             raise RuntimeError("Assistant controller is not configured")
@@ -155,6 +181,8 @@ class ElectronBackend:
             return self.list_devices()
         if method == "add_source":
             return self.add_source(params)
+        if method == "remove_source":
+            return self.remove_source(params)
         if method == "set_source_enabled":
             return self.set_source_enabled(params)
         if method == "set_source_delay":
@@ -163,6 +191,8 @@ class ElectronBackend:
             return self.start_session(params)
         if method == "stop_session":
             return self.stop_session(params)
+        if method == "clear_transcript":
+            return self.clear_transcript()
         if method == "invoke_assistant":
             return self.invoke_assistant(params)
         raise KeyError(f"Unknown backend method: {method}")
@@ -186,6 +216,7 @@ class ElectronBackend:
             "model": str(ui.get("model", "")),
             "wavEnabled": bool(ui.get("wav_enabled", False)),
             "outputFile": str(ui.get("output_file", "") or ""),
+            "realtimeTranscriptToFile": bool(ui.get("rt_transcript_to_file", False)),
             **asr,
         }
 

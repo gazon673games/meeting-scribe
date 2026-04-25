@@ -134,8 +134,17 @@ class AudioApplicationControlsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             registry.add_source(source, running=False)
 
+        removed = registry.remove_source("mic", running=False)
+        self.assertIs(removed, source)
+        self.assertEqual(registry.sources, [])
+        self.assertEqual(registry.source_items(), [])
+
         with self.assertRaises(RuntimeError):
             registry.add_source(_FakeSource(name="other"), running=True)
+
+        registry.add_source(source, running=False)
+        with self.assertRaises(RuntimeError):
+            registry.remove_source("mic", running=True)
 
     def test_engine_runtime_state_owns_counters_tap_and_autosync(self) -> None:
         runtime = EngineRuntimeState(tap_queue_max=25)

@@ -87,6 +87,10 @@ class AudioEngine:
         with self._lock:
             self._registry.add_source(src, running=self._running)
 
+    def remove_source(self, name: str) -> None:
+        with self._lock:
+            self._registry.remove_source(name, running=self._running)
+
     def add_master_filter(self, flt: AudioFilter) -> None:
         with self._lock:
             self._registry.add_master_filter(flt)

@@ -61,6 +61,11 @@ class _FakeEngine:
         self.sources.append(src)
         self.enabled[src.name] = True
 
+    def remove_source(self, name: str) -> None:
+        self.sources = [source for source in self.sources if source.name != name]
+        self.enabled.pop(name, None)
+        self.delays.pop(name, None)
+
     def add_master_filter(self, flt) -> None:  # noqa: ANN001
         pass
 
@@ -244,6 +249,30 @@ class ElectronInterfaceTests(unittest.TestCase):
             self.assertFalse(stopped["running"])
             self.assertTrue(started["wavRecording"])
             self.assertFalse(wav_factory.writer.recording)
+
+    def test_backend_removes_source_and_clears_transcript_when_idle(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            repository = JsonConfigRepository(root / "config.json")
+            repository.write({})
+            runtime_factory = _FakeAudioRuntimeFactory()
+            controller = HeadlessSessionController(
+                project_root=root,
+                audio_runtime_factory=runtime_factory,
+                audio_source_factory=_FakeAudioSourceFactory(),
+                wav_recorder_factory=_FakeWavRecorderFactory(),
+            )
+            backend = ElectronBackend(root, repository, _DeviceCatalog(), controller)
+
+            backend.handle("list_devices")
+            backend.handle("add_source", {"deviceId": "input:0"})
+            controller._transcript_lines.append({"ts": 1.0, "stream": "mic", "text": "question"})  # noqa: SLF001
+            removed = backend.handle("remove_source", {"name": "mic"})
+            cleared = backend.handle("clear_transcript")
+
+            self.assertEqual(removed["name"], "mic")
+            self.assertEqual(runtime_factory.engine.sources, [])
+            self.assertEqual(cleared["transcript"], [])
 
     def test_headless_session_streams_asr_events(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:

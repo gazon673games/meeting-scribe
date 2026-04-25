@@ -41,6 +41,16 @@ class SourceRegistry:
         state.src_rate = int(source.get_format().sample_rate)
         self._state[source.name] = state
 
+    def remove_source(self, name: str, *, running: bool) -> AudioSource:
+        if running:
+            raise RuntimeError("Cannot remove sources while engine is running.")
+        source_name = str(name)
+        state = self._state.pop(source_name, None)
+        if state is None:
+            raise KeyError(f"Source '{source_name}' does not exist")
+        self._sources = [source for source in self._sources if source.name != source_name]
+        return state.src
+
     def add_master_filter(self, flt: AudioFilter) -> None:
         self._master_filters.append(flt)
 
