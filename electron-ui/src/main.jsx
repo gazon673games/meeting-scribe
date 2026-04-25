@@ -1,6 +1,25 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { Activity, Bot, Check, Mic, RefreshCw, Save, Settings2, Square, Trash2, Waves } from "lucide-react";
+import {
+  Activity,
+  Check,
+  ChevronDown,
+  FileText,
+  ListChecks,
+  MessageSquare,
+  Mic,
+  Monitor,
+  Plus,
+  Play,
+  RefreshCw,
+  Save,
+  Send,
+  Settings,
+  Sparkles,
+  Square,
+  Trash2,
+  Zap
+} from "lucide-react";
 import "./styles.css";
 
 const api = window.meetingScribe ?? {
@@ -45,6 +64,18 @@ const ASR_FIELDS = [
   { key: "overload_overlap_ms", label: "Overload overlap", defaultValue: 120, step: 10, min: 0, max: 2000 }
 ];
 
+const QUALITY_PROFILES = [
+  { profile: "Realtime", label: "Fast", icon: Zap },
+  { profile: "Balanced", label: "Balanced" },
+  { profile: "Quality", label: "High Quality" }
+];
+
+const MODE_TABS = [
+  { id: "recording", label: "Recording" },
+  { id: "live-assist", label: "Live Assist" },
+  { id: "analysis", label: "Analysis" }
+];
+
 function App() {
   const [backendStatus, setBackendStatus] = React.useState({ ready: false, running: false, lastError: "" });
   const [state, setState] = React.useState(null);
@@ -53,6 +84,7 @@ function App() {
   const [settingsDirty, setSettingsDirty] = React.useState(false);
   const [savingSettings, setSavingSettings] = React.useState(false);
   const [devices, setDevices] = React.useState({ loopback: [], input: [], errors: [] });
+  const [mode, setMode] = React.useState("recording");
   const [events, setEvents] = React.useState([]);
   const [error, setError] = React.useState("");
   const [loading, setLoading] = React.useState(true);
@@ -81,7 +113,7 @@ function App() {
   React.useEffect(() => {
     refresh();
     return api.onBackendEvent((event) => {
-      setEvents((current) => [event, ...current].slice(0, 6));
+      setEvents((current) => [event, ...current].slice(0, 8));
       if (event.type === "backend_ready") {
         setBackendStatus((current) => ({ ...current, ready: true, running: true }));
       }
@@ -207,163 +239,218 @@ function App() {
     [refresh]
   );
 
+  const startOrStop = React.useCallback(() => {
+    if (session.running) {
+      runBackendAction("stop_session", {
+        runOfflinePass: settingsDraft.offlineOnStop,
+        outputFile: settingsDraft.outputFile,
+        language: settingsDraft.language,
+        model: settingsDraft.model
+      });
+      return;
+    }
+    runBackendAction("start_session", draftToStartParams(settingsDraft));
+  }, [runBackendAction, session.running, settingsDraft]);
+
+  const status = session.running ? "recording" : offlinePass.running ? "processing" : "idle";
+
   return (
     <main className="app-shell">
-      <header className="top-bar">
-        <div>
-          <div className="eyebrow">Meeting Scribe</div>
-          <h1>Workspace</h1>
-        </div>
-        <div className="top-actions">
-          <StatusPill tone={backendStatus.ready ? "good" : "warn"} label={backendStatus.ready ? "Python ready" : "Connecting"} />
-          <StatusPill tone={session.running ? "live" : "idle"} label={session.running ? "Recording" : "Idle"} />
-          <StatusPill tone={session.asrRunning ? "good" : "idle"} label={session.asrRunning ? "ASR live" : "ASR idle"} />
-          <button className="icon-button" onClick={refresh} disabled={loading} title="Refresh">
-            <RefreshCw size={17} />
-          </button>
-        </div>
-      </header>
+      <TopBar
+        canStart={canStart}
+        canStop={canStop}
+        loading={loading}
+        mode={mode}
+        status={status}
+        session={session}
+        backendStatus={backendStatus}
+        asrMetrics={asrMetrics}
+        onModeChange={setMode}
+        onRefresh={refresh}
+        onStartStop={startOrStop}
+      />
 
       {error ? <div className="error-strip">{error}</div> : null}
 
-      <section className="toolbar">
-        <button className="primary-action" disabled={!canStart} onClick={() => runBackendAction("start_session", draftToStartParams(settingsDraft))}>
-          <Activity size={17} />
-          Start
-        </button>
-        <button
-          className="danger-action"
-          disabled={!canStop}
-          onClick={() =>
-            runBackendAction("stop_session", {
-              runOfflinePass: settingsDraft.offlineOnStop,
-              outputFile: settingsDraft.outputFile,
-              language: settingsDraft.language,
-              model: settingsDraft.model
-            })
-          }
-        >
-          <Square size={16} />
-          Stop
-        </button>
-        <div className="toolbar-spacer" />
-        <Metric label="Language" value={summary.language || "-"} />
-        <Metric label="Model" value={summary.model || "-"} wide />
-        <Metric label="Mode" value={summary.asrMode || "-"} />
-        <Metric label="Master" value={`${session.master?.level ?? 0}%`} />
+      <section className="pipeline">
+        <AudioInputs
+          devices={devices}
+          disabled={session.running}
+          sources={sources}
+          onAdd={(device) => runBackendAction("add_source", { deviceId: device.id })}
+          onDelay={(source, delayMs) => runBackendAction("set_source_delay", { name: source.name, delayMs })}
+          onRemove={(source) => runBackendAction("remove_source", { name: source.name })}
+          onToggle={(source) => runBackendAction("set_source_enabled", { name: source.name, enabled: !source.enabled })}
+        />
+
+        <ProcessingColumn
+          asrMetrics={asrMetrics}
+          dirty={settingsDirty}
+          events={events}
+          locked={session.running}
+          offlinePass={offlinePass}
+          options={options}
+          saving={savingSettings}
+          session={session}
+          summary={summary}
+          draft={settingsDraft}
+          onAsrChange={updateAsrSetting}
+          onChange={updateSettings}
+          onProfileChange={applyProfile}
+          onSave={saveSettings}
+        />
+
+        <TranscriptColumn
+          lines={transcript}
+          session={session}
+          status={status}
+          onClear={() => runBackendAction("clear_transcript")}
+        />
+
+        <AssistantColumn
+          assistant={assistant}
+          disabled={!capabilities.assistant || !assistant.enabled || assistant.busy}
+          profiles={codexProfiles}
+          onInvoke={(params) => runBackendAction("invoke_assistant", params)}
+        />
       </section>
-
-      <section className="workspace-grid">
-        <Panel title="Sources" icon={<Mic size={18} />} meta={`${devices.loopback.length + devices.input.length} devices`}>
-          <SourceList
-            sources={sources}
-            disabled={session.running}
-            onToggle={(source) => runBackendAction("set_source_enabled", { name: source.name, enabled: !source.enabled })}
-            onDelay={(source, delayMs) => runBackendAction("set_source_delay", { name: source.name, delayMs })}
-            onRemove={(source) => runBackendAction("remove_source", { name: source.name })}
-          />
-          <DeviceGroup title="System" devices={devices.loopback} disabled={session.running} onAdd={(device) => runBackendAction("add_source", { deviceId: device.id })} />
-          <DeviceGroup title="Microphones" devices={devices.input} disabled={session.running} onAdd={(device) => runBackendAction("add_source", { deviceId: device.id })} />
-          {devices.errors?.length ? <div className="panel-note">{devices.errors.join(" | ")}</div> : null}
-        </Panel>
-
-        <Panel title="Processing" icon={<Settings2 size={18} />} meta={settingsDraft.asrEnabled ? "ASR on" : "ASR off"}>
-          <ProcessingPanel
-            summary={summary}
-            session={session}
-            asrMetrics={asrMetrics}
-            offlinePass={offlinePass}
-            draft={settingsDraft}
-            options={options}
-            dirty={settingsDirty}
-            saving={savingSettings}
-            locked={session.running}
-            onChange={updateSettings}
-            onAsrChange={updateAsrSetting}
-            onProfileChange={applyProfile}
-            onSave={saveSettings}
-          />
-        </Panel>
-
-        <Panel title="Transcript" icon={<Waves size={18} />} meta={session.asrRunning ? "live" : "standby"} large>
-          <TranscriptPanel lines={transcript} session={session} onClear={() => runBackendAction("clear_transcript")} />
-        </Panel>
-
-        <Panel title="Assistant" icon={<Bot size={18} />} meta={assistant.busy ? "busy" : assistant.enabled ? "enabled" : "disabled"}>
-          <AssistantPanel
-            assistant={assistant}
-            profiles={codexProfiles}
-            disabled={!capabilities.assistant || !assistant.enabled || assistant.busy}
-            onInvoke={(params) => runBackendAction("invoke_assistant", params)}
-          />
-        </Panel>
-      </section>
-
-      <footer className="event-bar">
-        {events.length ? events.map((event, index) => <span key={`${event.type}-${index}`}>{event.type}</span>) : <span>backend pending</span>}
-      </footer>
     </main>
   );
 }
 
-function StatusPill({ tone, label }) {
-  return <span className={`status-pill ${tone}`}>{label}</span>;
-}
+function TopBar({ canStart, canStop, loading, mode, status, session, backendStatus, asrMetrics, onModeChange, onRefresh, onStartStop }) {
+  const running = status === "recording";
+  const disabled = running ? !canStop : !canStart;
+  const latencyMs = Math.max(0, Math.round(Number(asrMetrics.avgLatencyS || 0) * 1000));
 
-function Metric({ label, value, wide = false }) {
   return (
-    <div className={`metric ${wide ? "wide" : ""}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
+    <header className="control-bar">
+      <div className="control-left">
+        <button className={`record-button ${running ? "stop" : ""}`} disabled={disabled} onClick={onStartStop}>
+          {running ? <Square size={16} /> : <Play size={16} />}
+          {running ? "Stop Recording" : "Start Recording"}
+        </button>
+
+        <div className="status-line">
+          <span className={`status-dot ${status}`} />
+          <span>{status}</span>
+        </div>
+
+        <div className="latency-pill">
+          <Activity size={14} />
+          <span>{latencyMs > 0 ? `~${latencyMs}ms delay` : "~0ms delay"}</span>
+        </div>
+
+        <button className="icon-button" onClick={onRefresh} disabled={loading} title="Refresh backend state">
+          <RefreshCw size={16} />
+        </button>
+
+        <div className={`backend-pill ${backendStatus.ready ? "ready" : "pending"}`}>
+          {backendStatus.ready ? "Python ready" : "Connecting"}
+        </div>
+      </div>
+
+      <div className="mode-switcher">
+        {MODE_TABS.map((tab) => (
+          <button key={tab.id} className={mode === tab.id ? "active" : ""} onClick={() => onModeChange(tab.id)}>
+            {tab.label}
+          </button>
+        ))}
+      </div>
+    </header>
   );
 }
 
-function Panel({ title, icon, meta, children, large = false }) {
+function AudioInputs({ devices, disabled, sources, onAdd, onDelay, onRemove, onToggle }) {
+  const active = sources.some((source) => source.enabled);
+  const inputSources = sources.filter((source) => source.kind === "input");
+  const loopbackSources = sources.filter((source) => source.kind === "loopback");
+  const otherSources = sources.filter((source) => !["input", "loopback"].includes(source.kind));
+
   return (
-    <article className={`panel ${large ? "large" : ""}`}>
-      <div className="panel-header">
-        <div className="panel-title">
-          {icon}
-          <h2>{title}</h2>
-        </div>
-        <span>{meta}</span>
+    <PipelineColumn title="Audio Inputs" active={active} className="inputs-column">
+      <div className="source-stack">
+        {inputSources.map((source) => (
+          <SourceCard
+            key={source.name}
+            disabled={disabled}
+            icon={<Mic size={16} />}
+            source={source}
+            title="Microphone"
+            onDelay={onDelay}
+            onRemove={onRemove}
+            onToggle={onToggle}
+          />
+        ))}
+        {loopbackSources.map((source) => (
+          <SourceCard
+            key={source.name}
+            disabled={disabled}
+            icon={<Monitor size={16} />}
+            source={source}
+            title="System Audio"
+            onDelay={onDelay}
+            onRemove={onRemove}
+            onToggle={onToggle}
+          />
+        ))}
+        {otherSources.map((source) => (
+          <SourceCard
+            key={source.name}
+            disabled={disabled}
+            icon={<Activity size={16} />}
+            source={source}
+            title={source.name}
+            onDelay={onDelay}
+            onRemove={onRemove}
+            onToggle={onToggle}
+          />
+        ))}
       </div>
-      <div className="panel-body">{children}</div>
+
+      <AddDevicePicker disabled={disabled} devices={devices.input} label="Add Microphone" onAdd={onAdd} />
+      <AddDevicePicker disabled={disabled} devices={devices.loopback} label="Add System Audio" onAdd={onAdd} />
+
+      {devices.errors?.length ? <div className="panel-note">{devices.errors.join(" | ")}</div> : null}
+    </PipelineColumn>
+  );
+}
+
+function SourceCard({ disabled, icon, source, title, onDelay, onRemove, onToggle }) {
+  const level = Math.max(0, Math.min(100, Number(source.level || 0)));
+  return (
+    <article className="source-card">
+      <div className="source-head">
+        <div className="source-title">
+          {icon}
+          <strong>{title}</strong>
+        </div>
+        <SwitchButton checked={source.enabled} disabled={disabled} onClick={() => onToggle(source)} />
+      </div>
+
+      <div className="audio-meter">
+        <div className={level > 80 ? "hot" : level > 55 ? "warm" : ""} style={{ width: `${source.enabled ? level : 0}%` }} />
+      </div>
+
+      <div className="select-shell">
+        <select value={source.label || source.name} disabled>
+          <option>{source.label || source.name}</option>
+        </select>
+        <ChevronDown size={14} />
+      </div>
+
+      <div className="source-actions">
+        <SourceDelayControl disabled={disabled} source={source} onDelay={onDelay} />
+        <span className="source-status">{source.status}</span>
+        <button className="icon-action" disabled={disabled} onClick={() => onRemove(source)} title="Remove source">
+          <Trash2 size={14} />
+        </button>
+      </div>
     </article>
   );
 }
 
-function SourceList({ sources, disabled, onToggle, onDelay, onRemove }) {
-  return (
-    <div className="source-list">
-      <h3>Selected</h3>
-      {sources.length ? (
-        sources.map((source) => (
-          <div className="source-row" key={source.name}>
-            <button className={`toggle-dot ${source.enabled ? "on" : "off"}`} disabled={disabled} onClick={() => onToggle(source)} title={source.enabled ? "Mute source" : "Enable source"} />
-            <div className="source-main">
-              <strong>{source.name}</strong>
-              <span>{source.label}</span>
-            </div>
-            <SourceDelayControl source={source} disabled={disabled} onDelay={onDelay} />
-            <div className="source-meter">
-              <div style={{ width: `${Math.max(0, Math.min(100, source.level || 0))}%` }} />
-            </div>
-            <code>{source.status}</code>
-            <button className="icon-action" disabled={disabled} onClick={() => onRemove(source)} title="Remove source">
-              <Trash2 size={15} />
-            </button>
-          </div>
-        ))
-      ) : (
-        <div className="empty-row">Add a source to start</div>
-      )}
-    </div>
-  );
-}
-
-function SourceDelayControl({ source, disabled, onDelay }) {
+function SourceDelayControl({ disabled, source, onDelay }) {
   const [value, setValue] = React.useState(formatDelay(source.delayMs));
   React.useEffect(() => {
     setValue(formatDelay(source.delayMs));
@@ -378,122 +465,129 @@ function SourceDelayControl({ source, disabled, onDelay }) {
 
   return (
     <label className="delay-control">
-      <span>ms</span>
+      <span>delay</span>
       <input
-        type="number"
-        min="0"
-        step="10"
-        value={value}
         disabled={disabled}
-        onChange={(event) => setValue(event.target.value)}
+        min="0"
         onBlur={commit}
+        onChange={(event) => setValue(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === "Enter") {
             event.currentTarget.blur();
           }
         }}
+        step="10"
+        type="number"
+        value={value}
       />
     </label>
   );
 }
 
-function DeviceGroup({ title, devices, disabled, onAdd }) {
+function AddDevicePicker({ devices, disabled, label, onAdd }) {
+  const [selectedId, setSelectedId] = React.useState("");
+
+  React.useEffect(() => {
+    setSelectedId((current) => current || devices?.[0]?.id || "");
+  }, [devices]);
+
+  if (!devices?.length) {
+    return (
+      <div className="add-source empty">
+        <Plus size={16} />
+        <span>{label}</span>
+      </div>
+    );
+  }
+
+  const selected = devices.find((device) => device.id === selectedId) || devices[0];
   return (
-    <div className="device-group">
-      <h3>{title}</h3>
-      {devices.length ? (
-        devices.map((device) => (
-          <div className="device-row" key={device.id}>
-            <span>{device.label}</span>
-            <button className="small-action" disabled={disabled} onClick={() => onAdd(device)}>
-              Add
-            </button>
-          </div>
-        ))
-      ) : (
-        <div className="empty-row">None</div>
-      )}
+    <div className="add-source">
+      <div className="select-shell">
+        <select disabled={disabled} value={selected.id} onChange={(event) => setSelectedId(event.target.value)}>
+          {devices.map((device) => (
+            <option key={device.id} value={device.id}>
+              {device.label}
+            </option>
+          ))}
+        </select>
+        <ChevronDown size={14} />
+      </div>
+      <button disabled={disabled} onClick={() => onAdd(selected)}>
+        <Plus size={15} />
+        {label}
+      </button>
     </div>
   );
 }
 
-function ProcessingPanel({ summary, session, asrMetrics, offlinePass, draft, options, dirty, saving, locked, onChange, onAsrChange, onProfileChange, onSave }) {
-  const profileOptions = uniqueOptions(options.asrProfiles?.length ? options.asrProfiles : FALLBACK_OPTIONS.asrProfiles, draft.profile);
-  const modelOptions = uniqueOptions(options.asrModels?.length ? options.asrModels : FALLBACK_OPTIONS.asrModels, draft.model);
+function ProcessingColumn({ asrMetrics, dirty, draft, events, locked, offlinePass, options, saving, session, summary, onAsrChange, onChange, onProfileChange, onSave }) {
   const languageOptions = uniqueOptions(options.languages?.length ? options.languages : FALLBACK_OPTIONS.languages, draft.language);
-  const modeOptions = options.asrModes?.length ? options.asrModes : FALLBACK_OPTIONS.asrModes;
+  const modelOptions = uniqueOptions(options.asrModels?.length ? options.asrModels : FALLBACK_OPTIONS.asrModels, draft.model);
   const computeOptions = uniqueOptions(options.computeTypes?.length ? options.computeTypes : FALLBACK_OPTIONS.computeTypes, draft.computeType);
   const overloadOptions = uniqueOptions(options.overloadStrategies?.length ? options.overloadStrategies : FALLBACK_OPTIONS.overloadStrategies, draft.overloadStrategy);
 
   return (
-    <div className="processing-panel">
-      <div className="settings-grid">
-        <label className="check-row">
-          <input type="checkbox" checked={draft.asrEnabled} disabled={locked} onChange={(event) => onChange({ asrEnabled: event.target.checked })} />
-          <span>ASR</span>
-        </label>
-        <label className="check-row">
-          <input type="checkbox" checked={draft.wavEnabled} disabled={locked} onChange={(event) => onChange({ wavEnabled: event.target.checked })} />
-          <span>WAV</span>
-        </label>
-        <label className="check-row">
-          <input type="checkbox" checked={draft.offlineOnStop} disabled={locked} onChange={(event) => onChange({ offlineOnStop: event.target.checked })} />
-          <span>Offline stop</span>
-        </label>
-        <label className="check-row">
-          <input type="checkbox" checked={draft.realtimeTranscriptToFile} disabled={locked} onChange={(event) => onChange({ realtimeTranscriptToFile: event.target.checked })} />
-          <span>RT file</span>
-        </label>
-        <Field label="Profile">
-          <select value={draft.profile} disabled={locked} onChange={(event) => onProfileChange(event.target.value)}>
-            {profileOptions.map((profile) => (
-              <option key={profile} value={profile}>
-                {profile}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Language">
-          <select value={draft.language} disabled={locked} onChange={(event) => onChange({ language: event.target.value })}>
-            {languageOptions.map((language) => (
-              <option key={language} value={language}>
-                {language}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Mode">
-          <select value={draft.asrMode} disabled={locked} onChange={(event) => onChange({ asrMode: event.target.value })}>
-            {modeOptions.map((mode) => (
-              <option key={mode.id} value={mode.id}>
-                {mode.label}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Model">
-          <select value={draft.model} disabled={locked} onChange={(event) => onChange({ model: event.target.value })}>
-            {modelOptions.map((model) => (
-              <option key={model} value={model}>
-                {model}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Output">
-          <input type="text" value={draft.outputFile} disabled={locked} onChange={(event) => onChange({ outputFile: event.target.value })} />
-        </Field>
-        <button className="primary-action settings-save" disabled={!dirty || saving} onClick={onSave}>
-          {dirty ? <Save size={16} /> : <Check size={16} />}
-          {saving ? "Saving" : dirty ? "Save" : "Saved"}
-        </button>
+    <PipelineColumn title="Processing" active={session.running || offlinePass.running} activeTone={offlinePass.running ? "warn" : "muted"}>
+      <SectionLabel>Speed vs Quality</SectionLabel>
+      <div className="quality-stack">
+        {QUALITY_PROFILES.map((item) => {
+          const Icon = item.icon;
+          return (
+            <button
+              key={item.profile}
+              className={draft.profile === item.profile ? "selected" : ""}
+              disabled={locked}
+              onClick={() => onProfileChange(item.profile)}
+            >
+              <span>{item.label}</span>
+              {Icon ? <Icon size={15} /> : null}
+            </button>
+          );
+        })}
+      </div>
+
+      <SectionLabel>Language</SectionLabel>
+      <div className="select-shell">
+        <select disabled={locked} value={draft.language} onChange={(event) => onChange({ language: event.target.value })}>
+          {languageOptions.map((language) => (
+            <option key={language} value={language}>
+              {languageLabel(language)}
+            </option>
+          ))}
+        </select>
+        <ChevronDown size={15} />
+      </div>
+
+      <SectionLabel>Features</SectionLabel>
+      <div className="feature-grid">
+        <FeatureToggle checked={draft.asrEnabled} disabled={locked} label="Live ASR" onClick={() => onChange({ asrEnabled: !draft.asrEnabled })} />
+        <FeatureToggle checked={draft.asrMode === "split"} disabled={locked} label="Speaker Separation" onClick={() => onChange({ asrMode: draft.asrMode === "split" ? "mix" : "split" })} />
+        <FeatureToggle checked={draft.wavEnabled} disabled={locked} label="Write WAV" onClick={() => onChange({ wavEnabled: !draft.wavEnabled })} />
+        <FeatureToggle checked={draft.offlineOnStop} disabled={locked} label="Offline Pass" onClick={() => onChange({ offlineOnStop: !draft.offlineOnStop })} />
+      </div>
+
+      <div className="settings-strip">
+        <StatLine label="Active Model" value={summary.model || draft.model || "-"} />
+        <StatLine label="ASR Latency" value={`${formatNumber(asrMetrics.avgLatencyS)}s`} accent="green" />
+        <StatLine label="ASR Drops" value={`${asrMetrics.segDroppedTotal ?? 0}/${asrMetrics.segSkippedTotal ?? 0}`} accent="blue" />
+        <StatLine label="Audio Drops" value={`${session.drops?.droppedOutBlocks ?? 0}/${session.drops?.droppedTapBlocks ?? 0}`} />
       </div>
 
       <details className="advanced-settings">
-        <summary>ASR settings</summary>
-        <div className="settings-grid advanced">
+        <summary>Advanced ASR</summary>
+        <div className="advanced-grid">
+          <Field label="Model">
+            <select disabled={locked} value={draft.model} onChange={(event) => onChange({ model: event.target.value })}>
+              {modelOptions.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
+            </select>
+          </Field>
           <Field label="Compute">
-            <select value={draft.computeType} disabled={locked} onChange={(event) => onChange({ computeType: event.target.value })}>
+            <select disabled={locked} value={draft.computeType} onChange={(event) => onChange({ computeType: event.target.value })}>
               {computeOptions.map((computeType) => (
                 <option key={computeType} value={computeType}>
                   {computeType}
@@ -502,7 +596,7 @@ function ProcessingPanel({ summary, session, asrMetrics, offlinePass, draft, opt
             </select>
           </Field>
           <Field label="Overload">
-            <select value={draft.overloadStrategy} disabled={locked} onChange={(event) => onChange({ overloadStrategy: event.target.value })}>
+            <select disabled={locked} value={draft.overloadStrategy} onChange={(event) => onChange({ overloadStrategy: event.target.value })}>
               {overloadOptions.map((strategy) => (
                 <option key={strategy} value={strategy}>
                   {strategy}
@@ -510,15 +604,18 @@ function ProcessingPanel({ summary, session, asrMetrics, offlinePass, draft, opt
               ))}
             </select>
           </Field>
+          <Field label="Output">
+            <input disabled={locked} type="text" value={draft.outputFile} onChange={(event) => onChange({ outputFile: event.target.value })} />
+          </Field>
           {ASR_FIELDS.map((field) => (
             <Field key={field.key} label={field.label}>
               <input
-                type="number"
-                min={field.min}
-                max={field.max}
-                step={field.step}
-                value={draft.asr[field.key]}
                 disabled={locked}
+                max={field.max}
+                min={field.min}
+                step={field.step}
+                type="number"
+                value={draft.asr[field.key]}
                 onChange={(event) => onAsrChange(field.key, event.target.value)}
               />
             </Field>
@@ -526,17 +623,189 @@ function ProcessingPanel({ summary, session, asrMetrics, offlinePass, draft, opt
         </div>
       </details>
 
-      <dl className="kv-list">
-        <KeyValue label="Profile" value={summary.profile || draft.profile || "-"} />
-        <KeyValue label="Compute" value={draft.computeType || "-"} />
-        <KeyValue label="WAV" value={summary.wavEnabled ? "on" : "off"} />
-        <KeyValue label="Audio drops" value={`${session.drops?.droppedOutBlocks ?? 0}/${session.drops?.droppedTapBlocks ?? 0}`} />
-        <KeyValue label="ASR drops" value={`${asrMetrics.segDroppedTotal ?? 0}/${asrMetrics.segSkippedTotal ?? 0}`} />
-        <KeyValue label="ASR latency" value={`${formatNumber(asrMetrics.avgLatencyS)}s avg`} />
-        <KeyValue label="Offline pass" value={offlinePass.running ? "running" : offlinePass.result?.status || (summary.offlineOnStop ? "armed" : "off")} />
-        <KeyValue label="Warning" value={session.lastWarning || "-"} />
-      </dl>
+      <button className="save-button" disabled={!dirty || saving} onClick={onSave}>
+        {dirty ? <Save size={15} /> : <Check size={15} />}
+        {saving ? "Saving" : dirty ? "Save Settings" : "Saved"}
+      </button>
+
+      <div className="state-card">
+        <div>
+          <Settings size={15} />
+          <span>Current State</span>
+        </div>
+        <strong>{session.running ? "Processing audio stream..." : offlinePass.running ? "Finalizing transcription..." : "Ready to record"}</strong>
+        {events.length ? <small>{events[0].type}</small> : null}
+      </div>
+    </PipelineColumn>
+  );
+}
+
+function TranscriptColumn({ lines, session, status, onClear }) {
+  const running = status === "recording";
+  return (
+    <PipelineColumn title="Live Transcript" active={running} className="transcript-column" rightMeta={<LatencyMeta session={session} />}>
+      <div className="transcript-tools">
+        <span>{session.realtimeTranscriptPath || session.humanLogPath || "memory"}</span>
+        <button disabled={!lines.length} onClick={onClear}>
+          Clear
+        </button>
+      </div>
+
+      <div className="transcript-list">
+        {lines.length ? (
+          lines.map((line, index) => <TranscriptLine key={`${line.ts}-${index}`} line={line} index={index} />)
+        ) : (
+          <div className="transcript-empty">Transcript stream</div>
+        )}
+        {running ? (
+          <div className="typing-row">
+            <div>
+              <time>live</time>
+              <span>ASR</span>
+            </div>
+            <p>
+              <i />
+              <i />
+              <i />
+            </p>
+          </div>
+        ) : null}
+      </div>
+    </PipelineColumn>
+  );
+}
+
+function LatencyMeta({ session }) {
+  const text = session.asrRunning ? "live" : "standby";
+  return (
+    <span className="column-meta">
+      <Activity size={13} />
+      {text}
+    </span>
+  );
+}
+
+function TranscriptLine({ line, index }) {
+  const speaker = line.stream || "mix";
+  return (
+    <div className="transcript-line">
+      <div className="speaker-block">
+        <time>{formatTime(line.ts)}</time>
+        <span className={index % 2 ? "speaker-two" : ""}>{speaker}</span>
+      </div>
+      <p>{line.text}</p>
     </div>
+  );
+}
+
+function AssistantColumn({ assistant, disabled, profiles, onInvoke }) {
+  const [text, setText] = React.useState("");
+  const [profileId, setProfileId] = React.useState(assistant.selectedProfileId || profiles?.[0]?.id || "");
+  React.useEffect(() => {
+    setProfileId((current) => current || assistant.selectedProfileId || profiles?.[0]?.id || "");
+  }, [assistant.selectedProfileId, profiles]);
+
+  const selectedProfile = profiles.find((profile) => profile.id === profileId) || profiles[0] || {};
+  const response = assistant.lastResponse || {};
+
+  const invokeCustom = (requestText, sourceLabel = "you") => {
+    onInvoke({ requestText, profileId, sourceLabel });
+  };
+
+  return (
+    <PipelineColumn title="AI Assistant" active={assistant.enabled} className="assistant-column">
+      <SectionLabel>Profile</SectionLabel>
+      <div className="select-shell">
+        <select disabled={disabled || !profiles.length} value={profileId} onChange={(event) => setProfileId(event.target.value)}>
+          {profiles.length ? (
+            profiles.map((profile) => (
+              <option key={profile.id || profile.label} value={profile.id}>
+                {profile.label || profile.id}
+              </option>
+            ))
+          ) : (
+            <option value="">No profiles</option>
+          )}
+        </select>
+        <ChevronDown size={15} />
+      </div>
+
+      <SectionLabel>Quick Actions</SectionLabel>
+      <div className="quick-grid">
+        <ActionButton disabled={disabled} icon={<MessageSquare size={15} />} label="Quick Answer" onClick={() => onInvoke({ action: "answer", profileId })} />
+        <ActionButton disabled={disabled} icon={<FileText size={15} />} label="Summarize" onClick={() => onInvoke({ action: "summary", profileId })} />
+        <ActionButton
+          disabled={disabled}
+          icon={<ListChecks size={15} />}
+          label="Action Items"
+          onClick={() => invokeCustom("Extract concise action items from the current transcript.", "action items")}
+        />
+        <ActionButton
+          disabled={disabled}
+          icon={<Sparkles size={15} />}
+          label="Interview Assist"
+          onClick={() => invokeCustom("Help me answer the latest interview question using the current transcript.", "interview assist")}
+        />
+      </div>
+
+      <div className="assistant-response">
+        <span>Assistant Response</span>
+        {response.text ? <p>{response.text}</p> : <p className="muted">{assistant.busy ? "Working..." : "No response yet"}</p>}
+      </div>
+
+      <div className="settings-strip">
+        <StatLine label="Active Model" value={selectedProfile.model || "-"} />
+        <StatLine label="Response Time" value={response.dtS ? `${formatNumber(response.dtS)}s` : assistant.busy ? "running" : "-"} accent="green" />
+        <StatLine label="Last Action" value={assistant.lastRequest?.sourceLabel || "-"} accent="blue" />
+      </div>
+
+      <div className="assistant-input">
+        <textarea disabled={disabled} placeholder="Ask the assistant anything..." value={text} onChange={(event) => setText(event.target.value)} />
+        <button
+          disabled={disabled || !text.trim()}
+          onClick={() => {
+            invokeCustom(text);
+            setText("");
+          }}
+        >
+          <Send size={15} />
+          Send
+        </button>
+      </div>
+    </PipelineColumn>
+  );
+}
+
+function PipelineColumn({ active, activeTone = "good", children, className = "", rightMeta, title }) {
+  return (
+    <article className={`pipeline-column ${className}`}>
+      <header className="column-header">
+        <h2>{title}</h2>
+        <div className="header-right">
+          {rightMeta}
+          <span className={`column-dot ${active ? activeTone : "idle"}`} />
+        </div>
+      </header>
+      <div className="column-body">{children}</div>
+    </article>
+  );
+}
+
+function ActionButton({ disabled, icon, label, onClick }) {
+  return (
+    <button className="action-button" disabled={disabled} onClick={onClick}>
+      {icon}
+      {label}
+    </button>
+  );
+}
+
+function FeatureToggle({ checked, disabled, label, onClick }) {
+  return (
+    <button className={`feature-toggle ${checked ? "selected" : ""}`} disabled={disabled} onClick={onClick}>
+      <span>{label}</span>
+      <b />
+    </button>
   );
 }
 
@@ -549,103 +818,24 @@ function Field({ label, children }) {
   );
 }
 
-function KeyValue({ label, value }) {
-  return (
-    <>
-      <dt>{label}</dt>
-      <dd>{value}</dd>
-    </>
-  );
+function SectionLabel({ children }) {
+  return <h3 className="section-label">{children}</h3>;
 }
 
-function AssistantPanel({ assistant, profiles, disabled, onInvoke }) {
-  const [text, setText] = React.useState("");
-  const [profileId, setProfileId] = React.useState(assistant.selectedProfileId || profiles?.[0]?.id || "");
-  React.useEffect(() => {
-    setProfileId((current) => current || assistant.selectedProfileId || profiles?.[0]?.id || "");
-  }, [assistant.selectedProfileId, profiles]);
-
-  const response = assistant.lastResponse || {};
+function StatLine({ accent = "", label, value }) {
   return (
-    <div className="assistant-panel">
-      <div className="assistant-controls">
-        <select value={profileId} disabled={disabled || !profiles.length} onChange={(event) => setProfileId(event.target.value)}>
-          {profiles.length ? (
-            profiles.map((profile) => (
-              <option key={profile.id || profile.label} value={profile.id}>
-                {profile.label || profile.id}
-              </option>
-            ))
-          ) : (
-            <option value="">No profiles</option>
-          )}
-        </select>
-        <div className="assistant-actions">
-          <button className="small-action" disabled={disabled} onClick={() => onInvoke({ action: "answer", profileId })}>
-            Answer
-          </button>
-          <button className="small-action" disabled={disabled} onClick={() => onInvoke({ action: "summary", profileId })}>
-            Summary
-          </button>
-        </div>
-      </div>
-      <textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="Ask the assistant" disabled={disabled} />
-      <button
-        className="primary-action assistant-send"
-        disabled={disabled || !text.trim()}
-        onClick={() => {
-          onInvoke({ requestText: text, profileId });
-          setText("");
-        }}
-      >
-        Send
-      </button>
-      <div className="assistant-response">
-        {response.text ? (
-          <>
-            <strong>{response.ok ? response.profile || "Assistant" : "Assistant error"}</strong>
-            <p>{response.text}</p>
-          </>
-        ) : (
-          <div className="empty-row">{assistant.busy ? "Working..." : "No response yet"}</div>
-        )}
-      </div>
+    <div className={`stat-line ${accent}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
     </div>
   );
 }
 
-function TranscriptPanel({ lines, session, onClear }) {
+function SwitchButton({ checked, disabled, onClick }) {
   return (
-    <div className="transcript-panel">
-      <div className="transcript-tools">
-        <button className="small-action" disabled={!lines.length} onClick={onClear}>
-          Clear
-        </button>
-        <span>{session.realtimeTranscriptPath || session.humanLogPath || "memory"}</span>
-      </div>
-      <TranscriptView lines={lines} />
-    </div>
-  );
-}
-
-function TranscriptView({ lines }) {
-  if (!lines.length) {
-    return (
-      <div className="transcript-empty">
-        <span>Transcript stream</span>
-      </div>
-    );
-  }
-  return (
-    <div className="transcript-lines">
-      {lines.map((line, index) => (
-        <div className="transcript-line" key={`${line.ts}-${index}`}>
-          <time>{formatTime(line.ts)}</time>
-          <strong>{line.stream || "mix"}</strong>
-          <span>{line.text}</span>
-        </div>
-      ))}
-    </div>
+    <button className={`switch-button ${checked ? "on" : ""}`} disabled={disabled} onClick={onClick}>
+      <span />
+    </button>
   );
 }
 
@@ -757,9 +947,14 @@ function formatNumber(value) {
 function formatTime(ts) {
   const date = new Date(Number(ts || 0) * 1000);
   if (Number.isNaN(date.getTime())) {
-    return "--:--:--";
+    return "--:--";
   }
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function languageLabel(language) {
+  const labels = { auto: "Auto", en: "English", ru: "Russian" };
+  return labels[language] || language;
 }
 
 createRoot(document.getElementById("root")).render(<App />);
