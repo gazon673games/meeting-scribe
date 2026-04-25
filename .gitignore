@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 
 .venv/
+node_modules/
 .idea/
 .claude/
 
@@ -17,6 +18,8 @@ probe_tmp/
 .local/
 
 .codex_tmp/
+build/electron-main/
+build/electron-renderer/
 
 # model weights
 models/

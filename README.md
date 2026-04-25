@@ -20,6 +20,52 @@ Desktop app for capturing system audio and microphone input, transcribing speech
 Runtime files are kept under `.local/`.
 Model caches stay in `models/`.
 
+## Electron UI experiment
+
+The Electron rewrite is being introduced beside the existing PySide UI. The
+first bridge process is Qt-free and speaks newline-delimited JSON over
+stdin/stdout:
+
+```powershell
+.venv\Scripts\python.exe main_electron_backend.py
+```
+
+Install the Electron/React dependencies and start the new desktop shell:
+
+```powershell
+npm install
+npm run dev
+```
+
+If the Electron binary cannot be downloaded because GitHub is unavailable, the
+installer may need explicit proxy support:
+
+```powershell
+$env:ELECTRON_GET_USE_PROXY = "1"
+npm rebuild electron
+```
+
+The dev launcher can also use an extracted runtime under
+`build/electron-runtime/`. It clears `ELECTRON_RUN_AS_NODE` for the app process
+because that environment variable makes Electron behave like plain Node.
+
+For renderer-only work, use:
+
+```powershell
+npm run dev:renderer
+```
+
+For the desktop shell only, with an already running renderer server:
+
+```powershell
+npm run dev:electron
+```
+
+The current Electron bridge exposes backend health, config, device discovery,
+source add/toggle controls, audio session start/stop, live ASR startup/stop,
+ASR metrics, transcript streaming, assistant actions, and offline pass handling
+through headless controllers.
+
 ## Release build
 
 Build a local Windows release archive:
