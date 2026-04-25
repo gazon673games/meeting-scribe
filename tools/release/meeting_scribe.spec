@@ -5,7 +5,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_all
 
 
-ROOT = Path(SPECPATH).resolve().parents[2]
+ROOT = Path(SPECPATH).resolve().parents[1]
 datas = []
 binaries = []
 hiddenimports = []
@@ -31,7 +31,7 @@ for package_name in (
 
 
 a = Analysis(
-    [str(ROOT / "main.py")],
+    [str(ROOT / "main_electron_backend.py")],
     pathex=[str(ROOT), str(ROOT / "src")],
     binaries=binaries,
     datas=datas,
@@ -56,12 +56,12 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="meeting-scribe",
+    name="meeting-scribe-backend",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
@@ -75,5 +75,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="meeting-scribe",
+    name="meeting-scribe-backend",
 )

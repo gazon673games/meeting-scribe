@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -31,8 +32,15 @@ from transcription.infrastructure.file_transcript_context import FileTranscriptC
 from transcription.infrastructure.file_transcript_store import FileTranscriptStore
 
 
+def runtime_root() -> Path:
+    override = os.environ.get("MEETING_SCRIBE_RUNTIME_ROOT")
+    if override:
+        return Path(override).expanduser().resolve()
+    return application_root()
+
+
 def create_backend() -> ElectronBackend:
-    project_root = application_root()
+    project_root = runtime_root()
     configure_project_local_io(project_root)
     config_repository = JsonConfigRepository(project_root / "config.json")
     ensure_runtime_config(project_root, config_repository)
@@ -66,6 +74,14 @@ def create_backend() -> ElectronBackend:
 
 
 def main() -> None:
+    if "--smoke-import" in sys.argv:
+        return
+    if "--repair-config" in sys.argv:
+        root = runtime_root()
+        configure_project_local_io(root)
+        ensure_runtime_config(root, JsonConfigRepository(root / "config.json"))
+        return
+
     backend = create_backend()
     bridge = JsonLineBridge(backend.handle)
     backend.set_event_sink(bridge.emit_event)
