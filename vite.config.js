@@ -2,7 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
-  root: "electron-ui",
+  root: "frontend/renderer",
   plugins: [react()],
   server: {
     host: "127.0.0.1",
@@ -10,8 +10,7 @@ export default defineConfig({
     strictPort: true
   },
   build: {
-    outDir: "../build/electron-renderer",
+    outDir: "../../build/electron-renderer",
     emptyOutDir: true
   }
 });
-

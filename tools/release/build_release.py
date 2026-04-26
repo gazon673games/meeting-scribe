@@ -79,7 +79,7 @@ def _write_packaged_package_json(repo_root: Path, app_dir: Path) -> None:
         "name": package.get("name", APP_NAME),
         "version": package.get("version", "0.0.0"),
         "private": True,
-        "main": package.get("main", "electron/main.cjs"),
+        "main": package.get("main", "frontend/electron/main.cjs"),
     }
     (app_dir / "package.json").write_text(json.dumps(packaged, indent=2), encoding="utf-8")
 
@@ -123,7 +123,7 @@ def _prepare_electron_app(repo_root: Path, final_dir: Path, backend_build_dir: P
     app_dir.mkdir(parents=True, exist_ok=True)
 
     _write_packaged_package_json(repo_root, app_dir)
-    _copy_tree(repo_root / "electron", app_dir / "electron")
+    _copy_tree(repo_root / "frontend" / "electron", app_dir / "frontend" / "electron")
     _copy_tree(renderer_build, app_dir / "build" / "electron-renderer")
     _copy_tree(backend_build_dir, backend_dir)
     _write_windows_launcher(final_dir)

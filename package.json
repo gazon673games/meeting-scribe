@@ -3,12 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "electron/main.cjs",
+  "main": "frontend/electron/main.cjs",
   "scripts": {
-    "start": "node electron/run-electron.cjs",
-    "dev": "concurrently -k \"vite --config vite.config.js --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && node electron/run-electron.cjs\"",
+    "start": "node frontend/electron/run-electron.cjs",
+    "dev": "concurrently -k \"vite --config vite.config.js --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && node frontend/electron/run-electron.cjs\"",
     "dev:renderer": "vite --config vite.config.js --host 127.0.0.1",
-    "dev:electron": "node electron/run-electron.cjs",
+    "dev:electron": "node frontend/electron/run-electron.cjs",
     "build": "vite build --config vite.config.js",
     "package": "python -m tools.release.build_release --version dev",
     "package:win": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/release/build_exe.ps1 -Version dev"

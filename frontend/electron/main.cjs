@@ -3,7 +3,7 @@ const { spawn } = require("node:child_process");
 const { existsSync } = require("node:fs");
 const path = require("node:path");
 
-const appRoot = app.isPackaged ? path.join(process.resourcesPath, "app") : path.resolve(__dirname, "..");
+const appRoot = app.isPackaged ? path.join(process.resourcesPath, "app") : path.resolve(__dirname, "..", "..");
 const backendRoot = app.isPackaged ? path.join(process.resourcesPath, "backend") : appRoot;
 const runtimeRoot = app.isPackaged ? path.dirname(process.execPath) : appRoot;
 
@@ -175,7 +175,7 @@ class PythonBackend {
 
     return {
       executable: this.findPython(),
-      args: [path.join(this.root, "main_electron_backend.py")],
+      args: [path.join(this.root, "backend", "main_electron_backend.py")],
       cwd: this.root
     };
   }
