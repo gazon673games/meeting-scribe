@@ -10,7 +10,8 @@
     "dev:renderer": "vite --config vite.config.js --host 127.0.0.1",
     "dev:electron": "node electron/run-electron.cjs",
     "build": "vite build --config vite.config.js",
-    "package": "python -m tools.release.build_release --version dev"
+    "package": "python -m tools.release.build_release --version dev",
+    "package:win": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/release/build_exe.ps1 -Version dev"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
