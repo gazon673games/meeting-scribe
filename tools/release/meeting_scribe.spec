@@ -31,8 +31,8 @@ for package_name in (
 
 
 a = Analysis(
-    [str(ROOT / "main_electron_backend.py")],
-    pathex=[str(ROOT), str(ROOT / "src")],
+    [str(ROOT / "backend" / "main_electron_backend.py")],
+    pathex=[str(ROOT / "backend"), str(ROOT / "backend" / "src")],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,

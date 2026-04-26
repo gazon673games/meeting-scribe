@@ -24,10 +24,21 @@ Model caches stay in `models/`.
 The Python backend can be run directly for bridge/debug work:
 
 ```powershell
-.venv\Scripts\python.exe main_electron_backend.py
+.venv\Scripts\python.exe backend\main_electron_backend.py
 ```
 
-`main.py` now defaults to the Electron dev shell.
+`backend\main.py` defaults to the Electron dev shell and can also run the
+backend with `--backend`.
+
+## Project layout
+
+- `frontend/electron/` - Electron main/preload process and desktop launcher
+- `frontend/renderer/` - React renderer UI
+- `backend/main_electron_backend.py` - Python backend entrypoint for Electron
+- `backend/src/` - Python application code, grouped by bounded context and layer
+- `models/` - local model/cache directory
+- `tests/` - Python test suite
+- `tools/` - release, ASR, and audio utility scripts
 
 ## Electron UI
 
@@ -78,18 +89,26 @@ Build a local Windows release archive:
 .\tools\release\build_exe.ps1 -Version dev
 ```
 
+The same release path is also exposed as an npm script:
+
+```powershell
+npm run package:win
+```
+
 The release builder creates a portable Electron app, bundles the Python backend
 as `resources\backend\meeting-scribe-backend.exe`, and writes
 `dist\meeting-scribe-<version>-win64.zip`. Inside it, run `meeting-scribe.exe`.
 If a developer shell has `ELECTRON_RUN_AS_NODE=1` set, use
 `meeting-scribe.cmd`; it clears that variable before starting the same app.
 
-GitHub Actions builds release archives on `v*` tags for Windows x64/arm64,
-Linux x64/arm64, and macOS x64/arm64, then attaches them to the GitHub Release.
+GitHub Actions builds release archives on `v*` tags or manual workflow dispatch
+for Windows x64/arm64, Linux x64/arm64, and macOS x64/arm64. Tag builds attach
+the archives to the GitHub Release.
 The build script runs the packaged Python backend with `--repair-config` and
 `--smoke-import` before zipping the release.
-Windows arm64 is currently allowed to fail because `faster-whisper` depends on
-`ctranslate2`, which does not publish a `win_arm64` wheel for this dependency set yet.
+Windows arm64 uses the no-ASR build requirements because `faster-whisper`
+depends on `ctranslate2`, which does not publish a `win_arm64` wheel for this
+dependency set yet.
 
 Publish a release by pushing a version tag:
 

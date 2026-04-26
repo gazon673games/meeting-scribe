@@ -4,8 +4,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-_PROJECT_ROOT = Path(__file__).resolve().parent
-_SRC_ROOT = _PROJECT_ROOT / "src"
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_BACKEND_ROOT = _PROJECT_ROOT / "backend"
+_SRC_ROOT = _BACKEND_ROOT / "src"
 if _SRC_ROOT.exists():
     src_text = str(_SRC_ROOT)
     if src_text not in sys.path:

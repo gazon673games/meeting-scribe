@@ -89,10 +89,17 @@ jobs:
           architecture: ${{ matrix.python_arch }}
           cache: "pip"
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r ${{ matrix.requirements_file }}
+          npm ci
 
       - name: Run tests
         run: python -m unittest discover -s tests -v
