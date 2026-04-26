@@ -27,7 +27,6 @@ export function useMeetingScribeApp() {
   const [settingsDirty, setSettingsDirty] = React.useState(false);
   const [savingSettings, setSavingSettings] = React.useState(false);
   const [devices, setDevices] = React.useState({ loopback: [], input: [], errors: [] });
-  const [mode, setMode] = React.useState("recording");
   const [events, setEvents] = React.useState([]);
   const [error, setError] = React.useState("");
   const [loading, setLoading] = React.useState(true);
@@ -59,6 +58,10 @@ export function useMeetingScribeApp() {
       setEvents((current) => [event, ...current].slice(0, 8));
       if (event.type === "backend_ready") {
         setBackendStatus((current) => ({ ...current, ready: true, running: true }));
+      }
+      if (event.type === "backend_exit") {
+        setBackendStatus((current) => ({ ...current, ready: false, running: false, lastError: "Python backend stopped" }));
+        setError(`Python backend stopped (${event.code ?? "null"}, ${event.signal ?? "null"})`);
       }
       if (REFRESHING_EVENTS.includes(event.type)) {
         refresh();
@@ -193,7 +196,6 @@ export function useMeetingScribeApp() {
     error,
     events,
     loading,
-    mode,
     offlinePass,
     options,
     session,
@@ -208,7 +210,6 @@ export function useMeetingScribeApp() {
     refresh,
     runBackendAction,
     saveSettings,
-    setMode,
     startOrStop,
     updateAsrSetting,
     updateSettings

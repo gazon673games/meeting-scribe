@@ -9,14 +9,37 @@ import { ProcessingFeatureGrid } from "./ProcessingFeatureGrid";
 import { ProcessingStats } from "./ProcessingStats";
 import { QualityProfileSelector } from "./QualityProfileSelector";
 
-export function ProcessingColumn({ asrMetrics, dirty, draft, events, locked, offlinePass, options, saving, session, summary, onAsrChange, onChange, onProfileChange, onSave }) {
+export function ProcessingColumn({
+  asrMetrics,
+  dirty,
+  draft,
+  events,
+  headerProps,
+  layoutControls,
+  locked,
+  offlinePass,
+  options,
+  saving,
+  session,
+  summary,
+  onAsrChange,
+  onChange,
+  onProfileChange,
+  onSave
+}) {
   const languageOptions = uniqueOptions(options.languages?.length ? options.languages : FALLBACK_OPTIONS.languages, draft.language);
   const modelOptions = uniqueOptions(options.asrModels?.length ? options.asrModels : FALLBACK_OPTIONS.asrModels, draft.model);
   const computeOptions = uniqueOptions(options.computeTypes?.length ? options.computeTypes : FALLBACK_OPTIONS.computeTypes, draft.computeType);
   const overloadOptions = uniqueOptions(options.overloadStrategies?.length ? options.overloadStrategies : FALLBACK_OPTIONS.overloadStrategies, draft.overloadStrategy);
 
   return (
-    <PipelinePanel title="Processing" active={session.running || offlinePass.running} activeTone={offlinePass.running ? "warn" : "muted"}>
+    <PipelinePanel
+      title="Processing"
+      active={session.running || offlinePass.running}
+      activeTone={offlinePass.running ? "warn" : "muted"}
+      headerControls={layoutControls}
+      headerProps={headerProps}
+    >
       <SectionLabel>Speed vs Quality</SectionLabel>
       <QualityProfileSelector disabled={locked} selectedProfile={draft.profile} onProfileChange={onProfileChange} />
 

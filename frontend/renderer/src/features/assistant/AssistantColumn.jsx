@@ -7,7 +7,7 @@ import { AssistantQuickActions } from "./AssistantQuickActions";
 import { AssistantResponse } from "./AssistantResponse";
 import { AssistantStats } from "./AssistantStats";
 
-export function AssistantColumn({ assistant, disabled, profiles, onInvoke }) {
+export function AssistantColumn({ assistant, disabled, headerProps, layoutControls, profiles, onInvoke }) {
   const [text, setText] = React.useState("");
   const [profileId, setProfileId] = React.useState(assistant.selectedProfileId || profiles?.[0]?.id || "");
   React.useEffect(() => {
@@ -22,7 +22,7 @@ export function AssistantColumn({ assistant, disabled, profiles, onInvoke }) {
   };
 
   return (
-    <PipelinePanel title="AI Assistant" active={assistant.enabled} className="assistant-column">
+    <PipelinePanel title="AI Assistant" active={assistant.busy} className="assistant-column" headerControls={layoutControls} headerProps={headerProps} showIndicator>
       <AssistantProfileSelect disabled={disabled} profileId={profileId} profiles={profiles} onProfileChange={setProfileId} />
       <AssistantQuickActions disabled={disabled} profileId={profileId} onInvoke={onInvoke} onInvokeCustom={invokeCustom} />
       <AssistantResponse busy={assistant.busy} response={response} />
