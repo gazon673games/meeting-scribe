@@ -36,7 +36,6 @@ export function makeSettingsDraft(config) {
   const ui = objectSection(config?.ui);
   const asr = objectSection(config?.asr);
   return {
-    asrEnabled: boolWithDefault(ui.asr_enabled, true),
     wavEnabled: boolWithDefault(ui.wav_enabled, false),
     offlineOnStop: boolWithDefault(ui.offline_on_stop, false),
     realtimeTranscriptToFile: boolWithDefault(ui.rt_transcript_to_file, false),
@@ -58,7 +57,7 @@ export function applySettingsToConfig(config, draft) {
     version: current.version ?? 2,
     ui: {
       ...objectSection(current.ui),
-      asr_enabled: Boolean(draft.asrEnabled),
+      asr_enabled: true,
       lang: String(draft.language || "ru"),
       asr_mode: draft.asrMode === "split" ? 1 : 0,
       model: String(draft.model || "medium"),
@@ -82,7 +81,7 @@ export function applySettingsToConfig(config, draft) {
 export function draftToStartParams(draft) {
   const config = applySettingsToConfig({}, draft);
   return {
-    asrEnabled: config.ui.asr_enabled,
+    asrEnabled: true,
     wavEnabled: config.ui.wav_enabled,
     runOfflinePass: config.ui.offline_on_stop,
     realtimeTranscriptToFile: config.ui.rt_transcript_to_file,

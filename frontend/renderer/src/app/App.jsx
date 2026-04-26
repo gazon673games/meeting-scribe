@@ -3,41 +3,36 @@ import { AudioInputs } from "../features/audio-inputs/AudioInputs";
 import { ProcessingColumn } from "../features/processing/ProcessingColumn";
 import { TopBar } from "../features/top-bar/TopBar";
 import { TranscriptColumn } from "../features/transcript/TranscriptColumn";
+import { ResizablePipeline } from "../shared/ui/pipeline/ResizablePipeline";
+import { usePipelineLayout } from "../shared/ui/pipeline/usePipelineLayout";
 import { useMeetingScribeApp } from "./useMeetingScribeApp";
 import "./styles.css";
 
 export function App() {
   const app = useMeetingScribeApp();
-
-  return (
-    <main className="app-shell">
-      <TopBar
-        canStart={app.canStart}
-        canStop={app.canStop}
-        loading={app.loading}
-        mode={app.mode}
-        status={app.status}
-        session={app.session}
-        backendStatus={app.backendStatus}
-        asrMetrics={app.asrMetrics}
-        onModeChange={app.setMode}
-        onRefresh={app.refresh}
-        onStartStop={app.startOrStop}
-      />
-
-      {app.error ? <div className="error-strip">{app.error}</div> : null}
-
-      <section className="pipeline">
+  const pipelineColumns = [
+    {
+      id: "audio-inputs",
+      label: "Audio Inputs",
+      minWidth: 160,
+      defaultWidth: 260,
+      element: (
         <AudioInputs
           devices={app.devices}
           disabled={app.session.running}
           sources={app.sources}
           onAdd={(device) => app.runBackendAction("add_source", { deviceId: device.id })}
-          onDelay={(source, delayMs) => app.runBackendAction("set_source_delay", { name: source.name, delayMs })}
           onRemove={(source) => app.runBackendAction("remove_source", { name: source.name })}
           onToggle={(source) => app.runBackendAction("set_source_enabled", { name: source.name, enabled: !source.enabled })}
         />
-
+      )
+    },
+    {
+      id: "processing",
+      label: "Processing",
+      minWidth: 160,
+      defaultWidth: 260,
+      element: (
         <ProcessingColumn
           asrMetrics={app.asrMetrics}
           dirty={app.settingsDirty}
@@ -54,21 +49,54 @@ export function App() {
           onProfileChange={app.applyProfile}
           onSave={app.saveSettings}
         />
-
-        <TranscriptColumn
-          lines={app.transcript}
-          session={app.session}
-          status={app.status}
-          onClear={() => app.runBackendAction("clear_transcript")}
-        />
-
+      )
+    },
+    {
+      id: "transcript",
+      label: "Live Transcript",
+      minWidth: 180,
+      defaultWidth: 320,
+      flex: true,
+      element: <TranscriptColumn lines={app.transcript} session={app.session} status={app.status} onClear={() => app.runBackendAction("clear_transcript")} />
+    },
+    {
+      id: "assistant",
+      label: "AI Assistant",
+      minWidth: 180,
+      defaultWidth: 360,
+      element: (
         <AssistantColumn
           assistant={app.assistant}
           disabled={!app.capabilities.assistant || !app.assistant.enabled || app.assistant.busy}
           profiles={app.codexProfiles}
           onInvoke={(params) => app.runBackendAction("invoke_assistant", params)}
         />
-      </section>
+      )
+    }
+  ];
+  const pipelineLayout = usePipelineLayout(pipelineColumns);
+
+  return (
+    <main className="app-shell">
+      <TopBar
+        canStart={app.canStart}
+        canStop={app.canStop}
+        loading={app.loading}
+        pipelineLayout={pipelineLayout}
+        status={app.status}
+        asrMetrics={app.asrMetrics}
+        onRefresh={app.refresh}
+        onStartStop={app.startOrStop}
+      />
+
+      {app.error ? <div className="error-strip">{app.error}</div> : null}
+
+      <ResizablePipeline
+        columns={pipelineLayout.visibleColumns}
+        onHideColumn={pipelineLayout.hideColumn}
+        onReorderColumn={pipelineLayout.moveColumnTo}
+        resetSignal={pipelineLayout.resetRevision}
+      />
     </main>
   );
 }
