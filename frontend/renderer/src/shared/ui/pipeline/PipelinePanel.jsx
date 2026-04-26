@@ -1,4 +1,4 @@
-export function PipelineColumn({ active, activeTone = "good", children, className = "", rightMeta, title }) {
+export function PipelinePanel({ active, activeTone = "good", children, className = "", rightMeta, title }) {
   return (
     <article className={`pipeline-column ${className}`}>
       <header className="column-header">
