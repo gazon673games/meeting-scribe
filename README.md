@@ -1,56 +1,71 @@
 # Meeting Scribe
 
-Desktop app for live meeting/interview transcription. The UI is Electron + React; the backend is Python and runs locally.
+Meeting Scribe is a desktop application for real-time transcription of meetings, interviews, calls, and other spoken sessions. It is designed for users who need a readable live transcript, optional local recording, and quick assistant-generated summaries without manually taking detailed notes during the conversation.
 
-## Features
+The application uses an Electron + React interface and a local Python backend. Audio capture, speech recognition, transcript state, and assistant orchestration run on the user's machine.
 
-- microphone and system-audio capture
-- realtime ASR with `faster-whisper`
-- live transcript with per-source labels
-- optional WAV recording and offline pass
-- Codex assistant actions based on the current transcript
-- portable release archives for Windows, Linux, and macOS x64
+## Purpose
+
+Meeting Scribe helps turn live audio into structured working material:
+
+- capture microphone and system audio in one desktop app;
+- transcribe speech in real time with `faster-whisper`;
+- keep a live transcript with source labels and speaker-friendly formatting;
+- optionally save the captured audio for review or offline processing;
+- generate assistant responses, summaries, action items, and risk checks from the current transcript context.
+
+Typical use cases include interviews, team meetings, research calls, support sessions, demos, and any workflow where the user needs to listen actively while preserving a useful written record.
+
+## Architecture
+
+- `frontend/electron/` - Electron main process, preload bridge, and desktop assets.
+- `frontend/renderer/` - React renderer UI.
+- `backend/main_electron_backend.py` - Python backend entrypoint used by Electron.
+- `backend/src/` - audio, ASR, transcript, assistant, and application logic.
+- `models/` - local ASR/model cache.
+- `tests/` - automated tests.
+- `tools/` - release and utility scripts.
+
+Electron owns the desktop window and UI lifecycle. The Python backend owns audio capture, transcription, and assistant commands. The two parts communicate through the Electron bridge, so the interface can evolve separately from the backend logic.
 
 ## Run Locally
 
+Install dependencies:
+
 ```powershell
 npm install
+```
+
+Start the full desktop application:
+
+```powershell
 npm run dev
 ```
 
-Runtime files are stored in `.local/`. Model/cache files stay in `models/`.
+Runtime files are stored in `.local/`. Model and cache files are stored in `models/`.
 
-Renderer only:
-
-```powershell
-npm run dev:renderer
-```
-
-Electron shell only, when Vite is already running:
+Useful development commands:
 
 ```powershell
-npm run dev:electron
+npm run dev:renderer   # React renderer only
+npm run dev:electron   # Electron shell, when Vite is already running
+npm run build          # production renderer build
 ```
 
 ## Build
 
-Windows local package:
+Build a local Windows package:
 
 ```powershell
 npm run package:win
 ```
 
-Cross-platform releases are built by GitHub Actions when a `v*` tag is pushed. The current release matrix is:
+Release archives are built by GitHub Actions when a `v*` tag is pushed. The current release matrix is:
 
 - Windows x64
 - Linux x64
 - macOS x64
 
-## Project Layout
+## Notes
 
-- `frontend/electron/` - Electron main/preload code and desktop assets
-- `frontend/renderer/` - React UI
-- `backend/main_electron_backend.py` - Electron backend entrypoint
-- `backend/src/` - Python app code
-- `tests/` - Python tests
-- `tools/` - release and utility scripts
+The app is intended to run locally and does not require the UI to be served from a web server in production. Assistant features require a configured assistant backend and a non-empty transcript context.
