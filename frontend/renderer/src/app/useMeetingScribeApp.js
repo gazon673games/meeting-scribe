@@ -56,6 +56,12 @@ export function useMeetingScribeApp() {
     refresh();
     return meetingScribeClient.onBackendEvent((event) => {
       setEvents((current) => [event, ...current].slice(0, 8));
+      if (event.type === "transcript_line") {
+        setState((current) => appendTranscriptLine(current, event));
+      }
+      if (event.type === "asr_metrics") {
+        setState((current) => applyAsrMetrics(current, event));
+      }
       if (event.type === "backend_ready") {
         setBackendStatus((current) => ({ ...current, ready: true, running: true }));
       }
@@ -76,6 +82,17 @@ export function useMeetingScribeApp() {
   }, [config, settingsDirty]);
 
   React.useEffect(() => {
+    if (!config) {
+      return;
+    }
+    const savedDraft = makeSettingsDraft(config);
+    const enabled = settingsDirty ? settingsDraft.screenCaptureProtection : savedDraft.screenCaptureProtection;
+    meetingScribeClient
+      .setContentProtection(Boolean(enabled))
+      .catch((requestError) => setError(`${requestError.name || "Error"}: ${requestError.message || requestError}`));
+  }, [config, settingsDirty, settingsDraft.screenCaptureProtection]);
+
+  React.useEffect(() => {
     if (!state?.session?.running) {
       return undefined;
     }
@@ -93,6 +110,7 @@ export function useMeetingScribeApp() {
   const session = state?.session || {};
   const assistant = state?.assistant || {};
   const capabilities = state?.capabilities || {};
+  const hardware = state?.hardware || {};
   const codexProfiles = assistant.profiles || config?.codex?.profiles || [];
   const sources = session.sources || [];
   const transcript = session.transcript || [];
@@ -106,6 +124,19 @@ export function useMeetingScribeApp() {
   const updateSettings = React.useCallback((patch) => {
     setSettingsDraft((current) => ({ ...current, ...patch }));
     setSettingsDirty(true);
+  }, []);
+
+  const clearError = React.useCallback(() => {
+    setError("");
+  }, []);
+
+  const reloadApp = React.useCallback(async () => {
+    setError("");
+    try {
+      await meetingScribeClient.reloadApp();
+    } catch (requestError) {
+      setError(`${requestError.name || "Error"}: ${requestError.message || requestError}`);
+    }
   }, []);
 
   const updateAsrSetting = React.useCallback((key, value) => {
@@ -145,8 +176,10 @@ export function useMeetingScribeApp() {
       setConfig(result.config);
       const stateResult = await meetingScribeClient.request("get_state");
       setState(stateResult);
+      return true;
     } catch (requestError) {
       setError(`${requestError.name || "Error"}: ${requestError.message || requestError}`);
+      return false;
     } finally {
       setSavingSettings(false);
     }
@@ -175,7 +208,7 @@ export function useMeetingScribeApp() {
   const startOrStop = React.useCallback(() => {
     if (session.running) {
       runBackendAction("stop_session", {
-        runOfflinePass: settingsDraft.offlineOnStop,
+        runOfflinePass: false,
         outputFile: settingsDraft.outputFile,
         language: settingsDraft.language,
         model: settingsDraft.model
@@ -197,6 +230,7 @@ export function useMeetingScribeApp() {
     devices,
     error,
     events,
+    hardware,
     loading,
     offlinePass,
     options,
@@ -210,10 +244,55 @@ export function useMeetingScribeApp() {
     transcript,
     applyProfile,
     refresh,
+    reloadApp,
     runBackendAction,
     saveSettings,
     startOrStop,
     updateAsrSetting,
+    clearError,
     updateSettings
+  };
+}
+
+function appendTranscriptLine(state, event) {
+  if (!state?.session || !String(event?.text || "").trim()) {
+    return state;
+  }
+  const line = {
+    ts: Number(event.ts || Date.now() / 1000),
+    stream: String(event.stream || "mix"),
+    text: String(event.text || ""),
+    overload: Boolean(event.overload)
+  };
+  const transcript = state.session.transcript || [];
+  const last = transcript[transcript.length - 1];
+  if (last && last.ts === line.ts && last.stream === line.stream && last.text === line.text) {
+    return state;
+  }
+  return {
+    ...state,
+    session: {
+      ...state.session,
+      transcript: [...transcript, line].slice(-200)
+    }
+  };
+}
+
+function applyAsrMetrics(state, event) {
+  if (!state?.session) {
+    return state;
+  }
+  return {
+    ...state,
+    session: {
+      ...state.session,
+      asrMetrics: {
+        segDroppedTotal: Number(event.seg_dropped_total ?? state.session.asrMetrics?.segDroppedTotal ?? 0),
+        segSkippedTotal: Number(event.seg_skipped_total ?? state.session.asrMetrics?.segSkippedTotal ?? 0),
+        avgLatencyS: Number(event.avg_latency_s ?? state.session.asrMetrics?.avgLatencyS ?? 0),
+        p95LatencyS: Number(event.p95_latency_s ?? state.session.asrMetrics?.p95LatencyS ?? 0),
+        lagS: Number(event.lag_s ?? state.session.asrMetrics?.lagS ?? 0)
+      }
+    }
   };
 }

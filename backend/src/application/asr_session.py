@@ -22,6 +22,8 @@ class ASRSessionSettings:
     model_name: str
     device: str
     compute_type: str
+    cpu_threads: int
+    num_workers: int
     beam_size: int
     endpoint_silence_ms: float
     max_segment_s: float

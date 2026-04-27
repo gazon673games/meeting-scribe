@@ -104,6 +104,8 @@ EVENT_SPECS: Dict[str, EventSpec] = {
             ("overload_strategy", _str, ""),
             ("device", _str, ""),
             ("compute_type", _str, ""),
+            ("cpu_threads", _int0, 0),
+            ("num_workers", _int0, 1),
             ("beam_size", _int0, 0),
         ),
     ),

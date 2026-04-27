@@ -57,6 +57,8 @@ class EventTypesTests(unittest.TestCase):
                 "language": "ru",
                 "device": "cuda",
                 "compute_type": "float16",
+                "cpu_threads": 0,
+                "num_workers": 2,
                 "beam_size": 5,
                 "overload_strategy": "drop_old",
                 "ts": 2.0,
@@ -65,6 +67,7 @@ class EventTypesTests(unittest.TestCase):
 
         self.assertEqual(event_to_record(event)["device"], "cuda")
         self.assertEqual(event_to_record(event)["compute_type"], "float16")
+        self.assertEqual(event_to_record(event)["num_workers"], 2)
         self.assertEqual(event_to_record(event)["beam_size"], 5)
 
     def test_asr_publisher_logs_dict_and_publishes_typed_event(self) -> None:

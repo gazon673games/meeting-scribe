@@ -135,6 +135,8 @@ class AsrStartedEvent(TypedEvent):
         "overload_strategy",
         "device",
         "compute_type",
+        "cpu_threads",
+        "num_workers",
         "beam_size",
     )
     model: str
@@ -143,6 +145,8 @@ class AsrStartedEvent(TypedEvent):
     overload_strategy: str
     device: str
     compute_type: str
+    cpu_threads: int
+    num_workers: int
     beam_size: int
 
     def __init__(
@@ -154,6 +158,8 @@ class AsrStartedEvent(TypedEvent):
         overload_strategy: str = "",
         device: str = "",
         compute_type: str = "",
+        cpu_threads: int = 0,
+        num_workers: int = 1,
         beam_size: int = 0,
         ts: Optional[float] = None,
     ):
@@ -167,6 +173,8 @@ class AsrStartedEvent(TypedEvent):
             overload_strategy=str(overload_strategy),
             device=str(device),
             compute_type=str(compute_type),
+            cpu_threads=int(cpu_threads),
+            num_workers=int(num_workers),
             beam_size=int(beam_size),
         )
 

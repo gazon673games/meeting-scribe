@@ -1,3 +1,5 @@
+import React from "react";
+
 import { TranscriptLine } from "./TranscriptLine";
 import { TypingRow } from "./TypingRow";
 
@@ -22,10 +24,29 @@ function resolveSpeakerTone(line, tones) {
 }
 
 export function TranscriptList({ lines, running }) {
+  const listRef = React.useRef(null);
+  const shouldStickToBottomRef = React.useRef(true);
   const speakerTones = new Map();
 
+  const updateStickiness = React.useCallback(() => {
+    const element = listRef.current;
+    if (!element) {
+      return;
+    }
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    shouldStickToBottomRef.current = distanceFromBottom <= 24;
+  }, []);
+
+  React.useLayoutEffect(() => {
+    const element = listRef.current;
+    if (!element || !shouldStickToBottomRef.current) {
+      return;
+    }
+    element.scrollTop = element.scrollHeight;
+  }, [lines.length, running]);
+
   return (
-    <div className="transcript-list">
+    <div className="transcript-list" onScroll={updateStickiness} ref={listRef}>
       {lines.map((line, index) => (
         <TranscriptLine
           key={`${line.ts}-${index}`}

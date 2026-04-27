@@ -42,6 +42,8 @@ class AsrBackendFactoryPort(Protocol):
         language: Optional[str],
         device: str,
         compute_type: str,
+        cpu_threads: int,
+        num_workers: int,
         beam_size: int,
         initial_prompt: Optional[str],
     ) -> AsrBackendPort:

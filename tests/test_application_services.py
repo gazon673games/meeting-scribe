@@ -53,6 +53,8 @@ def _asr_settings() -> ASRSessionSettings:
         model_name="large-v3",
         device="cuda",
         compute_type="float16",
+        cpu_threads=0,
+        num_workers=1,
         beam_size=6,
         endpoint_silence_ms=900.0,
         max_segment_s=12.0,

@@ -13,12 +13,18 @@ export const FALLBACK_OPTIONS = {
     { id: "mix", label: "MIX (master)" },
     { id: "split", label: "SPLIT (all sources)" }
   ],
+  asrDevices: ["cuda", "cpu"],
   computeTypes: ["int8_float16", "float16", "int8", "int8_float32", "float32"],
   overloadStrategies: ["drop_old", "keep_all"],
   profileDefaults: {}
 };
 
-export const ASR_FIELDS = [
+export const ASR_RESOURCE_FIELDS = [
+  { key: "cpu_threads", label: "CPU Threads", defaultValue: 0, step: 1, min: 0, max: 64, integer: true },
+  { key: "num_workers", label: "Workers", defaultValue: 1, step: 1, min: 1, max: 16, integer: true }
+];
+
+export const ASR_TIMING_FIELDS = [
   { key: "beam_size", label: "Beam", defaultValue: 5, step: 1, min: 1, max: 20, integer: true },
   { key: "endpoint_silence_ms", label: "Endpoint ms", defaultValue: 650, step: 10, min: 50, max: 5000 },
   { key: "max_segment_s", label: "Segment s", defaultValue: 7, step: 0.5, min: 1, max: 60 },
@@ -32,18 +38,23 @@ export const ASR_FIELDS = [
   { key: "overload_overlap_ms", label: "Overload overlap", defaultValue: 120, step: 10, min: 0, max: 2000 }
 ];
 
+export const ASR_FIELDS = [...ASR_RESOURCE_FIELDS, ...ASR_TIMING_FIELDS];
+
 export function makeSettingsDraft(config) {
   const ui = objectSection(config?.ui);
   const asr = objectSection(config?.asr);
   return {
     wavEnabled: boolWithDefault(ui.wav_enabled, false),
-    offlineOnStop: boolWithDefault(ui.offline_on_stop, false),
+    offlineOnStop: false,
     realtimeTranscriptToFile: boolWithDefault(ui.rt_transcript_to_file, false),
+    screenCaptureProtection: boolWithDefault(ui.screen_capture_protection, false),
+    theme: normalizeTheme(ui.theme),
     language: String(ui.lang || "ru"),
     asrMode: Number(ui.asr_mode || 0) === 1 ? "split" : "mix",
     model: String(ui.model || "medium"),
     profile: String(ui.profile || "Balanced"),
     outputFile: String(ui.output_file || "capture_mix.wav"),
+    device: String(asr.device || "cuda"),
     computeType: String(asr.compute_type || "float16"),
     overloadStrategy: String(asr.overload_strategy || "drop_old"),
     asr: Object.fromEntries(ASR_FIELDS.map((field) => [field.key, asr[field.key] ?? field.defaultValue]))
@@ -58,6 +69,8 @@ export function applySettingsToConfig(config, draft) {
     ui: {
       ...objectSection(current.ui),
       asr_enabled: true,
+      screen_capture_protection: Boolean(draft.screenCaptureProtection),
+      theme: normalizeTheme(draft.theme),
       lang: String(draft.language || "ru"),
       asr_mode: draft.asrMode === "split" ? 1 : 0,
       model: String(draft.model || "medium"),
@@ -66,11 +79,12 @@ export function applySettingsToConfig(config, draft) {
       output_file: String(draft.outputFile || "capture_mix.wav"),
       long_run: boolWithDefault(current.ui?.long_run, true),
       rt_transcript_to_file: Boolean(draft.realtimeTranscriptToFile),
-      offline_on_stop: Boolean(draft.offlineOnStop),
+      offline_on_stop: false,
       asr_settings_expanded: boolWithDefault(current.ui?.asr_settings_expanded, false)
     },
     asr: {
       ...objectSection(current.asr),
+      device: String(draft.device || "cuda"),
       compute_type: String(draft.computeType || "float16"),
       overload_strategy: String(draft.overloadStrategy || "drop_old"),
       ...Object.fromEntries(ASR_FIELDS.map((field) => [field.key, normalizeNumber(draft.asr[field.key], field)]))
@@ -83,7 +97,7 @@ export function draftToStartParams(draft) {
   return {
     asrEnabled: true,
     wavEnabled: config.ui.wav_enabled,
-    runOfflinePass: config.ui.offline_on_stop,
+    runOfflinePass: false,
     realtimeTranscriptToFile: config.ui.rt_transcript_to_file,
     language: config.ui.lang,
     asrMode: draft.asrMode,
@@ -119,6 +133,10 @@ function objectSection(value) {
 
 function boolWithDefault(value, fallback) {
   return value === undefined || value === null ? Boolean(fallback) : Boolean(value);
+}
+
+function normalizeTheme(value) {
+  return String(value || "").trim().toLowerCase() === "light" ? "light" : "dark";
 }
 
 function normalizeNumber(value, field) {
