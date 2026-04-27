@@ -31,8 +31,6 @@ class SourceRegistry:
         return bool(self._sources)
 
     def add_source(self, source: AudioSource, *, running: bool) -> None:
-        if running:
-            raise RuntimeError("Cannot add sources while engine is running (MVP).")
         if source.name in self._state:
             raise ValueError(f"Source '{source.name}' already exists")
 

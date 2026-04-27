@@ -109,7 +109,6 @@ class HeadlessSessionController:
 
     def add_source(self, *, kind: str, token: object, label: str = "", name: str = "") -> Dict[str, Any]:
         with self._lock:
-            self._ensure_not_running("add a source")
             normalized_kind = _normalize_source_kind(kind)
             source_name = self._make_unique_name(name or _default_source_name(normalized_kind))
 
@@ -131,6 +130,11 @@ class HeadlessSessionController:
                 label=str(label or source_name),
             )
             self._status = f"added {source_name}"
+            if self._session_state.is_running:
+                self.engine.set_source_enabled(source_name, True)
+                self.engine.set_source_delay_ms(source_name, 0.0)
+                if self._asr_requested:
+                    self._apply_tap_config()
             self._emit("source_added", {"source": self._source_record(source_name)})
             return self._source_record(source_name)
 
@@ -193,6 +197,8 @@ class HeadlessSessionController:
             for source in self._sources.values():
                 self.engine.set_source_enabled(source.name, source.enabled)
                 self.engine.set_source_delay_ms(source.name, source.delay_ms)
+            if asr_enabled:
+                self._drain_tap_queue()
             self._apply_tap_config()
 
             try:
@@ -244,6 +250,7 @@ class HeadlessSessionController:
                     self.engine.set_tap_queue(None)
                 except Exception:
                     pass
+                self._drain_tap_queue()
 
             self._asr_requested = False
             self._asr_running = False
@@ -546,6 +553,15 @@ class HeadlessSessionController:
             self._handle_asr_event(raw)
         return count
 
+    def _drain_tap_queue(self) -> int:
+        count = 0
+        while True:
+            try:
+                self.tap_queue.get_nowait()
+                count += 1
+            except queue.Empty:
+                return count
+
     def _handle_asr_event(self, raw: object) -> None:
         event = event_from_record(raw)
         record = event_to_record(event)
@@ -715,6 +731,8 @@ def _asr_settings_from_params(params: Dict[str, Any]) -> ASRSessionSettings:
         model_name=str(params.get("model", params.get("model_name", "medium")) or "medium"),
         device=str(params.get("device", "cuda") or "cuda"),
         compute_type=str(params.get("compute_type", params.get("computeType", "float16")) or "float16"),
+        cpu_threads=_safe_int(params.get("cpu_threads", params.get("cpuThreads", 0)), 0, 0, 64),
+        num_workers=_safe_int(params.get("num_workers", params.get("numWorkers", 1)), 1, 1, 16),
         beam_size=_safe_int(params.get("beam_size", params.get("beamSize", 5)), 5, 1, 20),
         endpoint_silence_ms=_safe_float_clamped(
             params.get("endpoint_silence_ms", params.get("endpointSilenceMs", 650.0)),

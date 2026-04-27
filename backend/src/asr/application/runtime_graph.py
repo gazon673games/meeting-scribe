@@ -90,6 +90,8 @@ class ASRRuntimeGraph:
             "model": settings.asr_model_name,
             "device": settings.device,
             "compute_type": settings.compute_type,
+            "cpu_threads": int(settings.cpu_threads),
+            "num_workers": int(settings.num_workers),
             "beam_size": int(settings.beam_size),
             "endpoint_silence_ms": settings.endpoint_silence_ms,
             "max_segment_s": settings.max_segment_s,

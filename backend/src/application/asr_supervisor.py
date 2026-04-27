@@ -30,13 +30,14 @@ class ASRStartupSupervisor:
             primary,
             model_name=fast_model,
             compute_type="int8_float16",
-            beam_size=min(int(primary.beam_size), 2),
-            max_segment_s=min(float(primary.max_segment_s), 5.0),
-            overlap_ms=min(float(primary.overlap_ms), 120.0),
+            num_workers=max(2, int(primary.num_workers)),
+            beam_size=1,
+            max_segment_s=min(float(primary.max_segment_s), 3.0),
+            overlap_ms=min(float(primary.overlap_ms), 80.0),
             overload_strategy="drop_old",
             overload_beam_cap=1,
-            overload_max_segment_s=min(float(primary.overload_max_segment_s), 3.5),
-            overload_overlap_ms=min(float(primary.overload_overlap_ms), 80.0),
+            overload_max_segment_s=min(float(primary.overload_max_segment_s), 2.5),
+            overload_overlap_ms=min(float(primary.overload_overlap_ms), 60.0),
         )
         self._append_unique(attempts, ASRStartupAttempt(label="fast-fallback", settings=fast_settings, degraded=True))
 
@@ -45,6 +46,8 @@ class ASRStartupSupervisor:
             model_name=ASR_MODEL_SMALL,
             device="cpu",
             compute_type="int8",
+            cpu_threads=max(4, int(primary.cpu_threads)),
+            num_workers=1,
             beam_size=1,
             max_segment_s=min(float(primary.max_segment_s), 4.0),
             overlap_ms=min(float(primary.overlap_ms), 80.0),

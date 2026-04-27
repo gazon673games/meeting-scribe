@@ -1,3 +1,5 @@
+import { X } from "lucide-react";
+
 import { AssistantColumn } from "../features/assistant/AssistantColumn";
 import { AudioInputs } from "../features/audio-inputs/AudioInputs";
 import { ProcessingColumn } from "../features/processing/ProcessingColumn";
@@ -35,19 +37,14 @@ export function App() {
       element: (
         <ProcessingColumn
           asrMetrics={app.asrMetrics}
-          dirty={app.settingsDirty}
-          events={app.events}
           locked={app.session.running}
           offlinePass={app.offlinePass}
           options={app.options}
-          saving={app.savingSettings}
           session={app.session}
           summary={app.summary}
           draft={app.settingsDraft}
-          onAsrChange={app.updateAsrSetting}
           onChange={app.updateSettings}
           onProfileChange={app.applyProfile}
-          onSave={app.saveSettings}
         />
       )
     },
@@ -78,19 +75,38 @@ export function App() {
   const pipelineLayout = usePipelineLayout(pipelineColumns);
 
   return (
-    <main className="app-shell">
+    <main className="app-shell" data-theme={app.settingsDraft.theme || "dark"}>
       <TopBar
         canStart={app.canStart}
         canStop={app.canStop}
         loading={app.loading}
         pipelineLayout={pipelineLayout}
+        settingsPanel={{
+          dirty: app.settingsDirty,
+          draft: app.settingsDraft,
+          hardware: app.hardware,
+          locked: app.session.running,
+          options: app.options,
+          saving: app.savingSettings,
+          onAsrChange: app.updateAsrSetting,
+          onChange: app.updateSettings,
+          onReloadApp: app.reloadApp,
+          onSave: app.saveSettings
+        }}
         status={app.status}
         asrMetrics={app.asrMetrics}
         onRefresh={app.refresh}
         onStartStop={app.startOrStop}
       />
 
-      {app.error ? <div className="error-strip">{app.error}</div> : null}
+      {app.error ? (
+        <div className="error-strip" role="alert">
+          <span>{app.error}</span>
+          <button aria-label="Close error" onClick={app.clearError} type="button">
+            <X size={16} />
+          </button>
+        </div>
+      ) : null}
 
       <ResizablePipeline
         columns={pipelineLayout.visibleColumns}

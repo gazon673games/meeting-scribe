@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("meetingScribe", {
   request: (method, params = {}) => ipcRenderer.invoke("backend:request", method, params),
   status: () => ipcRenderer.invoke("backend:status"),
+  setContentProtection: (enabled) => ipcRenderer.invoke("window:set-content-protection", Boolean(enabled)),
+  reloadApp: () => ipcRenderer.invoke("window:reload"),
   onBackendEvent: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on("backend:event", listener);

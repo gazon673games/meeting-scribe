@@ -30,6 +30,8 @@ class ASRPipelineFactory(ASRRuntimeFactory):
             asr_model_name=settings.model_name,
             device=settings.device,
             compute_type=settings.compute_type,
+            cpu_threads=settings.cpu_threads,
+            num_workers=settings.num_workers,
             beam_size=settings.beam_size,
             endpoint_silence_ms=settings.endpoint_silence_ms,
             max_segment_s=settings.max_segment_s,

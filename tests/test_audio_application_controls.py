@@ -139,8 +139,8 @@ class AudioApplicationControlsTests(unittest.TestCase):
         self.assertEqual(registry.sources, [])
         self.assertEqual(registry.source_items(), [])
 
-        with self.assertRaises(RuntimeError):
-            registry.add_source(_FakeSource(name="other"), running=True)
+        registry.add_source(_FakeSource(name="other"), running=True)
+        self.assertEqual([name for name, _ in registry.source_items()], ["other"])
 
         registry.add_source(source, running=False)
         with self.assertRaises(RuntimeError):

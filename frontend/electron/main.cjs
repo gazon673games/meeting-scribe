@@ -1,6 +1,6 @@
 const { app, BrowserWindow, ipcMain } = require("electron");
 const { spawn } = require("node:child_process");
-const { existsSync } = require("node:fs");
+const { existsSync, readFileSync } = require("node:fs");
 const path = require("node:path");
 
 const appRoot = app.isPackaged ? path.join(process.resourcesPath, "app") : path.resolve(__dirname, "..", "..");
@@ -188,6 +188,37 @@ class PythonBackend {
 
 const backend = new PythonBackend({ root: appRoot, backendRoot, runtimeRoot });
 
+function readSavedContentProtection() {
+  const configPath = path.join(runtimeRoot, "config.json");
+  if (!existsSync(configPath)) {
+    return false;
+  }
+  try {
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    return Boolean(config?.ui?.screen_capture_protection);
+  } catch (error) {
+    console.warn("[window] failed to read content protection setting", error);
+    return false;
+  }
+}
+
+function setWindowContentProtection(window, enabled) {
+  if (!window || window.isDestroyed()) {
+    return { enabled: false };
+  }
+  const nextEnabled = Boolean(enabled);
+  window.setContentProtection(nextEnabled);
+  return { enabled: nextEnabled };
+}
+
+function reloadWindow(window) {
+  if (!window || window.isDestroyed()) {
+    return { reloaded: false };
+  }
+  window.webContents.reloadIgnoringCache();
+  return { reloaded: true };
+}
+
 function createWindow() {
   const window = new BrowserWindow({
     width: 1320,
@@ -205,6 +236,7 @@ function createWindow() {
     }
   });
 
+  setWindowContentProtection(window, readSavedContentProtection());
   backend.attachWindow(window);
   backend.start();
 
@@ -219,6 +251,12 @@ function createWindow() {
 app.whenReady().then(() => {
   ipcMain.handle("backend:request", (_event, method, params) => backend.request(method, params));
   ipcMain.handle("backend:status", () => backend.status());
+  ipcMain.handle("window:set-content-protection", (event, enabled) => {
+    return setWindowContentProtection(BrowserWindow.fromWebContents(event.sender), enabled);
+  });
+  ipcMain.handle("window:reload", (event) => {
+    return reloadWindow(BrowserWindow.fromWebContents(event.sender));
+  });
   createWindow();
 
   app.on("activate", () => {

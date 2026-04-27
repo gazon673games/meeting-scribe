@@ -13,6 +13,8 @@ class TranscriptionWorkerConfig:
     language: Optional[str]
     device: str
     compute_type: str
+    cpu_threads: int
+    num_workers: int
     beam_size: int
     initial_prompt: Optional[str]
     text_dedup_enabled: bool
@@ -27,6 +29,8 @@ class TranscriptionWorkerConfig:
             language=settings.asr_language,
             device=str(settings.device),
             compute_type=str(settings.compute_type),
+            cpu_threads=int(settings.cpu_threads),
+            num_workers=int(settings.num_workers),
             beam_size=int(settings.beam_size),
             initial_prompt=settings.asr_initial_prompt,
             text_dedup_enabled=bool(settings.text_dedup_enabled),

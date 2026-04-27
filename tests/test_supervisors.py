@@ -16,6 +16,8 @@ def _settings(**overrides) -> ASRSessionSettings:
         "model_name": "large-v3",
         "device": "cuda",
         "compute_type": "float16",
+        "cpu_threads": 0,
+        "num_workers": 1,
         "beam_size": 6,
         "endpoint_silence_ms": 900.0,
         "max_segment_s": 12.0,
@@ -43,11 +45,15 @@ class SupervisorTests(unittest.TestCase):
         self.assertFalse(attempts[0].degraded)
         self.assertEqual(attempts[1].settings.model_name, ASR_MODEL_RU_PODLODKA_TURBO)
         self.assertEqual(attempts[1].settings.compute_type, "int8_float16")
-        self.assertEqual(attempts[1].settings.beam_size, 2)
+        self.assertEqual(attempts[1].settings.num_workers, 2)
+        self.assertEqual(attempts[1].settings.beam_size, 1)
+        self.assertEqual(attempts[1].settings.max_segment_s, 3.0)
+        self.assertEqual(attempts[1].settings.overlap_ms, 80.0)
         self.assertTrue(attempts[1].degraded)
         self.assertEqual(attempts[-1].settings.model_name, ASR_MODEL_SMALL)
         self.assertEqual(attempts[-1].settings.device, "cpu")
         self.assertEqual(attempts[-1].settings.compute_type, "int8")
+        self.assertEqual(attempts[-1].settings.cpu_threads, 4)
 
     def test_assistant_supervisor_builds_primary_and_fallback_attempts(self) -> None:
         attempts = AssistantFallbackSupervisor().build_attempts(

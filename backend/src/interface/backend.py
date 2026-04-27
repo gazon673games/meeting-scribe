@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import ctypes
+import os
+import platform
+import shutil
+import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -24,6 +30,8 @@ class ElectronBackend:
     session_controller: HeadlessSessionController | None = None
     assistant_controller: AssistantController | None = None
     _device_tokens: Dict[str, DeviceToken] = field(default_factory=dict)
+    _hardware_cache: Dict[str, Any] | None = field(default=None, init=False, repr=False)
+    _hardware_cache_ts: float = field(default=0.0, init=False, repr=False)
 
     protocol_version: int = 1
 
@@ -54,6 +62,7 @@ class ElectronBackend:
                 "projectRoot": str(self.project_root),
                 "config": str(Path(self.config_repository.path)),  # type: ignore[attr-defined]
             },
+            "hardware": self._hardware_snapshot(),
             "configSummary": {
                 "language": str(ui.get("lang", "")),
                 "model": str(ui.get("model", "")),
@@ -62,7 +71,10 @@ class ElectronBackend:
                 "asrMode": "split" if int(ui.get("asr_mode", 0) or 0) == 1 else "mix",
                 "wavEnabled": bool(ui.get("wav_enabled", False)),
                 "offlineOnStop": bool(ui.get("offline_on_stop", False)),
+                "device": str(asr.get("device", "")),
                 "computeType": str(asr.get("compute_type", "")),
+                "cpuThreads": _int_or_default(asr.get("cpu_threads", 0), 0),
+                "numWorkers": _int_or_default(asr.get("num_workers", 1), 1),
                 "codexEnabled": bool(codex.get("enabled", False)) if isinstance(codex, dict) else False,
                 "codexProfiles": len(profiles) if isinstance(profiles, list) else 0,
             },
@@ -74,6 +86,7 @@ class ElectronBackend:
                     {"id": "mix", "label": "MIX (master)"},
                     {"id": "split", "label": "SPLIT (all sources)"},
                 ],
+                "asrDevices": ["cuda", "cpu"],
                 "computeTypes": ["int8_float16", "float16", "int8", "int8_float32", "float32"],
                 "overloadStrategies": ["drop_old", "keep_all"],
                 "profileDefaults": {
@@ -220,6 +233,25 @@ class ElectronBackend:
             **asr,
         }
 
+    def _hardware_snapshot(self) -> Dict[str, Any]:
+        now = time.monotonic()
+        if self._hardware_cache is not None and now - self._hardware_cache_ts < 10.0:
+            return dict(self._hardware_cache)
+
+        snapshot = {
+            "cpu": {
+                "name": _cpu_name(),
+                "logicalCores": int(os.cpu_count() or 0),
+            },
+            "memory": {
+                "totalBytes": _physical_memory_bytes(),
+            },
+            "gpus": _nvidia_gpu_snapshot(),
+        }
+        self._hardware_cache = snapshot
+        self._hardware_cache_ts = now
+        return dict(snapshot)
+
     def _session_snapshot(self) -> Dict[str, Any]:
         if self.session_controller is None:
             return {
@@ -275,3 +307,93 @@ def _safe_token_preview(token: object) -> str:
     if len(text) > 180:
         return f"{text[:177]}..."
     return text
+
+
+def _cpu_name() -> str:
+    if platform.system().lower() == "windows":
+        try:
+            import winreg
+
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0") as key:
+                value, _ = winreg.QueryValueEx(key, "ProcessorNameString")
+                text = str(value).strip()
+                if text:
+                    return text
+        except Exception:
+            pass
+    return platform.processor() or platform.machine() or "CPU"
+
+
+class _MemoryStatusEx(ctypes.Structure):
+    _fields_ = [
+        ("dwLength", ctypes.c_ulong),
+        ("dwMemoryLoad", ctypes.c_ulong),
+        ("ullTotalPhys", ctypes.c_ulonglong),
+        ("ullAvailPhys", ctypes.c_ulonglong),
+        ("ullTotalPageFile", ctypes.c_ulonglong),
+        ("ullAvailPageFile", ctypes.c_ulonglong),
+        ("ullTotalVirtual", ctypes.c_ulonglong),
+        ("ullAvailVirtual", ctypes.c_ulonglong),
+        ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+    ]
+
+
+def _physical_memory_bytes() -> int:
+    if platform.system().lower() == "windows":
+        try:
+            status = _MemoryStatusEx()
+            status.dwLength = ctypes.sizeof(_MemoryStatusEx)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):  # type: ignore[attr-defined]
+                return int(status.ullTotalPhys)
+        except Exception:
+            return 0
+    try:
+        pages = os.sysconf("SC_PHYS_PAGES")
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        return int(pages) * int(page_size)
+    except Exception:
+        return 0
+
+
+def _nvidia_gpu_snapshot() -> List[Dict[str, Any]]:
+    executable = shutil.which("nvidia-smi")
+    if not executable:
+        return []
+    command = [
+        executable,
+        "--query-gpu=name,memory.total,memory.used,utilization.gpu,utilization.memory",
+        "--format=csv,noheader,nounits",
+    ]
+    try:
+        completed = subprocess.run(command, capture_output=True, check=False, text=True, timeout=2.0)
+    except Exception:
+        return []
+    if completed.returncode != 0:
+        return []
+
+    gpus: List[Dict[str, Any]] = []
+    for line in completed.stdout.splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 5:
+            continue
+        gpus.append(
+            {
+                "name": parts[0],
+                "memoryTotalMiB": _int_or_zero(parts[1]),
+                "memoryUsedMiB": _int_or_zero(parts[2]),
+                "gpuUtilizationPct": _int_or_zero(parts[3]),
+                "memoryUtilizationPct": _int_or_zero(parts[4]),
+            }
+        )
+    return gpus
+
+
+def _int_or_zero(raw: object) -> int:
+    return _int_or_default(raw, 0)
+
+
+def _int_or_default(raw: object, default: int) -> int:
+    try:
+        return int(float(str(raw).strip()))
+    except Exception:
+        return int(default)

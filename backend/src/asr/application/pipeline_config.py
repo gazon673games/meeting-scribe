@@ -32,6 +32,8 @@ class ASRPipelineSettings:
     asr_model_name: str = "large-v3"
     device: str = "cuda"
     compute_type: str = "int8_float16"
+    cpu_threads: int = 0
+    num_workers: int = 1
     beam_size: int = 5
     endpoint_silence_ms: float = 800.0
     max_segment_s: float = 12.0

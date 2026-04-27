@@ -43,6 +43,8 @@ class TranscriptionWorkerRuntime:
         self._language = config.language
         self._device = str(config.device)
         self._compute_type = str(config.compute_type)
+        self._cpu_threads = int(config.cpu_threads)
+        self._num_workers = int(config.num_workers)
         self._beam_size = int(config.beam_size)
         self._initial_prompt = config.initial_prompt
         self._adaptive_beam_enabled = bool(config.adaptive_beam_enabled)
@@ -78,6 +80,8 @@ class TranscriptionWorkerRuntime:
                 language=self._language,
                 device=self._device,
                 compute_type=self._compute_type,
+                cpu_threads=self._cpu_threads,
+                num_workers=self._num_workers,
                 beam_size=self._beam_size,
                 initial_prompt=self._initial_prompt,
             )

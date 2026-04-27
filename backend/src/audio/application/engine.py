@@ -84,8 +84,18 @@ class AudioEngine:
             self._runtime.apply_tap_config(normalize_tap_config(mode=mode, sources=sources, drop_threshold=drop_threshold))
 
     def add_source(self, src: AudioSource) -> None:
+        start_now = False
         with self._lock:
             self._registry.add_source(src, running=self._running)
+            start_now = bool(self._running)
+        if not start_now:
+            return
+        try:
+            src.start(self._on_audio_from_source)
+        except Exception:
+            with self._lock:
+                self._registry.remove_source(src.name, running=False)
+            raise
 
     def remove_source(self, name: str) -> None:
         with self._lock:

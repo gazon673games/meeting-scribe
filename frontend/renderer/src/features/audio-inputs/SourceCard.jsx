@@ -17,7 +17,7 @@ export function SourceCard({ devices = [], disabled, icon, source, title, onAdd,
   const selected = selectableDevices.find((device) => device.id === selectedIdOrDefault) || selectableDevices[0];
   const level = Math.max(0, Math.min(100, Number(source?.level || 0)));
   const meterClass = level > 80 ? "hot" : level > 45 ? "warm" : "";
-  const canToggle = !disabled && (source || (selected && !selected.current));
+  const canToggle = Boolean(source) || Boolean(selected && !selected.current);
 
   React.useEffect(() => {
     setSelectedId((current) => (selectableDevices.some((device) => device.id === current) ? current : preferredId));

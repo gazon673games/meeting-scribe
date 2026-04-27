@@ -24,11 +24,14 @@ class FasterWhisperASR(AsrBackendPort):
     language: Optional[str] = "ru"   # <--- CHANGED: Optional
     device: str = "cuda"            # "cpu" or "cuda"
     compute_type: str = "int8_float16"
+    cpu_threads: int = 0
+    num_workers: int = 1
     beam_size: int = 5
 
-    temperature: Optional[float] = None
+    temperature: Optional[float] = 0.0
     initial_prompt: Optional[str] = None
     condition_on_previous_text: bool = True
+    without_timestamps: bool = True
 
     def __post_init__(self) -> None:
         try:
@@ -44,6 +47,8 @@ class FasterWhisperASR(AsrBackendPort):
             self.model_name,
             device=self.device,
             compute_type=self.compute_type,
+            cpu_threads=max(0, int(self.cpu_threads)),
+            num_workers=max(1, int(self.num_workers)),
         )
 
         if self.language is not None:
@@ -59,10 +64,13 @@ class FasterWhisperASR(AsrBackendPort):
         if bs < 1:
             bs = 1
 
+        fast_decode = bs <= 1
         kwargs: Dict[str, Any] = {
             "beam_size": bs,
+            "best_of": 1,
             "vad_filter": False,  # VAD is done upstream
-            "condition_on_previous_text": bool(self.condition_on_previous_text),
+            "condition_on_previous_text": bool(self.condition_on_previous_text and not fast_decode),
+            "without_timestamps": bool(self.without_timestamps),
         }
 
         # IMPORTANT: language can be None -> auto detect
