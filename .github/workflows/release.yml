@@ -24,36 +24,16 @@ jobs:
             python_arch: x64
             requirements_file: requirements/requirements-build.txt
             allow_failure: false
-          - os: windows-11-arm
-            artifact_suffix: windows-arm64
-            artifact_name: meeting-scribe-windows-arm64
-            python_arch: arm64
-            # ctranslate2 has no win_arm64 wheel; build without faster-whisper
-            # ASR is lazy-loaded so the binary starts fine, shows error only on ASR use
-            requirements_file: requirements/requirements-build-no-asr.txt
-            allow_failure: false
           - os: ubuntu-24.04
             artifact_suffix: linux-x64
             artifact_name: meeting-scribe-linux-x64
             python_arch: x64
             requirements_file: requirements/requirements-build.txt
             allow_failure: false
-          - os: ubuntu-24.04-arm
-            artifact_suffix: linux-arm64
-            artifact_name: meeting-scribe-linux-arm64
-            python_arch: arm64
-            requirements_file: requirements/requirements-build.txt
-            allow_failure: false
           - os: macos-15-intel
             artifact_suffix: macos-x64
             artifact_name: meeting-scribe-macos-x64
             python_arch: x64
-            requirements_file: requirements/requirements-build.txt
-            allow_failure: false
-          - os: macos-14
-            artifact_suffix: macos-arm64
-            artifact_name: meeting-scribe-macos-arm64
-            python_arch: arm64
             requirements_file: requirements/requirements-build.txt
             allow_failure: false
 
@@ -102,7 +82,7 @@ jobs:
           npm ci
 
       - name: Run tests
-        run: python -m unittest discover -s tests -v
+        run: python -m unittest discover -s tests -t . -v
 
       - name: Build executable
         run: python -m tools.release.build_release --version "${{ github.ref_name }}" --artifact-suffix "${{ matrix.artifact_suffix }}"
@@ -134,6 +114,12 @@ jobs:
           set -euo pipefail
           ls -la release-assets
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
+              while read -r asset; do
+                case "$asset" in
+                  meeting-scribe-*.zip) gh release delete-asset "$RELEASE_TAG" "$asset" -y --repo "$GITHUB_REPOSITORY" ;;
+                esac
+              done
             gh release upload "$RELEASE_TAG" release-assets/*.zip --clobber --repo "$GITHUB_REPOSITORY"
           else
             gh release create "$RELEASE_TAG" release-assets/*.zip --repo "$GITHUB_REPOSITORY" --title "$RELEASE_TAG" --generate-notes

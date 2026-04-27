@@ -25,6 +25,14 @@ SUMMARY_REQUEST = (
     "Summarize the whole session context. "
     "Focus on decisions, open questions, risks, and the most useful next actions."
 )
+ACTION_ITEMS_REQUEST = (
+    "Extract concise action items from the current transcript. "
+    "For each item include owner if clear, deadline if mentioned, and the next concrete step."
+)
+RISK_CHECK_REQUEST = (
+    "Review the current transcript for risks, gaps, and unclear points. "
+    "Return the highest-impact risks first, then questions that should be clarified."
+)
 
 
 @dataclass
@@ -66,6 +74,8 @@ class AssistantController:
         request_text, source_label, limits = self._request_plan(params, settings)
         context_text = self._context_text(params, settings)
         context_label = "current transcript" if context_text is not None else "latest human log"
+        if context_text is not None and not context_text.strip():
+            raise RuntimeError("Assistant context is empty. Start transcription and wait for transcript text before asking.")
 
         command = InvokeAssistantCommand(
             profile=profile,
@@ -185,6 +195,28 @@ class AssistantController:
             return (
                 SUMMARY_REQUEST,
                 "summary",
+                {
+                    "max_log_chars": SUMMARY_LOG_CHARS,
+                    "timeout_s": SUMMARY_TIMEOUT_S,
+                    "fallback_max_log_chars": None,
+                    "fallback_timeout_s": None,
+                },
+            )
+        if action == "action_items":
+            return (
+                ACTION_ITEMS_REQUEST,
+                "action items",
+                {
+                    "max_log_chars": SUMMARY_LOG_CHARS,
+                    "timeout_s": SUMMARY_TIMEOUT_S,
+                    "fallback_max_log_chars": None,
+                    "fallback_timeout_s": None,
+                },
+            )
+        if action == "risk_check":
+            return (
+                RISK_CHECK_REQUEST,
+                "risk check",
                 {
                     "max_log_chars": SUMMARY_LOG_CHARS,
                     "timeout_s": SUMMARY_TIMEOUT_S,

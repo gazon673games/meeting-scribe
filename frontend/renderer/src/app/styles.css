@@ -888,9 +888,54 @@ textarea:disabled {
   white-space: nowrap;
 }
 
-.speaker-block span.speaker-two {
+.speaker-block span.speaker-tone-0 {
+  background: rgba(37, 99, 235, 0.28);
+  color: #60a5fa;
+}
+
+.speaker-block span.speaker-tone-1 {
   background: rgba(126, 34, 206, 0.35);
   color: #c084fc;
+}
+
+.speaker-block span.speaker-tone-2 {
+  background: rgba(8, 145, 178, 0.28);
+  color: #67e8f9;
+}
+
+.speaker-block span.speaker-tone-3 {
+  background: rgba(22, 163, 74, 0.26);
+  color: #86efac;
+}
+
+.speaker-block span.speaker-tone-4 {
+  background: rgba(217, 119, 6, 0.28);
+  color: #fbbf24;
+}
+
+.speaker-block span.speaker-tone-5 {
+  background: rgba(225, 29, 72, 0.28);
+  color: #fb7185;
+}
+
+.speaker-block span.speaker-tone-6 {
+  background: rgba(79, 70, 229, 0.3);
+  color: #a5b4fc;
+}
+
+.speaker-block span.speaker-tone-7 {
+  background: rgba(13, 148, 136, 0.28);
+  color: #5eead4;
+}
+
+.speaker-block span.speaker-tone-8 {
+  background: rgba(192, 38, 211, 0.28);
+  color: #f0abfc;
+}
+
+.speaker-block span.speaker-tone-9 {
+  background: rgba(101, 163, 13, 0.28);
+  color: #bef264;
 }
 
 .transcript-line p {
