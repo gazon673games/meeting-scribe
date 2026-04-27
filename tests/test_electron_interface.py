@@ -343,6 +343,40 @@ class ElectronInterfaceTests(unittest.TestCase):
             self.assertTrue(any(kind == "assistant_result" for kind, _ in events))
             self.assertIn("question", assistant.snapshot()["lastResponse"]["text"])
 
+    def test_assistant_controller_rejects_empty_transcript_context(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            repository = JsonConfigRepository(root / "config.json")
+            repository.write(
+                {
+                    "codex": {
+                        "enabled": True,
+                        "selected_profile": "fast",
+                        "profiles": [{"id": "fast", "label": "Fast", "prompt": "help"}],
+                    }
+                }
+            )
+            session = HeadlessSessionController(
+                project_root=root,
+                audio_runtime_factory=_FakeAudioRuntimeFactory(),
+                audio_source_factory=_FakeAudioSourceFactory(),
+                wav_recorder_factory=_FakeWavRecorderFactory(),
+            )
+            events: list[tuple[str, dict]] = []
+            assistant = AssistantController(
+                project_root=root,
+                config_repository=repository,
+                assistant_service=_FakeAssistantService(),  # type: ignore[arg-type]
+                session_controller=session,
+                event_sink=lambda typ, payload: events.append((typ, payload)),
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "context is empty"):
+                assistant.invoke({"requestText": "reply"})
+
+            self.assertFalse(events)
+            self.assertFalse(assistant.snapshot()["busy"])
+
     def test_jsonl_bridge_wraps_success_and_errors(self) -> None:
         stdin = io.StringIO(
             "\n".join(

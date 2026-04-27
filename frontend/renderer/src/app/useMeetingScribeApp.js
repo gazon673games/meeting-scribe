@@ -96,6 +96,7 @@ export function useMeetingScribeApp() {
   const codexProfiles = assistant.profiles || config?.codex?.profiles || [];
   const sources = session.sources || [];
   const transcript = session.transcript || [];
+  const assistantContextReady = transcript.some((line) => String(line?.text || "").trim());
   const asrMetrics = session.asrMetrics || {};
   const offlinePass = session.offlinePass || {};
   const canStart = Boolean(capabilities.sessionControl && sources.length > 0 && !session.running);
@@ -186,6 +187,7 @@ export function useMeetingScribeApp() {
 
   return {
     assistant,
+    assistantContextReady,
     asrMetrics,
     backendStatus,
     canStart,

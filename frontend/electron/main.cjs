@@ -6,6 +6,11 @@ const path = require("node:path");
 const appRoot = app.isPackaged ? path.join(process.resourcesPath, "app") : path.resolve(__dirname, "..", "..");
 const backendRoot = app.isPackaged ? path.join(process.resourcesPath, "backend") : appRoot;
 const runtimeRoot = app.isPackaged ? path.dirname(process.execPath) : appRoot;
+const windowIconPath = path.join(__dirname, "assets", process.platform === "win32" ? "icon.ico" : "icon.png");
+
+if (process.platform === "win32") {
+  app.setAppUserModelId("com.meetingscribe.app");
+}
 
 class PythonBackend {
   constructor({ root, backendRoot, runtimeRoot }) {
@@ -191,6 +196,7 @@ function createWindow() {
     minHeight: 640,
     backgroundColor: "#111111",
     title: "Meeting Scribe",
+    icon: windowIconPath,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
