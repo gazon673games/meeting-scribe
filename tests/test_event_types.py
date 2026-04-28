@@ -37,16 +37,32 @@ class EventTypesTests(unittest.TestCase):
         self.assertEqual(event.ts, 1.5)
 
     def test_typed_event_round_trips_to_record(self) -> None:
-        event = CodexResultEvent(ok=True, profile="Fast", cmd="ANSWER", text="done", dt_s=1.25, ts=10.0)
+        event = CodexResultEvent(
+            ok=False,
+            profile="Fast",
+            cmd="ANSWER",
+            text="network down",
+            dt_s=1.25,
+            provider="codex",
+            model="gpt-5.3-codex",
+            error_code="network_error",
+            retryable=True,
+            suggestion="Check proxy",
+            ts=10.0,
+        )
         record = event_to_record(event)
 
         self.assertEqual(record["type"], "codex_result")
         self.assertEqual(record["profile"], "Fast")
         self.assertEqual(record["cmd"], "ANSWER")
         self.assertEqual(record["dt_s"], 1.25)
+        self.assertEqual(record["provider"], "codex")
+        self.assertEqual(record["model"], "gpt-5.3-codex")
+        self.assertEqual(record["error_code"], "network_error")
 
         decoded = event_from_record(record)
         self.assertIsInstance(decoded, CodexResultEvent)
+        self.assertTrue(decoded.retryable)  # type: ignore[attr-defined]
 
     def test_asr_started_event_keeps_runtime_diagnostics(self) -> None:
         event = event_from_record(

@@ -48,6 +48,25 @@ class CommandObjectTests(unittest.TestCase):
         self.assertEqual(parse_codex_settings({}).proxy, DEFAULT_CODEX_PROXY)
         self.assertEqual(parse_codex_settings({"proxy": ""}).proxy, "")
 
+    def test_codex_profiles_keep_provider_and_model_settings(self) -> None:
+        settings = parse_codex_settings(
+            {
+                "profiles": [
+                    {
+                        "id": "deep",
+                        "label": "Deep",
+                        "provider": "codex",
+                        "model": "gpt-5.3-codex",
+                        "reasoning_effort": "high",
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(settings.profiles[0].provider_id, "codex")
+        self.assertEqual(settings.profiles[0].model, "gpt-5.3-codex")
+        self.assertEqual(settings.profiles[0].reasoning_effort, "high")
+
 
 if __name__ == "__main__":
     unittest.main()

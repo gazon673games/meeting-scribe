@@ -136,7 +136,7 @@ export function useMeetingScribeApp() {
   const assistant = state?.assistant || {};
   const capabilities = state?.capabilities || {};
   const hardware = state?.hardware || {};
-  const codexProfiles = assistant.profiles || config?.codex?.profiles || [];
+  const assistantProfiles = assistant.profiles || settingsDraft.assistantProfiles || config?.codex?.profiles || [];
   const sources = session.sources || [];
   const transcript = session.transcript || [];
   const assistantContextReady = transcript.some((line) => String(line?.text || "").trim());
@@ -251,7 +251,7 @@ export function useMeetingScribeApp() {
     canStart,
     canStop,
     capabilities,
-    codexProfiles,
+    assistantProfiles,
     devices,
     error,
     events,

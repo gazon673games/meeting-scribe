@@ -70,7 +70,7 @@ export function App() {
           assistant={app.assistant}
           contextReady={app.assistantContextReady}
           disabled={!app.capabilities.assistant || !app.assistant.enabled || app.assistant.busy}
-          profiles={app.codexProfiles}
+          profiles={app.assistantProfiles}
           onInvoke={(params) => app.runBackendAction("invoke_assistant", params)}
         />
       )

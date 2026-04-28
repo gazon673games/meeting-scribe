@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from application.codex_assistant import (
-    CodexAssistantPort,
     CodexAssistantRequest,
     CodexAssistantResult,
     CodexExecutionSettings,
@@ -17,6 +16,13 @@ from application.codex_assistant import (
 from application.codex_config import CodexProfile
 from application.codex_prompting import normalize_model_name, normalize_reasoning_effort
 from application.local_paths import project_runtime_dir
+from assistant.application.provider import (
+    ASSISTANT_PROVIDER_CODEX,
+    AssistantProviderError,
+    AssistantProviderInfo,
+    AssistantProviderPort,
+    result_from_error,
+)
 
 _ERR_NOT_FOUND = (
     "codex executable not found. "
@@ -101,8 +107,31 @@ class CodexCommandResolver:
         return [exe, *tail]
 
 
-class CodexCliRunner(CodexAssistantPort):
+class CodexCliRunner(AssistantProviderPort):
+    provider_id = ASSISTANT_PROVIDER_CODEX
+    provider_label = "Codex CLI"
     _resolver = CodexCommandResolver()
+
+    def status(self, settings: CodexExecutionSettings) -> AssistantProviderInfo:
+        resolved = self._resolver.resolve(settings)
+        if resolved is None:
+            error = _codex_not_found_error()
+            return AssistantProviderInfo(
+                id=self.provider_id,
+                label=self.provider_label,
+                available=False,
+                message=error.message,
+                error_code=error.code,
+                retryable=error.retryable,
+                suggestion=error.suggestion,
+            )
+        _cmd, source = resolved
+        return AssistantProviderInfo(
+            id=self.provider_id,
+            label=self.provider_label,
+            available=True,
+            message=f"Found via {source}",
+        )
 
     def run(self, request: CodexAssistantRequest) -> CodexAssistantResult:
         t0 = time.time()
@@ -114,7 +143,7 @@ class CodexCliRunner(CodexAssistantPort):
 
             resolved = self._resolver.resolve(settings)
             if resolved is None:
-                return self._result(False, profile, request.original_cmd, _ERR_NOT_FOUND, t0)
+                return self._error_result(profile, request.original_cmd, _codex_not_found_error(), t0)
             base_cmd, src = resolved
 
             out_path = tmp_dir / f"codex_last_{os.getpid()}_{uuid.uuid4().hex}.txt"
@@ -131,15 +160,34 @@ class CodexCliRunner(CodexAssistantPort):
             if proc.returncode != 0:
                 err = (proc.stderr or "").strip() or (proc.stdout or "").strip()
                 err = f"{err}\n(source={src})" if err else f"codex exec failed with code {proc.returncode}"
-                return self._result(False, profile, request.original_cmd, err, t0)
+                return self._error_result(profile, request.original_cmd, _classify_codex_error(err), t0)
             return self._result(True, profile, request.original_cmd, out_text or "(empty response)", t0)
 
         except subprocess.TimeoutExpired:
-            return self._result(False, profile, request.original_cmd, f"timeout after {int(settings.timeout_s)}s", t0)
+            return self._error_result(
+                profile,
+                request.original_cmd,
+                AssistantProviderError(
+                    code="timeout",
+                    message=f"timeout after {int(settings.timeout_s)}s",
+                    retryable=True,
+                    suggestion="Increase assistant timeout or use a faster model/profile.",
+                ),
+                t0,
+            )
         except FileNotFoundError:
-            return self._result(False, profile, request.original_cmd, _ERR_NOT_FOUND_RUNTIME, t0)
+            return self._error_result(profile, request.original_cmd, _codex_not_found_runtime_error(), t0)
         except Exception as e:
-            return self._result(False, profile, request.original_cmd, f"{type(e).__name__}: {e}", t0)
+            return self._error_result(
+                profile,
+                request.original_cmd,
+                AssistantProviderError(
+                    code="unknown_error",
+                    message=f"{type(e).__name__}: {e}",
+                    retryable=True,
+                ),
+                t0,
+            )
         finally:
             if out_path is not None:
                 try:
@@ -186,6 +234,99 @@ class CodexCliRunner(CodexAssistantPort):
     @staticmethod
     def _result(ok: bool, profile: CodexProfile, original_cmd: str, text: str, t0: float) -> CodexAssistantResult:
         return CodexAssistantResult(
-            ok=bool(ok), profile=str(profile.label), cmd=str(original_cmd),
-            text=str(text), dt_s=time.time() - t0,
+            ok=bool(ok),
+            profile=str(profile.label),
+            cmd=str(original_cmd),
+            text=str(text),
+            dt_s=time.time() - t0,
+            provider=ASSISTANT_PROVIDER_CODEX,
+            model=str(profile.model or ""),
         )
+
+    @staticmethod
+    def _error_result(
+        profile: CodexProfile,
+        original_cmd: str,
+        error: AssistantProviderError,
+        t0: float,
+    ) -> CodexAssistantResult:
+        return result_from_error(
+            profile=profile,
+            cmd=original_cmd,
+            provider=ASSISTANT_PROVIDER_CODEX,
+            model=str(profile.model or ""),
+            error=error,
+            started_at=t0,
+        )
+
+
+def _codex_not_found_error() -> AssistantProviderError:
+    return AssistantProviderError(
+        code="codex_not_found",
+        message=_ERR_NOT_FOUND,
+        retryable=False,
+        suggestion="Install Codex CLI or set codex.command to the full executable path.",
+    )
+
+
+def _codex_not_found_runtime_error() -> AssistantProviderError:
+    return AssistantProviderError(
+        code="codex_not_found",
+        message=_ERR_NOT_FOUND_RUNTIME,
+        retryable=False,
+        suggestion="Set codex.command to an explicit codex executable path.",
+    )
+
+
+def _classify_codex_error(message: str) -> AssistantProviderError:
+    text = str(message or "").strip()
+    lower = text.lower()
+    if any(marker in lower for marker in ("rate limit", "rate_limit", "too many requests", " 429", "(429", "status 429")):
+        return AssistantProviderError(
+            code="rate_limited",
+            message=text,
+            retryable=True,
+            suggestion="Wait a little or switch to another assistant profile/model.",
+        )
+    if any(marker in lower for marker in ("login", "auth", "unauthorized", "forbidden", "api key", "401", "403")):
+        return AssistantProviderError(
+            code="auth_error",
+            message=text,
+            retryable=False,
+            suggestion="Check Codex login/API credentials and try again.",
+        )
+    if any(
+        marker in lower
+        for marker in (
+            "enotfound",
+            "eai_again",
+            "dns",
+            "network",
+            "connection",
+            "connect",
+            "proxy",
+            "timed out",
+            "timeout",
+            "tls",
+            "ssl",
+        )
+    ):
+        return AssistantProviderError(
+            code="network_error",
+            message=text,
+            retryable=True,
+            suggestion="Check internet access or proxy settings.",
+        )
+    if "model" in lower and any(marker in lower for marker in ("not found", "unavailable", "unsupported", "unknown")):
+        return AssistantProviderError(
+            code="model_unavailable",
+            message=text,
+            retryable=False,
+            suggestion="Choose another Codex model/profile.",
+        )
+    return AssistantProviderError(
+        code="provider_crash",
+        message=text,
+        retryable=True,
+        suggestion="Retry the request; if it repeats, check the assistant console output.",
+    )

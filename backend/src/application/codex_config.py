@@ -12,6 +12,7 @@ class CodexProfile:
     id: str
     label: str
     prompt: str
+    provider_id: str = "codex"
     model: str = ""
     reasoning_effort: str = ""
     codex_profile: str = ""
@@ -68,6 +69,7 @@ def codex_profile_to_dict(profile: CodexProfile) -> Dict[str, Any]:
     return {
         "id": str(profile.id),
         "label": str(profile.label),
+        "provider": str(profile.provider_id or "codex"),
         "prompt": str(profile.prompt),
         "model": str(profile.model),
         "reasoning_effort": str(profile.reasoning_effort),
@@ -86,6 +88,7 @@ def parse_codex_profiles(raw_profiles: Any) -> List[CodexProfile]:
             pid = str(item.get("id") or f"profile_{i+1}").strip() or f"profile_{i+1}"
             label = str(item.get("label") or pid).strip() or pid
             prompt = str(item.get("prompt") or "").strip()
+            provider_id = str(item.get("provider_id") or item.get("provider") or "codex").strip() or "codex"
             model = str(item.get("model") or "").strip()
             reasoning_effort = str(
                 item.get("reasoning_effort")
@@ -101,6 +104,7 @@ def parse_codex_profiles(raw_profiles: Any) -> List[CodexProfile]:
                     id=pid,
                     label=label,
                     prompt=prompt,
+                    provider_id=provider_id,
                     model=model,
                     reasoning_effort=reasoning_effort,
                     codex_profile=codex_profile,

@@ -29,7 +29,7 @@ export function AssistantColumn({ assistant, contextReady, disabled, headerProps
     <PipelinePanel title="AI Assistant" active={assistant.busy} className="assistant-column" headerControls={layoutControls} headerProps={headerProps} showIndicator>
       <AssistantProfileSelect disabled={disabled} profileId={profileId} profiles={profiles} onProfileChange={setProfileId} />
       <AssistantQuickActions disabled={actionsDisabled} profileId={profileId} onInvoke={onInvoke} />
-      <AssistantResponse busy={assistant.busy} response={response} />
+      <AssistantResponse assistant={assistant} busy={assistant.busy} response={response} />
       <AssistantStats assistant={assistant} response={response} selectedProfile={selectedProfile} />
       <AssistantPromptBox
         disabled={disabled}

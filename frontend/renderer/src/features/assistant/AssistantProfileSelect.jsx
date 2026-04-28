@@ -10,7 +10,7 @@ export function AssistantProfileSelect({ disabled, profileId, profiles, onProfil
           {profiles.length ? (
             profiles.map((profile) => (
               <option key={profile.id || profile.label} value={profile.id}>
-                {profile.label || profile.id}
+                {profile.model ? `${profile.label || profile.id} - ${profile.model}` : profile.label || profile.id}
               </option>
             ))
           ) : (

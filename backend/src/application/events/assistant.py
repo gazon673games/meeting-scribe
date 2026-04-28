@@ -8,14 +8,47 @@ from application.events.base import EventType, TypedEvent, init_event
 
 @dataclass(frozen=True)
 class CodexResultEvent(TypedEvent):
-    record_fields: ClassVar[tuple[str, ...]] = ("ok", "profile", "cmd", "text", "dt_s")
+    record_fields: ClassVar[tuple[str, ...]] = (
+        "ok",
+        "profile",
+        "cmd",
+        "text",
+        "dt_s",
+        "provider",
+        "model",
+        "error_code",
+        "retryable",
+        "suggestion",
+        "details",
+    )
     ok: bool
     profile: str
     cmd: str
     text: str
     dt_s: float
+    provider: str
+    model: str
+    error_code: str
+    retryable: bool
+    suggestion: str
+    details: str
 
-    def __init__(self, *, ok: bool, profile: str, cmd: str, text: str, dt_s: float, ts: Optional[float] = None):
+    def __init__(
+        self,
+        *,
+        ok: bool,
+        profile: str,
+        cmd: str,
+        text: str,
+        dt_s: float,
+        provider: str = "codex",
+        model: str = "",
+        error_code: str = "",
+        retryable: bool = False,
+        suggestion: str = "",
+        details: str = "",
+        ts: Optional[float] = None,
+    ):
         init_event(
             self,
             EventType.CODEX_RESULT,
@@ -25,6 +58,12 @@ class CodexResultEvent(TypedEvent):
             cmd=str(cmd),
             text=str(text),
             dt_s=float(dt_s),
+            provider=str(provider or "codex"),
+            model=str(model or ""),
+            error_code=str(error_code or ""),
+            retryable=bool(retryable),
+            suggestion=str(suggestion or ""),
+            details=str(details or ""),
         )
 
 

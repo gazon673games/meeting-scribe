@@ -130,7 +130,19 @@ EVENT_SPECS: Dict[str, EventSpec] = {
     EventType.OFFLINE_PASS_ERROR.value: (OfflinePassErrorEvent, (("error", _str, ""),)),
     EventType.CODEX_RESULT.value: (
         CodexResultEvent,
-        (("ok", _bool, False), ("profile", _str, ""), ("cmd", _str, ""), ("text", _str, ""), ("dt_s", _float0, 0.0)),
+        (
+            ("ok", _bool, False),
+            ("profile", _str, ""),
+            ("cmd", _str, ""),
+            ("text", _str, ""),
+            ("dt_s", _float0, 0.0),
+            ("provider", _str, "codex"),
+            ("model", _str, ""),
+            ("error_code", _str, ""),
+            ("retryable", _bool, False),
+            ("suggestion", _str, ""),
+            ("details", _str, ""),
+        ),
     ),
     EventType.CODEX_FALLBACK_STARTED.value: (
         CodexFallbackStartedEvent,
