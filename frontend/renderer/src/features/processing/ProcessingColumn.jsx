@@ -5,6 +5,7 @@ import { SectionLabel } from "../../shared/ui/SectionLabel";
 import { ProcessingFeatureGrid } from "./ProcessingFeatureGrid";
 import { ProcessingStats } from "./ProcessingStats";
 import { QualityProfileSelector } from "./QualityProfileSelector";
+import { ResourceUsage } from "./ResourceUsage";
 
 export function ProcessingColumn({
   asrMetrics,
@@ -14,6 +15,7 @@ export function ProcessingColumn({
   locked,
   offlinePass,
   options,
+  resourceUsage,
   session,
   summary,
   onChange,
@@ -47,6 +49,7 @@ export function ProcessingColumn({
       <ProcessingFeatureGrid draft={draft} locked={locked} onChange={onChange} />
 
       <ProcessingStats asrMetrics={asrMetrics} draft={draft} session={session} summary={summary} />
+      <ResourceUsage usage={resourceUsage} />
     </PipelinePanel>
   );
 }

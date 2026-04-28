@@ -1,12 +1,13 @@
-import { MonitorOff, Moon, RefreshCw, Sun } from "lucide-react";
+import { Activity, MonitorOff, Moon, RefreshCw, Sun } from "lucide-react";
 
 const THEMES = [
   { id: "dark", label: "Dark", icon: Moon },
   { id: "light", label: "Light", icon: Sun }
 ];
 
-export function AppearanceSettings({ dirty, reloading, screenCaptureProtection, theme, onChange, onReloadApp }) {
+export function AppearanceSettings({ capabilities, dirty, perProcessAudio, reloading, screenCaptureProtection, theme, onChange, onReloadApp }) {
   const selected = theme === "light" ? "light" : "dark";
+  const showProcessAudio = Boolean(capabilities?.perProcessAudio);
 
   return (
     <section className="settings-section">
@@ -42,6 +43,20 @@ export function AppearanceSettings({ dirty, reloading, screenCaptureProtection, 
           <span>Screen Share Protection</span>
           <b />
         </button>
+
+        {showProcessAudio ? (
+          <button
+            aria-pressed={Boolean(perProcessAudio)}
+            className={`feature-toggle ${perProcessAudio ? "selected" : ""}`}
+            title="Capture audio from specific applications instead of all system audio"
+            type="button"
+            onClick={() => onChange({ perProcessAudio: !perProcessAudio })}
+          >
+            <Activity size={15} />
+            <span>Per-App Audio Capture</span>
+            <b />
+          </button>
+        ) : null}
 
         <button className="refresh-app-button" disabled={reloading} type="button" onClick={onReloadApp}>
           <RefreshCw size={15} />

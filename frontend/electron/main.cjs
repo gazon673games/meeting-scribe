@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain } = require("electron");
-const { spawn } = require("node:child_process");
+const { execFile, spawn } = require("node:child_process");
 const { existsSync, readFileSync } = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 const appRoot = app.isPackaged ? path.join(process.resourcesPath, "app") : path.resolve(__dirname, "..", "..");
@@ -187,6 +188,7 @@ class PythonBackend {
 }
 
 const backend = new PythonBackend({ root: appRoot, backendRoot, runtimeRoot });
+let gpuUsageCache = { ts: 0, gpus: [] };
 
 function readSavedContentProtection() {
   const configPath = path.join(runtimeRoot, "config.json");
@@ -217,6 +219,101 @@ function reloadWindow(window) {
   }
   window.webContents.reloadIgnoringCache();
   return { reloaded: true };
+}
+
+function electronResourceUsage() {
+  const metrics = app.getAppMetrics();
+  const memoryBytes = metrics.reduce((sum, metric) => {
+    const workingSetSize = Number(metric.memory?.workingSetSize || 0);
+    return sum + Math.max(0, workingSetSize * 1024);
+  }, 0);
+  const cpuPct = metrics.reduce((sum, metric) => sum + Math.max(0, Number(metric.cpu?.percentCPUUsage || 0)), 0);
+  return {
+    cpuPct,
+    memoryBytes: memoryBytes || process.memoryUsage().rss,
+    processCount: metrics.length
+  };
+}
+
+function nvidiaGpuUsage() {
+  const now = Date.now();
+  if (now - gpuUsageCache.ts < 2000) {
+    return Promise.resolve(gpuUsageCache.gpus);
+  }
+  return new Promise((resolve) => {
+    execFile(
+      "nvidia-smi",
+      [
+        "--query-gpu=name,memory.total,memory.used,utilization.gpu,utilization.memory",
+        "--format=csv,noheader,nounits"
+      ],
+      { timeout: 2000, windowsHide: true },
+      (error, stdout) => {
+        if (error) {
+          gpuUsageCache = { ts: now, gpus: [] };
+          resolve([]);
+          return;
+        }
+        const gpus = String(stdout || "")
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => {
+            const [name, total, used, gpuUtil, memoryUtil] = line.split(",").map((part) => part.trim());
+            const memoryTotalMiB = toNumber(total);
+            const memoryUsedMiB = toNumber(used);
+            return {
+              name: name || "NVIDIA GPU",
+              memoryTotalMiB,
+              memoryUsedMiB,
+              memoryFreeMiB: Math.max(0, memoryTotalMiB - memoryUsedMiB),
+              gpuUtilizationPct: toNumber(gpuUtil),
+              memoryUtilizationPct: toNumber(memoryUtil)
+            };
+          });
+        gpuUsageCache = { ts: now, gpus };
+        resolve(gpus);
+      }
+    );
+  });
+}
+
+function toNumber(value) {
+  const parsed = Number(String(value || "").trim());
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+async function getResourceUsage() {
+  const electron = electronResourceUsage();
+  let backendUsage = { pid: backend.process?.pid || 0, cpuPct: 0, memoryBytes: 0 };
+  try {
+    backendUsage = await backend.request("get_resource_usage", {});
+  } catch (error) {
+    backendUsage = { ...backendUsage, error: String(error?.message || error) };
+  }
+  const backendMemoryBytes = Math.max(0, Number(backendUsage.memoryBytes || 0));
+  const electronMemoryBytes = Math.max(0, Number(electron.memoryBytes || 0));
+  const backendCpuPct = Math.max(0, Number(backendUsage.cpuPct || 0));
+  const electronCpuPct = Math.max(0, Number(electron.cpuPct || 0));
+  return {
+    ts: Date.now(),
+    app: {
+      cpuPct: electronCpuPct + backendCpuPct,
+      memoryBytes: electronMemoryBytes + backendMemoryBytes,
+      electronCpuPct,
+      electronMemoryBytes,
+      backendCpuPct,
+      backendMemoryBytes,
+      backendPid: Number(backendUsage.pid || backend.process?.pid || 0),
+      electronProcessCount: Number(electron.processCount || 0)
+    },
+    system: {
+      totalMemoryBytes: os.totalmem(),
+      freeMemoryBytes: os.freemem(),
+      logicalCores: os.cpus().length
+    },
+    gpus: await nvidiaGpuUsage()
+  };
 }
 
 function createWindow() {
@@ -257,6 +354,7 @@ app.whenReady().then(() => {
   ipcMain.handle("window:reload", (event) => {
     return reloadWindow(BrowserWindow.fromWebContents(event.sender));
   });
+  ipcMain.handle("app:get-resource-usage", () => getResourceUsage());
   createWindow();
 
   app.on("activate", () => {

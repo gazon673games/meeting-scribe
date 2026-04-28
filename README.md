@@ -68,4 +68,8 @@ Release archives are built by GitHub Actions when a `v*` tag is pushed. The curr
 
 ## Notes
 
-The app is intended to run locally and does not require the UI to be served from a web server in production. Assistant features require a configured assistant backend and a non-empty transcript context.
+1 добавить  выбор ассистента, сейчас есть только codex-5.3, нужен выбор моделей, так же добавить возможность юзать веб
+версию дипсика (дисик бесплатный, возможно если встроить эмуляцию через селениум которую я уже делал отдельно то можно допибиться лучшей
+скорости)   - medium приоритет
+2 r&d распознать разные  голоса diarization (Diart, WhisperLiveKit + diarization) - medium приоритет 
+3 по ддд и слеиан коду опять весь проект разобарть, отрефакторить самые тяжелые файлы - low приоритет

@@ -4,7 +4,7 @@ import { Plus } from "lucide-react";
 import { SelectShell } from "../../shared/ui/forms/SelectShell";
 import { displayDeviceLabel } from "./deviceLabels";
 
-export function AddDevicePicker({ groups, disabled, onAdd }) {
+export function AddDevicePicker({ groups, disabled, onAdd, onOpen }) {
   const [selectedId, setSelectedId] = React.useState("");
   const normalizedGroups = React.useMemo(
     () =>
@@ -32,8 +32,16 @@ export function AddDevicePicker({ groups, disabled, onAdd }) {
   }
 
   const selected = devices.find((device) => device.id === selectedId) || devices[0];
+  const selectedLabel = selected ? displayDeviceLabel(selected.fullLabel || selected.label || selected.name) : "";
   return (
-    <details className={`add-source ${disabled ? "disabled" : ""}`}>
+    <details
+      className={`add-source ${disabled ? "disabled" : ""}`}
+      onToggle={(event) => {
+        if (event.currentTarget.open) {
+          onOpen?.();
+        }
+      }}
+    >
       <summary
         onClick={(event) => {
           if (disabled) {
@@ -46,7 +54,12 @@ export function AddDevicePicker({ groups, disabled, onAdd }) {
       </summary>
       <div className="add-source-picker">
         <SelectShell iconSize={14}>
-          <select disabled={disabled} value={selected.id} onChange={(event) => setSelectedId(event.target.value)}>
+          <select
+            disabled={disabled}
+            title={selectedLabel}
+            value={selected.id}
+            onChange={(event) => setSelectedId(event.target.value)}
+          >
             {normalizedGroups.map((group) => (
               <optgroup key={group.label} label={group.label}>
                 {group.devices.map((device) => (
