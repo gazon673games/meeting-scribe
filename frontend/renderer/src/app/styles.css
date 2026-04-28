@@ -777,6 +777,41 @@ textarea:disabled {
   margin: 0;
 }
 
+.proxy-settings {
+  display: grid;
+  gap: 10px;
+}
+
+.proxy-toggle {
+  width: min(100%, 220px);
+}
+
+.proxy-toggle svg {
+  flex: 0 0 auto;
+  color: var(--subtle);
+}
+
+.proxy-toggle.selected svg {
+  color: var(--on-accent);
+}
+
+.proxy-grid {
+  grid-template-columns: minmax(90px, 0.5fr) minmax(160px, 1fr) minmax(90px, 0.5fr) repeat(2, minmax(120px, 0.75fr));
+}
+
+.proxy-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.proxy-note svg {
+  flex: 0 0 auto;
+}
+
 .privacy-toggle svg {
   flex: 0 0 auto;
   color: var(--subtle);

@@ -5,6 +5,7 @@ import { FALLBACK_OPTIONS, uniqueOptions } from "../../entities/settings/model";
 import { meetingScribeClient } from "../../shared/api/meetingScribeClient";
 import { AdvancedAsrSettings } from "./AdvancedAsrSettings";
 import { AppearanceSettings } from "./AppearanceSettings";
+import { AssistantProxySettings } from "./AssistantProxySettings";
 import { HardwareSummary } from "./HardwareSummary";
 
 function ModelsSection({ open }) {
@@ -190,6 +191,7 @@ export function SettingsDialogButton({
                 onChange={onChange}
                 onReloadApp={handleReloadApp}
               />
+              <AssistantProxySettings draft={draft} onChange={onChange} />
               <HardwareSummary hardware={hardware} />
               <AdvancedAsrSettings
                 computeOptions={computeOptions}
