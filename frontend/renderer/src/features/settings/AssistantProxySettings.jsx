@@ -77,7 +77,7 @@ export function AssistantProxySettings({ draft, onChange }) {
 
         <div className="proxy-note">
           <Bot size={13} />
-          <span>Used by assistant requests through HTTP_PROXY, HTTPS_PROXY and ALL_PROXY.</span>
+          <span>Used through HTTP_PROXY, HTTPS_PROXY and ALL_PROXY.</span>
         </div>
       </div>
     </section>

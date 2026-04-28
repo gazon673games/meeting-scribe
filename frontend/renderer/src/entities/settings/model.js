@@ -44,7 +44,10 @@ export function makeSettingsDraft(config) {
   const ui = objectSection(config?.ui);
   const asr = objectSection(config?.asr);
   const codex = objectSection(config?.codex);
-  const proxy = parseProxy(codex.proxy);
+  const models = objectSection(config?.models);
+  const assistantProxy = parseProxy(codex.proxy);
+  const modelProxy = parseProxy(models.proxy || codex.proxy);
+  const proxy = assistantProxy.enabled ? assistantProxy : modelProxy;
   return {
     wavEnabled: boolWithDefault(ui.wav_enabled, false),
     offlineOnStop: false,
@@ -56,11 +59,13 @@ export function makeSettingsDraft(config) {
     model: String(ui.model || "medium"),
     profile: String(ui.profile || "Balanced"),
     outputFile: String(ui.output_file || "capture_mix.wav"),
+    modelsDirectory: String(models.cache_dir || ""),
+    modelsUseProxy: boolWithDefault(models.use_proxy, false),
     device: String(asr.device || "cuda"),
     computeType: String(asr.compute_type || "float16"),
     overloadStrategy: String(asr.overload_strategy || "drop_old"),
     perProcessAudio: boolWithDefault(ui.per_process_audio, false),
-    assistantProxyEnabled: proxy.enabled,
+    assistantProxyEnabled: assistantProxy.enabled,
     assistantProxyScheme: proxy.scheme,
     assistantProxyHost: proxy.host,
     assistantProxyPort: proxy.port,
@@ -98,6 +103,12 @@ export function applySettingsToConfig(config, draft) {
       compute_type: String(draft.computeType || "float16"),
       overload_strategy: String(draft.overloadStrategy || "drop_old"),
       ...Object.fromEntries(ASR_FIELDS.map((field) => [field.key, normalizeNumber(draft.asr[field.key], field)]))
+    },
+    models: {
+      ...objectSection(current.models),
+      cache_dir: String(draft.modelsDirectory || "").trim(),
+      use_proxy: Boolean(draft.modelsUseProxy),
+      proxy: draft.modelsUseProxy ? buildProxyUrl(draft, { forceEnabled: true }) : ""
     },
     codex: {
       ...objectSection(current.codex),
@@ -173,8 +184,8 @@ function parseProxy(value) {
   }
 }
 
-function buildProxyUrl(draft) {
-  if (!draft.assistantProxyEnabled) {
+export function buildProxyUrl(draft, options = {}) {
+  if (!draft.assistantProxyEnabled && !options.forceEnabled) {
     return "";
   }
   const scheme = normalizeProxyScheme(draft.assistantProxyScheme);

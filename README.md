@@ -68,8 +68,14 @@ Release archives are built by GitHub Actions when a `v*` tag is pushed. The curr
 
 ## Notes
 
-1 добавить  выбор ассистента, сейчас есть только codex-5.3, нужен выбор моделей, так же добавить возможность юзать веб
-версию дипсика (дисик бесплатный, возможно если встроить эмуляцию через селениум которую я уже делал отдельно то можно допибиться лучшей
-скорости)   - medium приоритет
-2 r&d распознать разные  голоса diarization (Diart, WhisperLiveKit + diarization) - medium приоритет 
-3 по ддд и слеиан коду опять весь проект разобарть, отрефакторить самые тяжелые файлы - low приоритет
+high priority r
+1. add support for different codex models
+
+medium priority
+1. reaseach idea - add support for diffrent ai assistent mode that use seleium to interact with deepseek
+(to avoid api, off the top of my head it needs to use selenium and profiel with authorized deepseek acc, it might be the way that reduce delay even more that current that use fast model of codex )
+2. reseach idea - add logic for diarization (use diart or WhisperLiveKit + diarization), when we have try on feature flag we not only process asr in real time, but also try to indentify diffrent speakers in real time and
+write logs with difffrent speakers signiture
+
+low priority
+1. review, goal - find all places where we shoud make refactoring by ddd aprouch and clean code princilples

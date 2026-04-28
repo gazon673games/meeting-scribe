@@ -35,9 +35,9 @@ def project_runtime_dir(project_root: Path, name: str) -> Path:
     return path
 
 
-def configure_project_local_io(project_root: Path) -> None:
+def configure_project_local_io(project_root: Path, *, models_dir: Path | str | None = None) -> None:
     root = Path(project_root).resolve()
-    models_dir = root / "models"
+    models_dir = Path(models_dir).expanduser().resolve() if models_dir else root / "models"
     tmp_dir = project_local_root(root) / "tmp"
 
     models_dir.mkdir(parents=True, exist_ok=True)
