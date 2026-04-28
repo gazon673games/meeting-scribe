@@ -8,7 +8,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from application.asr_language import SUPPORTED_ASR_LANGUAGES
 from application.asr_profiles import PROFILE_BALANCED, PROFILE_CUSTOM, PROFILE_QUALITY, PROFILE_REALTIME, profile_defaults
@@ -32,6 +32,9 @@ class ElectronBackend:
     _device_tokens: Dict[str, DeviceToken] = field(default_factory=dict)
     _hardware_cache: Dict[str, Any] | None = field(default=None, init=False, repr=False)
     _hardware_cache_ts: float = field(default=0.0, init=False, repr=False)
+    _resource_cpu_time_s: float = field(default=0.0, init=False, repr=False)
+    _resource_wall_time_s: float = field(default=0.0, init=False, repr=False)
+    _downloads: Dict[str, Any] = field(default_factory=dict, init=False, repr=False)
 
     protocol_version: int = 1
 
@@ -103,11 +106,117 @@ class ElectronBackend:
                 "sessionControl": self.session_controller is not None,
                 "assistant": self.assistant_controller is not None,
                 "liveTranscript": self.session_controller is not None,
+                "perProcessAudio": _per_process_audio_supported(),
             },
         }
 
     def get_config(self) -> Dict[str, Any]:
         return self._read_config()
+
+    def get_resource_usage(self) -> Dict[str, Any]:
+        now = time.monotonic()
+        cpu_time_s = time.process_time()
+        cpu_pct = 0.0
+        if self._resource_wall_time_s > 0.0:
+            wall_delta = max(1e-6, now - self._resource_wall_time_s)
+            cpu_delta = max(0.0, cpu_time_s - self._resource_cpu_time_s)
+            cpu_pct = min(100.0, (cpu_delta / wall_delta / max(1, os.cpu_count() or 1)) * 100.0)
+        self._resource_wall_time_s = now
+        self._resource_cpu_time_s = cpu_time_s
+        return {
+            "pid": os.getpid(),
+            "cpuPct": cpu_pct,
+            "memoryBytes": _current_process_memory_bytes(),
+            "system": _memory_snapshot(),
+            "gpus": _nvidia_gpu_snapshot(),
+        }
+
+    def list_process_sessions(self) -> Dict[str, Any]:
+        from infrastructure.process_session_catalog import list_process_session_groups, is_per_process_audio_supported
+
+        supported = is_per_process_audio_supported()
+        raw_groups = list_process_session_groups() if supported else []
+        groups: List[Dict[str, Any]] = []
+        sessions: List[Dict[str, Any]] = []
+        counter = 0
+
+        for group_index, group in enumerate(raw_groups):
+            group_label = str(group.get("label") or f"Output {group_index + 1}")
+            group_id = str(group.get("id") or f"process-output:{group_index}")
+            group_sessions: List[Dict[str, Any]] = []
+            for session in group.get("sessions", []):
+                pid = _int_or_zero(session.get("pid"))
+                if pid <= 0:
+                    continue
+                label = str(session.get("label") or f"PID {pid}")
+                device_id = f"process:{counter}"
+                counter += 1
+                record = {
+                    **session,
+                    "id": device_id,
+                    "kind": "process",
+                    "pid": pid,
+                    "label": label,
+                    "groupId": group_id,
+                    "groupLabel": group_label,
+                    "endpointId": str(session.get("endpointId") or group_id),
+                    "endpointLabel": str(session.get("endpointLabel") or group_label),
+                    "fullLabel": f"{group_label} / {label}",
+                }
+                self._device_tokens[device_id] = (
+                    "process",
+                    {
+                        "pid": pid,
+                        "index": session.get("index", 0),
+                        "endpointId": record["endpointId"],
+                        "endpointLabel": record["endpointLabel"],
+                    },
+                    str(record["fullLabel"]),
+                )
+                group_sessions.append(record)
+                sessions.append(record)
+            if group_sessions:
+                groups.append({"id": group_id, "label": group_label, "sessions": group_sessions})
+
+        return {"sessions": sessions, "groups": groups, "supported": supported}
+
+    def list_models(self) -> Dict[str, Any]:
+        from application.model_download import is_model_cached, is_builtin_model
+        from application.model_policy import ASR_MODEL_NAMES
+        models = []
+        for name in ASR_MODEL_NAMES:
+            dl = self._downloads.get(name, {})
+            models.append({
+                "name": name,
+                "cached": is_model_cached(name),
+                "builtin": is_builtin_model(name),
+                "downloading": dl.get("state") == "downloading",
+                "downloadDone": dl.get("state") == "done",
+                "downloadError": str(dl.get("error") or ""),
+                "downloadMessage": str(dl.get("message") or ""),
+            })
+        return {"models": models}
+
+    def download_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from application.model_download import download_model_async
+        name = str(params.get("name") or "").strip()
+        if not name:
+            raise ValueError("download_model requires params.name")
+        if self._downloads.get(name, {}).get("state") == "downloading":
+            return {"started": False, "message": "Already downloading"}
+        self._downloads[name] = {"state": "downloading", "message": "Starting...", "error": ""}
+
+        def on_progress(msg: str) -> None:
+            self._downloads[name] = {"state": "downloading", "message": msg, "error": ""}
+
+        def on_done(error: Optional[str]) -> None:
+            if error:
+                self._downloads[name] = {"state": "error", "message": "", "error": error}
+            else:
+                self._downloads[name] = {"state": "done", "message": "Downloaded", "error": ""}
+
+        download_model_async(name, on_progress, on_done)
+        return {"started": True, "message": f"Downloading {name}..."}
 
     def save_config(self, params: Dict[str, Any]) -> Dict[str, Any]:
         config = params.get("config")
@@ -132,7 +241,10 @@ class ElectronBackend:
         if not device_id:
             raise ValueError("add_source requires params.deviceId")
         if device_id not in self._device_tokens:
-            self.list_devices()
+            if device_id.startswith("process:"):
+                self.list_process_sessions()
+            else:
+                self.list_devices()
         token_record = self._device_tokens.get(device_id)
         if token_record is None:
             raise KeyError(f"Unknown device id: {device_id}")
@@ -188,6 +300,8 @@ class ElectronBackend:
             return self.get_state()
         if method == "get_config":
             return self.get_config()
+        if method == "get_resource_usage":
+            return self.get_resource_usage()
         if method == "save_config":
             return self.save_config(params)
         if method == "list_devices":
@@ -208,6 +322,12 @@ class ElectronBackend:
             return self.clear_transcript()
         if method == "invoke_assistant":
             return self.invoke_assistant(params)
+        if method == "list_models":
+            return self.list_models()
+        if method == "download_model":
+            return self.download_model(params)
+        if method == "list_process_sessions":
+            return self.list_process_sessions()
         raise KeyError(f"Unknown backend method: {method}")
 
     def _read_config(self) -> Dict[str, Any]:
@@ -299,6 +419,14 @@ class ElectronBackend:
         return devices, None
 
 
+def _per_process_audio_supported() -> bool:
+    try:
+        from infrastructure.process_session_catalog import is_per_process_audio_supported
+        return is_per_process_audio_supported()
+    except Exception:
+        return False
+
+
 def _safe_token_preview(token: object) -> str:
     try:
         text = repr(token)
@@ -338,19 +466,81 @@ class _MemoryStatusEx(ctypes.Structure):
     ]
 
 
+class _ProcessMemoryCounters(ctypes.Structure):
+    _fields_ = [
+        ("cb", ctypes.c_ulong),
+        ("PageFaultCount", ctypes.c_ulong),
+        ("PeakWorkingSetSize", ctypes.c_size_t),
+        ("WorkingSetSize", ctypes.c_size_t),
+        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+        ("PagefileUsage", ctypes.c_size_t),
+        ("PeakPagefileUsage", ctypes.c_size_t),
+    ]
+
+
 def _physical_memory_bytes() -> int:
+    return _memory_snapshot().get("totalMemoryBytes", 0)
+
+
+def _memory_snapshot() -> Dict[str, int]:
     if platform.system().lower() == "windows":
         try:
             status = _MemoryStatusEx()
             status.dwLength = ctypes.sizeof(_MemoryStatusEx)
             if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):  # type: ignore[attr-defined]
-                return int(status.ullTotalPhys)
+                return {
+                    "totalMemoryBytes": int(status.ullTotalPhys),
+                    "freeMemoryBytes": int(status.ullAvailPhys),
+                }
+        except Exception:
+            return {"totalMemoryBytes": 0, "freeMemoryBytes": 0}
+    try:
+        pages = os.sysconf("SC_PHYS_PAGES")
+        available_pages = os.sysconf("SC_AVPHYS_PAGES")
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        return {
+            "totalMemoryBytes": int(pages) * int(page_size),
+            "freeMemoryBytes": int(available_pages) * int(page_size),
+        }
+    except Exception:
+        return {"totalMemoryBytes": 0, "freeMemoryBytes": 0}
+
+
+def _current_process_memory_bytes() -> int:
+    if platform.system().lower() == "windows":
+        try:
+            counters = _ProcessMemoryCounters()
+            counters.cb = ctypes.sizeof(_ProcessMemoryCounters)
+            kernel32 = ctypes.WinDLL("Kernel32.dll", use_last_error=True)
+            psapi = ctypes.WinDLL("Psapi.dll", use_last_error=True)
+            kernel32.GetCurrentProcess.argtypes = []
+            kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+            psapi.GetProcessMemoryInfo.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(_ProcessMemoryCounters),
+                ctypes.c_ulong,
+            ]
+            psapi.GetProcessMemoryInfo.restype = ctypes.c_bool
+            handle = kernel32.GetCurrentProcess()
+            if psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+                return int(counters.WorkingSetSize)
         except Exception:
             return 0
     try:
-        pages = os.sysconf("SC_PHYS_PAGES")
-        page_size = os.sysconf("SC_PAGE_SIZE")
-        return int(pages) * int(page_size)
+        statm = Path("/proc/self/statm")
+        if statm.exists():
+            pages = int(statm.read_text(encoding="utf-8").split()[1])
+            return pages * int(os.sysconf("SC_PAGE_SIZE"))
+    except Exception:
+        pass
+    try:
+        import resource
+
+        value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        return value if platform.system().lower() == "darwin" else value * 1024
     except Exception:
         return 0
 
@@ -376,11 +566,14 @@ def _nvidia_gpu_snapshot() -> List[Dict[str, Any]]:
         parts = [part.strip() for part in line.split(",")]
         if len(parts) < 5:
             continue
+        memory_total_mib = _int_or_zero(parts[1])
+        memory_used_mib = _int_or_zero(parts[2])
         gpus.append(
             {
                 "name": parts[0],
-                "memoryTotalMiB": _int_or_zero(parts[1]),
-                "memoryUsedMiB": _int_or_zero(parts[2]),
+                "memoryTotalMiB": memory_total_mib,
+                "memoryUsedMiB": memory_used_mib,
+                "memoryFreeMiB": max(0, memory_total_mib - memory_used_mib),
                 "gpuUtilizationPct": _int_or_zero(parts[3]),
                 "memoryUtilizationPct": _int_or_zero(parts[4]),
             }

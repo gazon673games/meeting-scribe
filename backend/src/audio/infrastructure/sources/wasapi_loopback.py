@@ -26,7 +26,14 @@ if not getattr(np, "_meeting_scribe_fromstring_compat", False):
     np.fromstring = _np_fromstring_compat  # type: ignore[assignment]
     np._meeting_scribe_fromstring_compat = True  # type: ignore[attr-defined]
 
+import warnings
+
 import soundcard as sc
+
+try:
+    warnings.filterwarnings("ignore", category=sc.SoundcardRuntimeWarning)
+except Exception:
+    pass
 
 from audio.domain.formats import AudioFormat
 from audio.infrastructure.sources.base import BaseSource

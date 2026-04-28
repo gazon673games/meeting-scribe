@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from application.local_paths import project_human_logs_dir, project_logs_dir
 
@@ -15,6 +15,9 @@ class FileTranscriptStore:
         self._realtime_enabled = False
         self._realtime_transcript_path: Optional[Path] = None
         self._realtime_transcript_fh: Any = None
+        self._srt_index: int = 0
+        self._srt_pending: Optional[Dict[str, Any]] = None
+        self._srt_base_ts: Optional[float] = None
 
     @property
     def current_human_log_path(self) -> Optional[Path]:
@@ -68,6 +71,7 @@ class FileTranscriptStore:
             pass
 
     def close_realtime_transcript(self) -> None:
+        self._flush_srt_pending()
         try:
             if self._realtime_transcript_fh is not None:
                 self._realtime_transcript_fh.flush()
@@ -76,17 +80,50 @@ class FileTranscriptStore:
             pass
         self._realtime_transcript_fh = None
         self._realtime_transcript_path = None
+        self._srt_index = 0
+        self._srt_pending = None
+        self._srt_base_ts = None
 
-    def write_realtime_line(self, line: str) -> None:
+    def write_realtime_srt_entry(self, ts: float, stream: str, text: str) -> None:
         if not self._realtime_enabled:
             return
         self._open_realtime_if_needed()
         if self._realtime_transcript_fh is None:
             return
         try:
-            self._realtime_transcript_fh.write(str(line) + "\n")
+            if self._srt_base_ts is None:
+                self._srt_base_ts = ts
+            relative_ts = max(0.0, ts - self._srt_base_ts)
+            if self._srt_pending is not None:
+                prev = self._srt_pending
+                end_ts = max(prev["relative_ts"] + 0.5, relative_ts - 0.05)
+                self._srt_index += 1
+                self._realtime_transcript_fh.write(
+                    f"{self._srt_index}\n"
+                    f"{_srt_timestamp(prev['relative_ts'])} --> {_srt_timestamp(end_ts)}\n"
+                    f"{prev['stream']}: {prev['text']}\n\n"
+                )
+                self._realtime_transcript_fh.flush()
+            self._srt_pending = {"relative_ts": relative_ts, "stream": str(stream), "text": str(text)}
         except Exception:
             pass
+
+    def _flush_srt_pending(self) -> None:
+        if self._srt_pending is None or self._realtime_transcript_fh is None:
+            return
+        try:
+            prev = self._srt_pending
+            end_ts = prev["relative_ts"] + 4.0
+            self._srt_index += 1
+            self._realtime_transcript_fh.write(
+                f"{self._srt_index}\n"
+                f"{_srt_timestamp(prev['relative_ts'])} --> {_srt_timestamp(end_ts)}\n"
+                f"{prev['stream']}: {prev['text']}\n\n"
+            )
+            self._realtime_transcript_fh.flush()
+        except Exception:
+            pass
+        self._srt_pending = None
 
     def _open_realtime_if_needed(self) -> None:
         if not self._realtime_enabled:
@@ -96,8 +133,21 @@ class FileTranscriptStore:
         try:
             directory = project_logs_dir(self.project_root, create=True)
             ts = time.strftime("%Y%m%d_%H%M%S")
-            self._realtime_transcript_path = directory / f"transcript_{ts}.txt"
+            self._realtime_transcript_path = directory / f"transcript_{ts}.srt"
             self._realtime_transcript_fh = self._realtime_transcript_path.open("a", encoding="utf-8")
+            self._srt_index = 0
+            self._srt_pending = None
+            self._srt_base_ts = None
         except Exception:
             self._realtime_transcript_fh = None
             self._realtime_transcript_path = None
+
+
+def _srt_timestamp(seconds: float) -> str:
+    total_ms = int(round(max(0.0, seconds) * 1000))
+    ms = total_ms % 1000
+    total_s = total_ms // 1000
+    h = total_s // 3600
+    m = (total_s % 3600) // 60
+    s = total_s % 60
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"

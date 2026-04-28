@@ -6,16 +6,26 @@ from typing import Callable, Optional
 
 BUILTIN_MODELS = {"tiny", "base", "small", "medium", "large", "large-v1", "large-v2", "large-v3", "large-v3-turbo"}
 
+_BUILTIN_MODEL_REPOS = {
+    "tiny": "Systran/faster-whisper-tiny",
+    "base": "Systran/faster-whisper-base",
+    "small": "Systran/faster-whisper-small",
+    "medium": "Systran/faster-whisper-medium",
+    "large": "Systran/faster-whisper-large",
+    "large-v1": "Systran/faster-whisper-large-v1",
+    "large-v2": "Systran/faster-whisper-large-v2",
+    "large-v3": "Systran/faster-whisper-large-v3",
+    "large-v3-turbo": "Systran/faster-whisper-large-v3-turbo",
+}
+
 
 def is_model_cached(model_name: str) -> bool:
     """Return True if the model weights are fully present in the local HuggingFace cache."""
-    if model_name in BUILTIN_MODELS:
-        return True
+    repo_id = _BUILTIN_MODEL_REPOS.get(model_name, model_name.replace("\\", "/"))
     try:
-        from huggingface_hub import constants  # type: ignore
         import pathlib
+        from huggingface_hub import constants  # type: ignore
 
-        repo_id = model_name.replace("\\", "/")
         cache_dir = pathlib.Path(constants.HF_HUB_CACHE)
         folder = repo_id.replace("/", "--")
         repo_dir = cache_dir / f"models--{folder}"
@@ -23,13 +33,17 @@ def is_model_cached(model_name: str) -> bool:
             return False
 
         weight_names = {"model.bin", "model.safetensors"}
-        min_size = 1_000_000  # 1 MB — configs are tiny, weights are large
+        min_size = 1_000_000
         for p in repo_dir.rglob("*"):
             if p.name in weight_names and p.stat().st_size > min_size:
                 return True
         return False
     except Exception:
         return False
+
+
+def is_builtin_model(model_name: str) -> bool:
+    return model_name in BUILTIN_MODELS
 
 
 def download_model_async(

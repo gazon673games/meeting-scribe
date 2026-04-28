@@ -119,6 +119,12 @@ class HeadlessSessionController:
                     device=token,
                     error_callback=self._on_source_error,
                 )
+            elif normalized_kind == "process":
+                source = self.audio_source_factory.create_process_source(
+                    name=source_name,
+                    token=token,
+                    error_callback=self._on_source_error,
+                )
             else:
                 source = self.audio_source_factory.create_microphone_source(name=source_name, device=token)
 
@@ -369,14 +375,16 @@ class HeadlessSessionController:
         text = str(line.get("text", "")).strip()
         if not text:
             return
+        ts = float(line.get("ts") or time.time())
+        stream = str(line.get("stream") or "mix")
         formatted = (
-            f"[{time.strftime('%H:%M:%S', time.localtime(float(line.get('ts', time.time()))))}] "
-            f"{line.get('stream', 'mix')}: {text}"
+            f"[{time.strftime('%H:%M:%S', time.localtime(ts))}] "
+            f"{stream}: {text}"
         )
         try:
             store.write_human_line(formatted)
             if self._realtime_transcript_enabled:
-                store.write_realtime_line(formatted)
+                store.write_realtime_srt_entry(ts, stream, text)
             self._sync_transcript_store_paths_locked()
         except Exception:
             pass
@@ -677,11 +685,17 @@ def _normalize_source_kind(kind: str) -> str:
         return "loopback"
     if normalized in {"input", "mic", "microphone"}:
         return "input"
+    if normalized in {"process", "app", "application", "per_process"}:
+        return "process"
     raise ValueError(f"Unsupported source kind: {kind}")
 
 
 def _default_source_name(kind: str) -> str:
-    return "desktop_audio" if kind == "loopback" else "mic"
+    if kind == "loopback":
+        return "desktop_audio"
+    if kind == "process":
+        return "app_audio"
+    return "mic"
 
 
 def _safe_float(raw: object, default: float) -> float:
