@@ -7,6 +7,7 @@ import time
 import unittest
 from pathlib import Path
 from typing import List, Tuple
+from unittest.mock import patch
 
 from application.event_types import UtteranceEvent
 from application.codex_assistant import CodexAssistantResult
@@ -37,6 +38,9 @@ class _FakeAudioSourceFactory:
         return _FakeSource(name)
 
     def create_microphone_source(self, *, name, device):  # noqa: ANN001
+        return _FakeSource(name)
+
+    def create_process_source(self, *, name, token, error_callback=None):  # noqa: ANN001
         return _FakeSource(name)
 
 
@@ -242,13 +246,49 @@ class ElectronInterfaceTests(unittest.TestCase):
             backend.handle("list_devices")
             source = backend.handle("add_source", {"deviceId": "input:0"})
             started = backend.handle("start_session", {})
+            live_source = backend.handle("add_source", {"deviceId": "loopback:0"})
             stopped = backend.handle("stop_session", {})
 
             self.assertEqual(source["name"], "mic")
+            self.assertEqual(live_source["name"], "desktop_audio")
+            self.assertEqual(len(runtime_factory.engine.sources), 2)
             self.assertTrue(runtime_factory.engine.running is False)
             self.assertFalse(stopped["running"])
             self.assertTrue(started["wavRecording"])
             self.assertFalse(wav_factory.writer.recording)
+
+    def test_backend_lists_grouped_process_sessions_and_adds_process_source(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            repository = JsonConfigRepository(root / "config.json")
+            repository.write({})
+            controller = HeadlessSessionController(
+                project_root=root,
+                audio_runtime_factory=_FakeAudioRuntimeFactory(),
+                audio_source_factory=_FakeAudioSourceFactory(),
+                wav_recorder_factory=_FakeWavRecorderFactory(),
+            )
+            backend = ElectronBackend(root, repository, _DeviceCatalog(), controller)
+
+            grouped_sessions = [
+                {
+                    "id": "endpoint-headphones",
+                    "label": "Headphones",
+                    "sessions": [{"pid": 1234, "label": "Browser", "streams": 1, "endpointId": "endpoint-headphones"}],
+                }
+            ]
+
+            with (
+                patch("infrastructure.process_session_catalog.is_per_process_audio_supported", return_value=True),
+                patch("infrastructure.process_session_catalog.list_process_session_groups", return_value=grouped_sessions),
+            ):
+                catalog = backend.handle("list_process_sessions")
+                source = backend.handle("add_source", {"deviceId": catalog["sessions"][0]["id"]})
+
+            self.assertEqual(catalog["groups"][0]["label"], "Headphones")
+            self.assertEqual(catalog["groups"][0]["sessions"][0]["fullLabel"], "Headphones / Browser")
+            self.assertEqual(source["kind"], "process")
+            self.assertEqual(source["label"], "Headphones / Browser")
 
     def test_backend_removes_source_and_clears_transcript_when_idle(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:

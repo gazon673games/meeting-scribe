@@ -21,3 +21,12 @@ class AudioSourceFactory(Protocol):
 
     def create_microphone_source(self, *, name: str, device: Any) -> AudioSource:
         ...
+
+    def create_process_source(
+        self,
+        *,
+        name: str,
+        token: Any,
+        error_callback: Optional[SourceErrorCallback] = None,
+    ) -> AudioSource:
+        ...
