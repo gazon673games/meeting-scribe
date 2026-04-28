@@ -5,6 +5,7 @@ import os
 import platform
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,10 +36,13 @@ class ElectronBackend:
     _resource_cpu_time_s: float = field(default=0.0, init=False, repr=False)
     _resource_wall_time_s: float = field(default=0.0, init=False, repr=False)
     _downloads: Dict[str, Any] = field(default_factory=dict, init=False, repr=False)
+    _download_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
+    _event_sink: Any = field(default=None, init=False, repr=False)
 
     protocol_version: int = 1
 
     def set_event_sink(self, event_sink) -> None:  # noqa: ANN001
+        self._event_sink = event_sink
         if self.session_controller is not None:
             self.session_controller.set_event_sink(event_sink)
         if self.assistant_controller is not None:
@@ -64,6 +68,7 @@ class ElectronBackend:
             "paths": {
                 "projectRoot": str(self.project_root),
                 "config": str(Path(self.config_repository.path)),  # type: ignore[attr-defined]
+                "models": str(self._models_dir()),
             },
             "hardware": self._hardware_snapshot(),
             "configSummary": {
@@ -84,7 +89,7 @@ class ElectronBackend:
             "options": {
                 "languages": list(SUPPORTED_ASR_LANGUAGES),
                 "asrProfiles": [PROFILE_REALTIME, PROFILE_BALANCED, PROFILE_QUALITY, PROFILE_CUSTOM],
-                "asrModels": list(ASR_MODEL_NAMES),
+                "asrModels": self._asr_model_options(config),
                 "asrModes": [
                     {"id": "mix", "label": "MIX (master)"},
                     {"id": "split", "label": "SPLIT (all sources)"},
@@ -180,49 +185,179 @@ class ElectronBackend:
 
         return {"sessions": sessions, "groups": groups, "supported": supported}
 
-    def list_models(self) -> Dict[str, Any]:
-        from application.model_download import is_model_cached, is_builtin_model
+    def list_models(self, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        from application.model_download import (
+            is_model_cached,
+            is_builtin_model,
+            normalize_model_reference,
+            scan_local_models,
+        )
         from application.model_policy import ASR_MODEL_NAMES
+        config = self._read_config()
+        models_dir = self._models_dir_from_params(params, config)
+        downloads = self._download_snapshot()
         models = []
+        recommended_refs = {normalize_model_reference(name) for name in ASR_MODEL_NAMES}
         for name in ASR_MODEL_NAMES:
-            dl = self._downloads.get(name, {})
+            cached = is_model_cached(name, models_dir=models_dir)
             models.append({
                 "name": name,
-                "cached": is_model_cached(name),
+                "label": name,
+                "cached": cached,
+                "compatible": cached,
+                "status": "compatible" if cached else "recommended",
+                "source": "recommended",
                 "builtin": is_builtin_model(name),
-                "downloading": dl.get("state") == "downloading",
-                "downloadDone": dl.get("state") == "done",
-                "downloadError": str(dl.get("error") or ""),
-                "downloadMessage": str(dl.get("message") or ""),
+                "recommended": True,
+                "downloadable": True,
+                "deletable": False,
+                **self._download_fields(name, downloads),
             })
-        return {"models": models}
+        for record in scan_local_models(models_dir):
+            if str(record.get("name") or "") in recommended_refs:
+                continue
+            models.append({**record, **self._download_fields(str(record.get("name") or ""), downloads)})
+
+        current_model = str((config.get("ui", {}) if isinstance(config.get("ui"), dict) else {}).get("model", "")).strip()
+        known_refs = {normalize_model_reference(str(model.get("name") or "")) for model in models}
+        if current_model and normalize_model_reference(current_model) not in known_refs:
+            cached = is_model_cached(current_model, models_dir=models_dir)
+            models.append({
+                "name": current_model,
+                "label": current_model,
+                "cached": cached,
+                "compatible": cached,
+                "status": "compatible" if cached else "unknown_remote",
+                "source": "custom",
+                "builtin": False,
+                "recommended": False,
+                "downloadable": True,
+                "deletable": False,
+                **self._download_fields(current_model, downloads),
+            })
+
+        known_refs = {normalize_model_reference(str(model.get("name") or "")) for model in models}
+        for name, dl in downloads.items():
+            normalized = normalize_model_reference(name)
+            if not normalized or normalized in known_refs:
+                continue
+            cached = is_model_cached(name, models_dir=models_dir)
+            models.append({
+                "name": name,
+                "label": name,
+                "cached": cached,
+                "compatible": cached,
+                "status": "compatible" if cached else "unknown_remote",
+                "source": "custom",
+                "builtin": False,
+                "recommended": False,
+                "downloadable": True,
+                "deletable": False,
+                **self._download_fields(name, downloads),
+            })
+            known_refs.add(normalized)
+
+        return {"models": models, "modelsDir": str(models_dir), "activeDownloads": self._active_download_count(downloads)}
 
     def download_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        from application.model_download import download_model_async
+        from application.model_download import download_model_async, normalize_model_reference
         name = str(params.get("name") or "").strip()
         if not name:
             raise ValueError("download_model requires params.name")
-        if self._downloads.get(name, {}).get("state") == "downloading":
+        name = normalize_model_reference(name)
+        models_dir = self._models_dir_from_params(params)
+        if self._download_record(name).get("state") == "downloading":
             return {"started": False, "message": "Already downloading"}
-        self._downloads[name] = {"state": "downloading", "message": "Starting...", "error": ""}
+        if "useProxy" in params or "use_proxy" in params:
+            use_proxy = bool(params.get("useProxy", params.get("use_proxy", False)))
+            proxy = str(params.get("proxy") or "").strip() if use_proxy else ""
+        else:
+            proxy = self._model_download_proxy()
+        self._set_download_state(
+            name,
+            {
+                "state": "downloading",
+                "message": "Starting...",
+                "error": "",
+                "downloadedBytes": 0,
+                "speedBps": 0,
+                "proxy": bool(proxy),
+            },
+        )
 
-        def on_progress(msg: str) -> None:
-            self._downloads[name] = {"state": "downloading", "message": msg, "error": ""}
+        def on_progress(update: Any) -> None:
+            payload = update if isinstance(update, dict) else {"message": str(update)}
+            self._set_download_state(
+                name,
+                {
+                    "state": "downloading",
+                    "message": str(payload.get("message") or "Downloading..."),
+                    "error": "",
+                    "downloadedBytes": _int_or_zero(payload.get("downloadedBytes")),
+                    "speedBps": float(payload.get("speedBps") or 0.0),
+                    "proxy": bool(proxy),
+                },
+            )
 
         def on_done(error: Optional[str]) -> None:
             if error:
-                self._downloads[name] = {"state": "error", "message": "", "error": error}
+                self._set_download_state(
+                    name,
+                    {
+                        "state": "error",
+                        "message": "",
+                        "error": error,
+                        "downloadedBytes": self._download_record(name).get("downloadedBytes", 0),
+                        "speedBps": 0,
+                        "proxy": bool(proxy),
+                    },
+                )
             else:
-                self._downloads[name] = {"state": "done", "message": "Downloaded", "error": ""}
+                self._set_download_state(
+                    name,
+                    {
+                        "state": "done",
+                        "message": "Downloaded",
+                        "error": "",
+                        "downloadedBytes": self._download_record(name).get("downloadedBytes", 0),
+                        "speedBps": 0,
+                        "proxy": bool(proxy),
+                    },
+                )
 
-        download_model_async(name, on_progress, on_done)
-        return {"started": True, "message": f"Downloading {name}..."}
+        download_model_async(name, on_progress, on_done, models_dir=models_dir, proxy=proxy)
+        return {"started": True, "message": f"Downloading {name}...", "proxy": bool(proxy)}
+
+    def delete_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from application.model_download import delete_local_model
+
+        name = str(params.get("name") or "").strip()
+        if self._download_record(name).get("state") == "downloading":
+            raise RuntimeError("Wait until the model download finishes before deleting it")
+        if self._model_is_selected_or_running(name):
+            raise RuntimeError("Cannot delete the model that is selected or currently used by ASR")
+        delete_local_model(name, models_dir=self._models_dir_from_params(params))
+        return {"deleted": True, "name": name}
+
+    def model_metadata(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from application.model_download import model_metadata
+
+        name = str(params.get("name") or "").strip()
+        if not name:
+            raise ValueError("model_metadata requires params.name")
+        return model_metadata(name, models_dir=self._models_dir_from_params(params))
 
     def save_config(self, params: Dict[str, Any]) -> Dict[str, Any]:
         config = params.get("config")
         if not isinstance(config, dict):
             raise ValueError("save_config requires params.config object")
         self.config_repository.write(config)
+        try:
+            from application.local_paths import configure_project_local_io
+
+            configure_project_local_io(self.project_root, models_dir=self._models_dir(config))
+        except Exception:
+            pass
         return {"saved": True, "config": self._read_config()}
 
     def list_devices(self) -> Dict[str, Any]:
@@ -323,9 +458,13 @@ class ElectronBackend:
         if method == "invoke_assistant":
             return self.invoke_assistant(params)
         if method == "list_models":
-            return self.list_models()
+            return self.list_models(params)
         if method == "download_model":
             return self.download_model(params)
+        if method == "delete_model":
+            return self.delete_model(params)
+        if method == "model_metadata":
+            return self.model_metadata(params)
         if method == "list_process_sessions":
             return self.list_process_sessions()
         raise KeyError(f"Unknown backend method: {method}")
@@ -336,6 +475,118 @@ class ElectronBackend:
         except Exception:
             return {}
         return config if isinstance(config, dict) else {}
+
+    def _download_snapshot(self) -> Dict[str, Dict[str, Any]]:
+        with self._download_lock:
+            return {str(name): dict(record) for name, record in self._downloads.items()}
+
+    def _download_record(self, name: str) -> Dict[str, Any]:
+        from application.model_download import normalize_model_reference
+
+        key = normalize_model_reference(name)
+        with self._download_lock:
+            return dict(self._downloads.get(name) or self._downloads.get(key) or {})
+
+    def _download_fields(self, name: str, downloads: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+        from application.model_download import normalize_model_reference
+
+        key = normalize_model_reference(name)
+        dl = downloads.get(name) or downloads.get(key) or {}
+        return {
+            "downloading": dl.get("state") == "downloading",
+            "downloadDone": dl.get("state") == "done",
+            "downloadError": str(dl.get("error") or ""),
+            "downloadMessage": str(dl.get("message") or ""),
+            "downloadedBytes": _int_or_zero(dl.get("downloadedBytes")),
+            "speedBps": float(dl.get("speedBps") or 0.0),
+            "downloadUsesProxy": bool(dl.get("proxy", False)),
+        }
+
+    def _set_download_state(self, name: str, record: Dict[str, Any]) -> None:
+        with self._download_lock:
+            self._downloads[str(name)] = dict(record)
+            active_downloads = self._active_download_count(self._downloads)
+        self._emit(
+            "model_download_updated",
+            {
+                "model": str(name),
+                **dict(record),
+                "activeDownloads": active_downloads,
+            },
+        )
+
+    def _active_download_count(self, downloads: Dict[str, Dict[str, Any]] | None = None) -> int:
+        source = downloads
+        if source is None:
+            with self._download_lock:
+                source = dict(self._downloads)
+        return sum(1 for record in source.values() if record.get("state") == "downloading")
+
+    def _model_download_proxy(self, config: Dict[str, Any] | None = None) -> str:
+        cfg = config if isinstance(config, dict) else self._read_config()
+        models = cfg.get("models", {}) if isinstance(cfg.get("models"), dict) else {}
+        if not bool(models.get("use_proxy", False)):
+            return ""
+        model_proxy = str(models.get("proxy") or "").strip()
+        if model_proxy:
+            return model_proxy
+        codex = cfg.get("codex", {}) if isinstance(cfg.get("codex"), dict) else {}
+        return str(codex.get("proxy") or "").strip()
+
+    def _emit(self, event_type: str, payload: Dict[str, Any]) -> None:
+        sink = self._event_sink
+        if sink is None:
+            return
+        try:
+            sink(event_type, {"ts": time.time(), **payload})
+        except Exception:
+            pass
+
+    def _models_dir(self, config: Dict[str, Any] | None = None) -> Path:
+        cfg = config if isinstance(config, dict) else self._read_config()
+        models = cfg.get("models", {}) if isinstance(cfg.get("models"), dict) else {}
+        raw = str(models.get("cache_dir", "") or "").strip()
+        return Path(raw).expanduser().resolve() if raw else Path(self.project_root).resolve() / "models"
+
+    def _models_dir_from_params(self, params: Dict[str, Any] | None = None, config: Dict[str, Any] | None = None) -> Path:
+        raw = ""
+        if isinstance(params, dict):
+            raw = str(params.get("modelsDir", params.get("models_dir", "")) or "").strip()
+        return Path(raw).expanduser().resolve() if raw else self._models_dir(config)
+
+    def _model_is_selected_or_running(self, name: str) -> bool:
+        from application.model_download import normalize_model_reference
+
+        wanted = normalize_model_reference(name)
+        config = self._read_config()
+        current = str((config.get("ui", {}) if isinstance(config.get("ui"), dict) else {}).get("model", "") or "").strip()
+        if wanted and normalize_model_reference(current) == wanted:
+            return True
+        session = self._session_snapshot()
+        if session.get("running") and wanted and normalize_model_reference(current) == wanted:
+            return True
+        return False
+
+    def _asr_model_options(self, config: Dict[str, Any]) -> List[str]:
+        try:
+            from application.model_download import scan_local_models
+
+            local = [
+                str(model.get("name") or "")
+                for model in scan_local_models(self._models_dir(config))
+                if model.get("compatible") and str(model.get("name") or "").strip()
+            ]
+        except Exception:
+            local = []
+        current = str((config.get("ui", {}) if isinstance(config.get("ui"), dict) else {}).get("model", "") or "").strip()
+        out: List[str] = []
+        seen: set[str] = set()
+        for name in [*ASR_MODEL_NAMES, *local, current]:
+            text = str(name or "").strip()
+            if text and text not in seen:
+                seen.add(text)
+                out.append(text)
+        return out
 
     def _start_params_from_config(self) -> Dict[str, Any]:
         config = self._read_config()

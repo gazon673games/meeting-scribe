@@ -13,7 +13,7 @@
     "offline_on_stop": false,
     "asr_settings_expanded": false,
     "theme": "dark",
-    "screen_capture_protection": true,
+    "screen_capture_protection": false,
     "per_process_audio": true
   },
   "asr": {
@@ -67,5 +67,10 @@
         "extra_args": []
       }
     ]
+  },
+  "models": {
+    "cache_dir": "",
+    "use_proxy": true,
+    "proxy": "http://127.0.0.1:10808"
   }
 }

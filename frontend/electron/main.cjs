@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain } = require("electron");
 const { execFile, spawn } = require("node:child_process");
 const { existsSync, readFileSync } = require("node:fs");
 const os = require("node:os");
@@ -25,6 +25,7 @@ class PythonBackend {
     this.window = null;
     this.ready = false;
     this.lastError = "";
+    this.activeDownloads = 0;
   }
 
   attachWindow(window) {
@@ -60,6 +61,7 @@ class PythonBackend {
     this.process.on("exit", (code, signal) => {
       this.ready = false;
       this.process = null;
+      this.activeDownloads = 0;
       const message = `Python backend exited (${code ?? "null"}, ${signal ?? "null"})`;
       for (const { reject } of this.pending.values()) {
         reject(new Error(message));
@@ -132,6 +134,9 @@ class PythonBackend {
     if (message.event) {
       if (message.event.type === "backend_ready") {
         this.ready = true;
+      }
+      if (message.event.type === "model_download_updated") {
+        this.activeDownloads = toNumber(message.event.activeDownloads);
       }
       this.sendEvent(message.event);
       return;
@@ -336,6 +341,23 @@ function createWindow() {
   setWindowContentProtection(window, readSavedContentProtection());
   backend.attachWindow(window);
   backend.start();
+
+  window.on("close", (event) => {
+    if (backend.activeDownloads <= 0) {
+      return;
+    }
+    const choice = dialog.showMessageBoxSync(window, {
+      type: "warning",
+      buttons: ["Keep Downloading", "Close Anyway"],
+      defaultId: 0,
+      cancelId: 0,
+      message: "Model download is still running",
+      detail: "Closing the app now will stop the Python backend and interrupt the Hugging Face download."
+    });
+    if (choice === 0) {
+      event.preventDefault();
+    }
+  });
 
   const rendererUrl = process.env.ELECTRON_RENDERER_URL || "http://127.0.0.1:5173";
   if (app.isPackaged && !process.env.ELECTRON_RENDERER_URL) {

@@ -648,16 +648,68 @@ textarea:disabled {
   gap: 6px;
 }
 
+.models-controls {
+  display: grid;
+  gap: 10px;
+}
+
+.custom-model-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.model-download-button {
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-bg-strong);
+  color: var(--control-text);
+  cursor: pointer;
+  padding: 0 12px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.model-download-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.feature-toggle.model-proxy-toggle {
+  width: min(100%, 320px);
+  min-height: 34px;
+  font-size: 12px;
+  padding: 0 10px;
+}
+
+.feature-toggle.model-proxy-toggle svg {
+  flex: 0 0 auto;
+  color: var(--subtle);
+}
+
+.feature-toggle.model-proxy-toggle.selected svg {
+  color: var(--on-accent);
+}
+
+.model-row-shell {
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.model-row-shell:last-child {
+  border-bottom: none;
+}
+
 .model-row {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 5px 0;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.model-row:last-child {
-  border-bottom: none;
 }
 
 .model-row-name {
@@ -671,6 +723,9 @@ textarea:disabled {
 }
 
 .model-row-status {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 11px;
   padding: 2px 6px;
   border-radius: 4px;
@@ -718,6 +773,16 @@ textarea:disabled {
   border-color: var(--text);
 }
 
+.model-row-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.model-row-btn.danger:hover {
+  color: var(--danger-soft);
+  border-color: var(--danger-soft);
+}
+
 .models-loading,
 .models-error {
   font-size: 12px;
@@ -727,6 +792,64 @@ textarea:disabled {
 
 .models-error {
   color: #f87171;
+}
+
+.model-metadata-panel {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--border-soft);
+  padding: 10px 0 12px;
+}
+
+.model-metadata-grid {
+  display: grid;
+  grid-template-columns: minmax(82px, auto) minmax(0, 1fr);
+  gap: 6px 10px;
+  margin: 0;
+}
+
+.model-metadata-grid dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.model-metadata-grid dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-metadata-blocks {
+  display: grid;
+  gap: 8px;
+}
+
+.model-metadata-object {
+  display: grid;
+  gap: 5px;
+}
+
+.model-metadata-object h4 {
+  margin: 0;
+  color: var(--subtle);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.model-metadata-object pre {
+  max-height: 150px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: var(--panel-bg);
+  color: var(--text);
+  font: 11px/1.45 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  padding: 8px;
 }
 
 .hardware-grid,

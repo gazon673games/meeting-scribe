@@ -58,6 +58,7 @@ def create_backend() -> ElectronBackend:
     configure_project_local_io(project_root)
     config_repository = JsonConfigRepository(project_root / "config.json")
     ensure_runtime_config(project_root, config_repository)
+    configure_project_local_io(project_root, models_dir=_models_dir_from_config(project_root, config_repository))
     session_controller = HeadlessSessionController(
         project_root=project_root,
         audio_runtime_factory=DefaultAudioRuntimeFactory(),
@@ -87,13 +88,25 @@ def create_backend() -> ElectronBackend:
     )
 
 
+def _models_dir_from_config(project_root: Path, config_repository: JsonConfigRepository) -> Path:
+    try:
+        config = config_repository.read()
+        models = config.get("models", {}) if isinstance(config, dict) else {}
+        raw = str(models.get("cache_dir", "") if isinstance(models, dict) else "").strip()
+    except Exception:
+        raw = ""
+    return Path(raw).expanduser().resolve() if raw else Path(project_root).resolve() / "models"
+
+
 def main() -> None:
     if "--smoke-import" in sys.argv:
         return
     if "--repair-config" in sys.argv:
         root = runtime_root()
         configure_project_local_io(root)
-        ensure_runtime_config(root, JsonConfigRepository(root / "config.json"))
+        repo = JsonConfigRepository(root / "config.json")
+        ensure_runtime_config(root, repo)
+        configure_project_local_io(root, models_dir=_models_dir_from_config(root, repo))
         return
 
     backend = create_backend()
