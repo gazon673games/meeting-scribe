@@ -26,24 +26,32 @@ function resolveSpeakerTone(line, tones) {
 export function TranscriptList({ lines, running }) {
   const listRef = React.useRef(null);
   const shouldStickToBottomRef = React.useRef(true);
+  const isProgrammaticScrollRef = React.useRef(false);
   const speakerTones = new Map();
 
   const updateStickiness = React.useCallback(() => {
+    if (isProgrammaticScrollRef.current) {
+      isProgrammaticScrollRef.current = false;
+      return;
+    }
     const element = listRef.current;
     if (!element) {
       return;
     }
     const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-    shouldStickToBottomRef.current = distanceFromBottom <= 24;
+    shouldStickToBottomRef.current = distanceFromBottom <= 80;
   }, []);
+
+  const lastLineTs = lines.length > 0 ? lines[lines.length - 1]?.ts : 0;
 
   React.useLayoutEffect(() => {
     const element = listRef.current;
     if (!element || !shouldStickToBottomRef.current) {
       return;
     }
+    isProgrammaticScrollRef.current = true;
     element.scrollTop = element.scrollHeight;
-  }, [lines.length, running]);
+  }, [lastLineTs, running]);
 
   return (
     <div className="transcript-list" onScroll={updateStickiness} ref={listRef}>

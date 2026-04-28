@@ -30,6 +30,7 @@ export function useMeetingScribeApp() {
   const [events, setEvents] = React.useState([]);
   const [error, setError] = React.useState("");
   const [loading, setLoading] = React.useState(true);
+  const [resourceUsage, setResourceUsage] = React.useState({ app: {}, system: {}, gpus: [] });
 
   const refresh = React.useCallback(async () => {
     setLoading(true);
@@ -104,6 +105,30 @@ export function useMeetingScribeApp() {
     }, 600);
     return () => window.clearInterval(handle);
   }, [state?.session?.running]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const loadResourceUsage = () => {
+      meetingScribeClient
+        .resourceUsage()
+        .then((result) => {
+          if (!cancelled) {
+            setResourceUsage(result || { app: {}, system: {}, gpus: [] });
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setResourceUsage({ app: {}, system: {}, gpus: [] });
+          }
+        });
+    };
+    loadResourceUsage();
+    const handle = window.setInterval(loadResourceUsage, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, []);
 
   const options = state?.options || FALLBACK_OPTIONS;
   const summary = state?.configSummary || {};
@@ -245,6 +270,7 @@ export function useMeetingScribeApp() {
     applyProfile,
     refresh,
     reloadApp,
+    resourceUsage,
     runBackendAction,
     saveSettings,
     startOrStop,

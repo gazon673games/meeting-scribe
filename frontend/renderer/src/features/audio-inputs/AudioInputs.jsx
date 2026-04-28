@@ -1,25 +1,70 @@
+import React from "react";
 import { Activity, Mic, Monitor } from "lucide-react";
 
+import { meetingScribeClient } from "../../shared/api/meetingScribeClient";
 import { PipelinePanel } from "../../shared/ui/pipeline/PipelinePanel";
 import { AddDevicePicker } from "./AddDevicePicker";
 import { SourceCard } from "./SourceCard";
+import { SystemAudioPicker, normalizeProcessGroups } from "./SystemAudioPicker";
 
-export function AudioInputs({ devices, disabled, headerProps, layoutControls, sources, onAdd, onRemove, onToggle }) {
+export function AudioInputs({
+  capabilities,
+  devices,
+  disabled,
+  headerProps,
+  layoutControls,
+  perProcessAudio,
+  sourceSelectionLocked = false,
+  sources,
+  onAdd,
+  onRemove,
+  onToggle
+}) {
   const active = sources.some((source) => source.enabled);
   const inputSources = sources.filter((source) => source.kind === "input");
   const loopbackSources = sources.filter((source) => source.kind === "loopback");
+  const processSources = sources.filter((source) => source.kind === "process");
+  const systemSources = [...loopbackSources, ...processSources];
   const extraSources = [
     ...inputSources.slice(1),
-    ...loopbackSources.slice(1),
-    ...sources.filter((source) => !["input", "loopback"].includes(source.kind))
+    ...systemSources.slice(1),
+    ...sources.filter((source) => !["input", "loopback", "process"].includes(source.kind))
   ];
+
+  const useProcessDropdown = Boolean(capabilities?.perProcessAudio && perProcessAudio);
+  const [processCatalog, setProcessCatalog] = React.useState(null);
+  const [processLoading, setProcessLoading] = React.useState(false);
+  const [processError, setProcessError] = React.useState("");
+  const processGroups = React.useMemo(() => normalizeProcessGroups(processCatalog), [processCatalog]);
+
+  const loadProcessCatalog = React.useCallback(() => {
+    if (!useProcessDropdown) {
+      return;
+    }
+    setProcessLoading(true);
+    setProcessError("");
+    meetingScribeClient
+      .request("list_process_sessions")
+      .then((result) => setProcessCatalog(result || { groups: [], sessions: [] }))
+      .catch((error) => setProcessError(String(error?.message || error)))
+      .finally(() => setProcessLoading(false));
+  }, [useProcessDropdown]);
+
+  React.useEffect(() => {
+    if (useProcessDropdown) {
+      loadProcessCatalog();
+    } else {
+      setProcessCatalog(null);
+      setProcessError("");
+    }
+  }, [loadProcessCatalog, useProcessDropdown]);
 
   return (
     <PipelinePanel title="Audio Inputs" active={active} className="inputs-column" headerControls={layoutControls} headerProps={headerProps}>
       <div className="source-stack">
         <SourceCard
           devices={devices.input}
-          disabled={disabled}
+          disabled={disabled || sourceSelectionLocked}
           icon={<Mic size={16} />}
           source={inputSources[0]}
           title="Microphone"
@@ -29,9 +74,16 @@ export function AudioInputs({ devices, disabled, headerProps, layoutControls, so
         />
         <SourceCard
           devices={devices.loopback}
-          disabled={disabled}
+          disabled={disabled || sourceSelectionLocked}
           icon={<Monitor size={16} />}
-          source={loopbackSources[0]}
+          picker={useProcessDropdown ? SystemAudioPicker : undefined}
+          pickerProps={{
+            catalog: processCatalog,
+            error: processError,
+            loading: processLoading,
+            onRefresh: loadProcessCatalog
+          }}
+          source={systemSources[0]}
           title="System Audio"
           onAdd={onAdd}
           onRemove={onRemove}
@@ -41,10 +93,10 @@ export function AudioInputs({ devices, disabled, headerProps, layoutControls, so
           <SourceCard
             key={source.name}
             devices={[]}
-            disabled={disabled}
+            disabled={disabled || sourceSelectionLocked}
             icon={<Activity size={16} />}
             source={source}
-            title={source.name}
+            title={source.label || source.name}
             onAdd={onAdd}
             onRemove={onRemove}
             onToggle={onToggle}
@@ -56,9 +108,11 @@ export function AudioInputs({ devices, disabled, headerProps, layoutControls, so
         disabled={disabled}
         groups={[
           { label: "Microphones", devices: devices.input },
-          { label: "System Audio", devices: devices.loopback }
+          { label: "System Audio", devices: devices.loopback },
+          ...processGroups.map((group) => ({ label: `Applications / ${group.label}`, devices: group.sessions }))
         ]}
         onAdd={onAdd}
+        onOpen={loadProcessCatalog}
       />
 
       {devices.errors?.length ? <div className="panel-note">{devices.errors.join(" | ")}</div> : null}

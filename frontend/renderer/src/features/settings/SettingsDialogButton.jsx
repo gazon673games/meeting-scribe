@@ -1,12 +1,124 @@
 import React from "react";
-import { Check, Save, Settings, X } from "lucide-react";
+import { Check, Download, RefreshCw, Save, Settings, X } from "lucide-react";
 
 import { FALLBACK_OPTIONS, uniqueOptions } from "../../entities/settings/model";
+import { meetingScribeClient } from "../../shared/api/meetingScribeClient";
 import { AdvancedAsrSettings } from "./AdvancedAsrSettings";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { HardwareSummary } from "./HardwareSummary";
 
+function ModelsSection({ open }) {
+  const [models, setModels] = React.useState(null);
+  const [modelError, setModelError] = React.useState("");
+  const [downloadingNames, setDownloadingNames] = React.useState(new Set());
+
+  const loadModels = React.useCallback(() => {
+    meetingScribeClient
+      .request("list_models")
+      .then((result) => setModels(result?.models || []))
+      .catch((err) => setModelError(String(err?.message || err)));
+  }, []);
+
+  React.useEffect(() => {
+    if (!open) {
+      return;
+    }
+    loadModels();
+  }, [open, loadModels]);
+
+  React.useEffect(() => {
+    if (!models) {
+      return undefined;
+    }
+    const hasActive = models.some((m) => m.downloading);
+    if (!hasActive) {
+      return undefined;
+    }
+    const handle = window.setInterval(loadModels, 2000);
+    return () => window.clearInterval(handle);
+  }, [models, loadModels]);
+
+  const handleDownload = React.useCallback(
+    async (name) => {
+      setDownloadingNames((prev) => new Set([...prev, name]));
+      setModelError("");
+      try {
+        await meetingScribeClient.request("download_model", { name });
+        loadModels();
+      } catch (err) {
+        setModelError(String(err?.message || err));
+      } finally {
+        setDownloadingNames((prev) => {
+          const next = new Set(prev);
+          next.delete(name);
+          return next;
+        });
+      }
+    },
+    [loadModels]
+  );
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-head">
+        <h3>Models</h3>
+        <button className="icon-button" title="Refresh models" type="button" onClick={loadModels}>
+          <RefreshCw size={13} />
+        </button>
+      </div>
+      {modelError ? <div className="models-error">{modelError}</div> : null}
+      {models === null ? (
+        <div className="models-loading">Loading...</div>
+      ) : (
+        <div className="models-list">
+          {models.map((model) => {
+            const isStarting = downloadingNames.has(model.name);
+            const isDownloading = model.downloading || isStarting;
+            const statusLabel = model.cached
+              ? "cached"
+              : isDownloading
+                ? model.downloadMessage || "downloading..."
+                : model.downloadError
+                  ? "error"
+                  : model.builtin
+                    ? "auto on first use"
+                    : "not cached";
+            const statusClass = model.cached
+              ? "model-status-cached"
+              : isDownloading
+                ? "model-status-downloading"
+                : model.downloadError
+                  ? "model-status-error"
+                  : "model-status-missing";
+            return (
+              <div key={model.name} className="model-row">
+                <span className="model-row-name">{model.name}</span>
+                <span className={`model-row-status ${statusClass}`}>{statusLabel}</span>
+                {!model.cached && !isDownloading ? (
+                  <button
+                    className="model-row-btn"
+                    title={`Download ${model.name}`}
+                    type="button"
+                    onClick={() => handleDownload(model.name)}
+                  >
+                    <Download size={12} />
+                  </button>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function SettingsDialogButton({
+  capabilities,
   dirty,
   draft,
   hardware,
@@ -69,7 +181,9 @@ export function SettingsDialogButton({
 
             <div className="settings-modal-body">
               <AppearanceSettings
+                capabilities={capabilities}
                 dirty={dirty}
+                perProcessAudio={draft.perProcessAudio}
                 reloading={saving}
                 screenCaptureProtection={draft.screenCaptureProtection}
                 theme={draft.theme}
@@ -87,6 +201,7 @@ export function SettingsDialogButton({
                 onAsrChange={onAsrChange}
                 onChange={onChange}
               />
+              <ModelsSection open={open} />
             </div>
 
             <footer className="settings-modal-foot">

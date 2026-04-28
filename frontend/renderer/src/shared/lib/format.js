@@ -11,6 +11,22 @@ export function formatNumber(value) {
   return Number.isFinite(number) ? number.toFixed(2) : "0.00";
 }
 
+export function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "-";
+  }
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let next = bytes;
+  let unitIndex = 0;
+  while (next >= 1024 && unitIndex < units.length - 1) {
+    next /= 1024;
+    unitIndex += 1;
+  }
+  const precision = unitIndex >= 3 ? 1 : 0;
+  return `${next.toFixed(precision)} ${units[unitIndex]}`;
+}
+
 export function formatTime(ts) {
   const date = new Date(Number(ts || 0) * 1000);
   if (Number.isNaN(date.getTime())) {

@@ -57,6 +57,7 @@ export function makeSettingsDraft(config) {
     device: String(asr.device || "cuda"),
     computeType: String(asr.compute_type || "float16"),
     overloadStrategy: String(asr.overload_strategy || "drop_old"),
+    perProcessAudio: boolWithDefault(ui.per_process_audio, false),
     asr: Object.fromEntries(ASR_FIELDS.map((field) => [field.key, asr[field.key] ?? field.defaultValue]))
   };
 }
@@ -80,7 +81,8 @@ export function applySettingsToConfig(config, draft) {
       long_run: boolWithDefault(current.ui?.long_run, true),
       rt_transcript_to_file: Boolean(draft.realtimeTranscriptToFile),
       offline_on_stop: false,
-      asr_settings_expanded: boolWithDefault(current.ui?.asr_settings_expanded, false)
+      asr_settings_expanded: boolWithDefault(current.ui?.asr_settings_expanded, false),
+      per_process_audio: Boolean(draft.perProcessAudio)
     },
     asr: {
       ...objectSection(current.asr),

@@ -4,8 +4,9 @@ import { SelectShell } from "../../shared/ui/forms/SelectShell";
 import { SwitchButton } from "../../shared/ui/SwitchButton";
 import { displayDeviceLabel } from "./deviceLabels";
 
-export function SourceCard({ devices = [], disabled, icon, source, title, onAdd, onRemove, onToggle }) {
+export function SourceCard({ devices = [], disabled, icon, picker: Picker, pickerProps = {}, source, title, onAdd, onRemove, onToggle }) {
   const [selectedId, setSelectedId] = React.useState("");
+  const [selectedOverride, setSelectedOverride] = React.useState(null);
   const sourceDevice = React.useMemo(() => devices.find((device) => source && device.label === source.label), [devices, source]);
   const currentOption = React.useMemo(
     () => (source && !sourceDevice ? { id: `current:${source.name}`, label: source.label || source.name, current: true } : null),
@@ -14,7 +15,9 @@ export function SourceCard({ devices = [], disabled, icon, source, title, onAdd,
   const selectableDevices = React.useMemo(() => (currentOption ? [currentOption, ...devices] : devices), [currentOption, devices]);
   const preferredId = sourceDevice?.id || currentOption?.id || devices[0]?.id || "";
   const selectedIdOrDefault = selectableDevices.some((device) => device.id === selectedId) ? selectedId : preferredId;
-  const selected = selectableDevices.find((device) => device.id === selectedIdOrDefault) || selectableDevices[0];
+  const selectedFromDevices = selectableDevices.find((device) => device.id === selectedIdOrDefault);
+  const selected = selectedFromDevices || (selectedOverride?.id === selectedId ? selectedOverride : null) || selectableDevices[0];
+  const selectedLabel = selected ? displayDeviceLabel(selected.fullLabel || selected.label || selected.name) : "No devices found";
   const level = Math.max(0, Math.min(100, Number(source?.level || 0)));
   const meterClass = level > 80 ? "hot" : level > 45 ? "warm" : "";
   const canToggle = Boolean(source) || Boolean(selected && !selected.current);
@@ -23,15 +26,29 @@ export function SourceCard({ devices = [], disabled, icon, source, title, onAdd,
     setSelectedId((current) => (selectableDevices.some((device) => device.id === current) ? current : preferredId));
   }, [preferredId, selectableDevices]);
 
-  const handleSelect = async (event) => {
-    const nextId = event.target.value;
-    const next = selectableDevices.find((device) => device.id === nextId);
-    setSelectedId(nextId);
-    if (!next || next.current || !source || !onAdd || !onRemove || next.label === source.label) {
+  const handleSelectDevice = async (next) => {
+    if (!next) {
+      return;
+    }
+    setSelectedId(next.id);
+    setSelectedOverride(selectableDevices.some((device) => device.id === next.id) ? null : next);
+    if (next.current || !onAdd) {
+      return;
+    }
+    if (!source) {
+      await onAdd(next);
+      return;
+    }
+    if (!onRemove || sourceMatchesDevice(source, next)) {
       return;
     }
     await onRemove(source);
     await onAdd(next);
+  };
+
+  const handleSelect = (event) => {
+    const next = selectableDevices.find((device) => device.id === event.target.value);
+    handleSelectDevice(next);
   };
 
   const handleToggle = () => {
@@ -58,19 +75,42 @@ export function SourceCard({ devices = [], disabled, icon, source, title, onAdd,
         <div className={meterClass} style={{ width: `${source?.enabled ? level : 0}%` }} />
       </div>
 
-      <SelectShell iconSize={14}>
-        <select disabled={disabled || !selectableDevices.length} value={selected?.id || ""} onChange={handleSelect}>
-          {selectableDevices.length ? (
-            selectableDevices.map((device) => (
-              <option key={device.id} value={device.id}>
-                {displayDeviceLabel(device.label)}
-              </option>
-            ))
-          ) : (
-            <option value="">No devices found</option>
-          )}
-        </select>
-      </SelectShell>
+      {Picker ? (
+        <Picker
+          devices={devices}
+          disabled={disabled}
+          {...pickerProps}
+          selectableDevices={selectableDevices}
+          selected={selected}
+          selectedId={selected?.id || ""}
+          onSelect={handleSelectDevice}
+        />
+      ) : (
+        <SelectShell iconSize={14}>
+          <select
+            disabled={disabled || !selectableDevices.length}
+            title={selectedLabel}
+            value={selected?.id || ""}
+            onChange={handleSelect}
+          >
+            {selectableDevices.length ? (
+              selectableDevices.map((device) => (
+                <option key={device.id} value={device.id}>
+                  {displayDeviceLabel(device.label)}
+                </option>
+              ))
+            ) : (
+              <option value="">No devices found</option>
+            )}
+          </select>
+        </SelectShell>
+      )}
     </article>
   );
+}
+
+function sourceMatchesDevice(source, device) {
+  const sourceLabel = String(source?.label || source?.name || "");
+  const deviceLabel = String(device?.fullLabel || device?.label || "");
+  return sourceLabel === deviceLabel || sourceLabel === String(device?.label || "");
 }

@@ -20,10 +20,13 @@ export function App() {
       defaultWidth: 260,
       element: (
         <AudioInputs
+          capabilities={app.capabilities}
           devices={app.devices}
-          disabled={app.session.running}
+          disabled={!app.capabilities.sourceControl}
+          sourceSelectionLocked={app.session.running}
+          perProcessAudio={app.settingsDraft.perProcessAudio}
           sources={app.sources}
-          onAdd={(device) => app.runBackendAction("add_source", { deviceId: device.id })}
+          onAdd={(device) => app.runBackendAction("add_source", { deviceId: device.id, label: device.fullLabel || device.label })}
           onRemove={(source) => app.runBackendAction("remove_source", { name: source.name })}
           onToggle={(source) => app.runBackendAction("set_source_enabled", { name: source.name, enabled: !source.enabled })}
         />
@@ -40,6 +43,7 @@ export function App() {
           locked={app.session.running}
           offlinePass={app.offlinePass}
           options={app.options}
+          resourceUsage={app.resourceUsage}
           session={app.session}
           summary={app.summary}
           draft={app.settingsDraft}
@@ -82,6 +86,7 @@ export function App() {
         loading={app.loading}
         pipelineLayout={pipelineLayout}
         settingsPanel={{
+          capabilities: app.capabilities,
           dirty: app.settingsDirty,
           draft: app.settingsDraft,
           hardware: app.hardware,
