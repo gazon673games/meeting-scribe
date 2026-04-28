@@ -24,7 +24,7 @@ def _configure_utf8_stdio() -> None:
 
 _configure_utf8_stdio()
 
-from application.codex_use_case import CodexRequestUseCase
+from application.assistant_use_case import AssistantRequestUseCase
 from application.local_paths import application_root, configure_project_local_io
 from application.session_tasks import OfflinePassUseCase, StopAsrSessionUseCase
 from assistant.application.service import AssistantApplicationService
@@ -71,7 +71,7 @@ def create_backend() -> ElectronBackend:
         transcript_store=FileTranscriptStore(project_root),
     )
     assistant_service = AssistantApplicationService(
-        CodexRequestUseCase(CodexCliRunner(), FileTranscriptContextReader())
+        AssistantRequestUseCase([CodexCliRunner()], FileTranscriptContextReader())
     )
     assistant_controller = AssistantController(
         project_root=project_root,

@@ -5,11 +5,11 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from application.assistant_supervisor import AssistantFallbackSupervisor
-from application.codex_assistant import CodexExecutionSettings
-from application.codex_use_case import CodexRequestInput, CodexRequestUseCase
+from application.assistant_use_case import AssistantRequestInput, AssistantRequestUseCase
 from application.commands import InvokeAssistantCommand
 from application.event_types import CodexFallbackStartedEvent, CodexResultEvent
 from application.supervision import SupervisionReport
+from assistant.application.provider import AssistantExecutionSettings, AssistantProviderInfo
 
 
 @dataclass(frozen=True)
@@ -26,7 +26,7 @@ class AssistantRuntimeOptions:
 class AssistantApplicationService:
     def __init__(
         self,
-        use_case: CodexRequestUseCase,
+        use_case: AssistantRequestUseCase,
         *,
         supervisor: Optional[AssistantFallbackSupervisor] = None,
     ) -> None:
@@ -62,7 +62,7 @@ class AssistantApplicationService:
                 )
 
             result = self._use_case.execute(
-                CodexRequestInput(
+                AssistantRequestInput(
                     user_text=command.request_text,
                     profile=command.profile,
                     project_root=Path(options.project_root),
@@ -75,7 +75,7 @@ class AssistantApplicationService:
                     ),
                     answer_keyword=options.answer_keyword,
                     context_text=command.context_text,
-                    execution_settings=CodexExecutionSettings(
+                    execution_settings=AssistantExecutionSettings(
                         command_tokens=list(options.command_tokens),
                         path_hints=list(options.path_hints),
                         proxy=str(options.proxy or ""),
@@ -103,5 +103,21 @@ class AssistantApplicationService:
                 cmd=result.cmd,
                 text=result.text,
                 dt_s=float(result.dt_s),
+                provider=result.provider,
+                model=result.model,
+                error_code=result.error_code,
+                retryable=result.retryable,
+                suggestion=result.suggestion,
+                details=result.details,
+            )
+        )
+
+    def provider_statuses(self, *, options: AssistantRuntimeOptions) -> list[AssistantProviderInfo]:
+        return self._use_case.provider_statuses(
+            AssistantExecutionSettings(
+                command_tokens=list(options.command_tokens),
+                path_hints=list(options.path_hints),
+                proxy=str(options.proxy or ""),
+                timeout_s=int(options.default_timeout_s),
             )
         )

@@ -10,6 +10,7 @@ from application.codex_config import CodexProfile, CodexSettings, parse_codex_se
 from application.commands import InvokeAssistantCommand
 from application.event_types import CodexFallbackStartedEvent, CodexResultEvent, event_to_record
 from assistant.application.service import AssistantApplicationService, AssistantRuntimeOptions
+from assistant.application.provider import ASSISTANT_PROVIDER_CODEX
 from assistant.domain.aggregate import AssistantJobAggregate
 from settings.application.config_repository import ConfigRepository
 
@@ -54,13 +55,20 @@ class AssistantController:
 
     def snapshot(self) -> Dict[str, Any]:
         settings = self._settings()
+        selected = self._selected_profile(settings) if settings.profiles else None
+        providers = self._provider_records(settings)
+        selected_provider = _provider_for_profile(providers, selected) if selected is not None else None
         with self._lock:
             return {
                 "enabled": bool(settings.enabled),
+                "providerAvailable": bool(selected_provider.get("available", False)) if selected_provider else False,
+                "providerMessage": str(selected_provider.get("message", "")) if selected_provider else "",
+                "providerErrorCode": str(selected_provider.get("errorCode", "")) if selected_provider else "",
                 "busy": bool(self._job_state.is_busy),
                 "fallback": bool(self._job_state.is_fallback),
-                "selectedProfileId": self._selected_profile(settings).id if settings.profiles else "",
+                "selectedProfileId": selected.id if selected is not None else "",
                 "profiles": [_profile_record(profile) for profile in settings.profiles],
+                "providers": providers,
                 "lastResponse": dict(self._last_response),
                 "lastError": self._last_error,
                 "lastRequest": dict(self._last_request),
@@ -113,20 +121,22 @@ class AssistantController:
         try:
             self.assistant_service.execute(
                 command,
-                options=AssistantRuntimeOptions(
-                    project_root=Path(self.project_root),
-                    default_max_log_chars=int(settings.max_log_chars),
-                    answer_keyword=str(settings.answer_keyword or "ANSWER"),
-                    command_tokens=list(settings.command_tokens),
-                    path_hints=list(settings.path_hints),
-                    proxy=str(settings.proxy or ""),
-                    default_timeout_s=int(settings.timeout_s),
-                ),
+                options=self._runtime_options(settings),
                 publish_event=self._publish_service_event,
             )
         except Exception as exc:
             text = f"{type(exc).__name__}: {exc}"
-            event = CodexResultEvent(ok=False, profile=command.profile.label, cmd=command.request_text, text=text, dt_s=0.0)
+            event = CodexResultEvent(
+                ok=False,
+                profile=command.profile.label,
+                cmd=command.request_text,
+                text=text,
+                dt_s=0.0,
+                provider=getattr(command.profile, "provider_id", ASSISTANT_PROVIDER_CODEX),
+                model=getattr(command.profile, "model", ""),
+                error_code="unknown_error",
+                retryable=True,
+            )
             self._publish_service_event(event)
 
     def _publish_service_event(self, event: object) -> None:
@@ -146,6 +156,14 @@ class AssistantController:
                     "cmd": str(event.cmd),
                     "text": str(event.text),
                     "dtS": float(event.dt_s),
+                    "provider": str(getattr(event, "provider", ASSISTANT_PROVIDER_CODEX)),
+                    "model": str(getattr(event, "model", "")),
+                    "error": {
+                        "code": str(getattr(event, "error_code", "")),
+                        "retryable": bool(getattr(event, "retryable", False)),
+                        "suggestion": str(getattr(event, "suggestion", "")),
+                        "details": str(getattr(event, "details", "")),
+                    } if not event.ok else {},
                     "ts": float(event.ts),
                 }
                 if not event.ok:
@@ -164,6 +182,48 @@ class AssistantController:
             config = {}
         codex = config.get("codex", {}) if isinstance(config, dict) else {}
         return parse_codex_settings(codex)
+
+    def _runtime_options(self, settings: CodexSettings) -> AssistantRuntimeOptions:
+        return AssistantRuntimeOptions(
+            project_root=Path(self.project_root),
+            default_max_log_chars=int(settings.max_log_chars),
+            answer_keyword=str(settings.answer_keyword or "ANSWER"),
+            command_tokens=list(settings.command_tokens),
+            path_hints=list(settings.path_hints),
+            proxy=str(settings.proxy or ""),
+            default_timeout_s=int(settings.timeout_s),
+        )
+
+    def _provider_records(self, settings: CodexSettings) -> list[Dict[str, Any]]:
+        status_fn = getattr(self.assistant_service, "provider_statuses", None)
+        if callable(status_fn):
+            try:
+                return [status.as_dict() for status in status_fn(options=self._runtime_options(settings))]
+            except Exception as exc:
+                return [
+                    {
+                        "id": ASSISTANT_PROVIDER_CODEX,
+                        "label": "Codex CLI",
+                        "available": False,
+                        "message": f"{type(exc).__name__}: {exc}",
+                        "errorCode": "provider_status_error",
+                        "retryable": True,
+                        "suggestion": "",
+                        "models": [],
+                    }
+                ]
+        return [
+            {
+                "id": ASSISTANT_PROVIDER_CODEX,
+                "label": "Codex CLI",
+                "available": True,
+                "message": "",
+                "errorCode": "",
+                "retryable": False,
+                "suggestion": "",
+                "models": [],
+            }
+        ]
 
     def _select_profile(self, settings: CodexSettings, profile_id: str) -> CodexProfile:
         if not settings.profiles:
@@ -262,8 +322,24 @@ def _profile_record(profile: CodexProfile) -> Dict[str, Any]:
     return {
         "id": profile.id,
         "label": profile.label,
+        "providerId": getattr(profile, "provider_id", ASSISTANT_PROVIDER_CODEX),
+        "provider": getattr(profile, "provider_id", ASSISTANT_PROVIDER_CODEX),
         "model": profile.model,
         "reasoningEffort": profile.reasoning_effort,
+    }
+
+
+def _provider_for_profile(providers: list[Dict[str, Any]], profile: CodexProfile | None) -> Dict[str, Any]:
+    wanted = str(getattr(profile, "provider_id", "") or ASSISTANT_PROVIDER_CODEX).strip().lower()
+    for provider in providers:
+        if str(provider.get("id", "")).strip().lower() == wanted:
+            return provider
+    return {
+        "id": wanted,
+        "label": wanted,
+        "available": False,
+        "message": f"Assistant provider '{wanted}' is not configured.",
+        "errorCode": "provider_unavailable",
     }
 
 

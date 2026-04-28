@@ -88,6 +88,28 @@ class CodexContextTests(unittest.TestCase):
 
         self.assertIn("old interview question", assistant.last_prompt)
 
+    def test_unknown_provider_returns_structured_error(self) -> None:
+        root = self._project_root("unknown_provider")
+        assistant, request = self._request(root, context_text="current transcript question")
+        request = CodexRequestInput(
+            user_text=request.user_text,
+            profile=CodexProfile(id="web", label="Web", prompt="", provider_id="web"),
+            project_root=request.project_root,
+            human_log_path=request.human_log_path,
+            human_log_fh=request.human_log_fh,
+            max_log_chars=request.max_log_chars,
+            answer_keyword=request.answer_keyword,
+            execution_settings=request.execution_settings,
+            context_text=request.context_text,
+        )
+
+        result = CodexRequestUseCase(assistant, FileTranscriptContextReader()).execute(request)
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.provider, "web")
+        self.assertEqual(result.error_code, "provider_unavailable")
+        self.assertEqual(assistant.last_prompt, "")
+
 
 if __name__ == "__main__":
     unittest.main()

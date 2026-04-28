@@ -40,6 +40,22 @@ export const ASR_TIMING_FIELDS = [
 
 export const ASR_FIELDS = [...ASR_RESOURCE_FIELDS, ...ASR_TIMING_FIELDS];
 
+export const ASSISTANT_REASONING_OPTIONS = ["low", "medium", "high", "xhigh"];
+
+const DEFAULT_ASSISTANT_PROFILES = [
+  {
+    id: "default",
+    label: "Default",
+    provider: "codex",
+    prompt: "Support a realtime interview. Give short, practical, accurate responses from the session log.",
+    model: "",
+    reasoning_effort: "low",
+    codex_profile: "",
+    answer_prompt: "Command ANSWER: provide a quick candidate response for the latest question.",
+    extra_args: []
+  }
+];
+
 export function makeSettingsDraft(config) {
   const ui = objectSection(config?.ui);
   const asr = objectSection(config?.asr);
@@ -59,6 +75,9 @@ export function makeSettingsDraft(config) {
     model: String(ui.model || "medium"),
     profile: String(ui.profile || "Balanced"),
     outputFile: String(ui.output_file || "capture_mix.wav"),
+    assistantEnabled: boolWithDefault(codex.enabled, false),
+    assistantSelectedProfileId: String(codex.selected_profile || ""),
+    assistantProfiles: normalizeAssistantProfiles(codex.profiles),
     modelsDirectory: String(models.cache_dir || ""),
     modelsUseProxy: boolWithDefault(models.use_proxy, false),
     device: String(asr.device || "cuda"),
@@ -112,6 +131,9 @@ export function applySettingsToConfig(config, draft) {
     },
     codex: {
       ...objectSection(current.codex),
+      enabled: Boolean(draft.assistantEnabled),
+      selected_profile: selectedAssistantProfileId(draft),
+      profiles: normalizeAssistantProfiles(draft.assistantProfiles),
       proxy: buildProxyUrl(draft)
     }
   };
@@ -154,6 +176,50 @@ export function languageLabel(language) {
 
 function objectSection(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+export function normalizeAssistantProfiles(value) {
+  const rawProfiles = Array.isArray(value) ? value : DEFAULT_ASSISTANT_PROFILES;
+  const profiles = rawProfiles
+    .map((profile, index) => {
+      const item = objectSection(profile);
+      const id = String(item.id || item.label || `profile_${index + 1}`).trim() || `profile_${index + 1}`;
+      const label = String(item.label || id).trim() || id;
+      return {
+        id,
+        label,
+        provider: normalizeAssistantProvider(item.provider || item.provider_id || item.providerId),
+        prompt: String(item.prompt || ""),
+        model: String(item.model || ""),
+        reasoning_effort: normalizeReasoningEffort(item.reasoning_effort || item.reasoningEffort),
+        codex_profile: String(item.codex_profile || item.codexProfile || ""),
+        answer_prompt: String(item.answer_prompt || item.answerPrompt || ""),
+        extra_args: Array.isArray(item.extra_args || item.extraArgs)
+          ? (item.extra_args || item.extraArgs).map((arg) => String(arg)).filter(Boolean)
+          : []
+      };
+    })
+    .filter((profile) => profile.id);
+  return profiles.length ? profiles : DEFAULT_ASSISTANT_PROFILES.map((profile) => ({ ...profile }));
+}
+
+function selectedAssistantProfileId(draft) {
+  const profiles = normalizeAssistantProfiles(draft.assistantProfiles);
+  const wanted = String(draft.assistantSelectedProfileId || "").trim();
+  if (profiles.some((profile) => profile.id === wanted)) {
+    return wanted;
+  }
+  return profiles[0]?.id || "";
+}
+
+function normalizeAssistantProvider(value) {
+  const provider = String(value || "codex").trim().toLowerCase();
+  return provider || "codex";
+}
+
+function normalizeReasoningEffort(value) {
+  const effort = String(value || "").trim().toLowerCase();
+  return ASSISTANT_REASONING_OPTIONS.includes(effort) ? effort : "";
 }
 
 function boolWithDefault(value, fallback) {

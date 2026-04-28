@@ -637,7 +637,17 @@ class ElectronBackend:
 
     def _assistant_snapshot(self) -> Dict[str, Any]:
         if self.assistant_controller is None:
-            return {"enabled": False, "busy": False, "profiles": [], "lastResponse": {}, "lastError": ""}
+            return {
+                "enabled": False,
+                "providerAvailable": False,
+                "providerMessage": "",
+                "providerErrorCode": "",
+                "busy": False,
+                "profiles": [],
+                "providers": [],
+                "lastResponse": {},
+                "lastError": "",
+            }
         return self.assistant_controller.snapshot()
 
     def _require_session_controller(self) -> HeadlessSessionController:
