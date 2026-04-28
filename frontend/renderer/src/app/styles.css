@@ -921,6 +921,8 @@ textarea:disabled {
 }
 
 .inputs-column .column-body {
+  min-width: 0;
+  overflow-x: hidden;
   padding: 16px 12px;
 }
 
@@ -936,6 +938,7 @@ textarea:disabled {
 }
 
 .assistant-column {
+  container: assistant-column / inline-size;
   background: var(--panel-bg);
 }
 
@@ -1055,6 +1058,7 @@ textarea:disabled {
 
 .source-stack {
   display: grid;
+  min-width: 0;
   gap: 12px;
   margin-bottom: 12px;
 }
@@ -1067,7 +1071,11 @@ textarea:disabled {
 }
 
 .source-card {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   min-height: 108px;
+  overflow: hidden;
   padding: 12px;
   background: var(--panel-bg-soft);
 }
@@ -1082,10 +1090,13 @@ textarea:disabled {
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 12px;
+  min-width: 0;
 }
 
 .source-title {
+  flex: 1 1 auto;
   min-width: 0;
+  max-width: 100%;
   gap: 9px;
 }
 
@@ -1095,13 +1106,46 @@ textarea:disabled {
 }
 
 .source-title strong {
+  display: block;
+  flex: 1 1 auto;
   min-width: 0;
+  max-width: 100%;
   color: var(--text);
   font-size: 14px;
   font-weight: 650;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.source-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.source-remove {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-bg-strong);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.source-remove:hover:not(:disabled) {
+  border-color: var(--danger-soft);
+  color: var(--danger-soft);
+}
+
+.source-remove:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .switch-button {
@@ -1158,7 +1202,10 @@ textarea:disabled {
 
 .select-shell {
   position: relative;
+  width: 100%;
   min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .select-shell select,
@@ -1167,6 +1214,7 @@ textarea:disabled {
 .assistant-input textarea {
   width: 100%;
   min-width: 0;
+  max-width: 100%;
   border: 1px solid var(--border-strong);
   border-radius: 4px;
   background: var(--app-bg);
@@ -1186,7 +1234,34 @@ textarea:disabled {
   appearance: none;
 }
 
+.select-shell.has-display-label select {
+  color: transparent;
+}
+
+.select-shell.has-display-label select option {
+  color: var(--control-text);
+  background: var(--app-bg);
+}
+
+.select-shell-label {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 10px;
+  right: 32px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.25;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  transform: translateY(-50%);
+  white-space: nowrap;
+}
+
 .select-shell svg {
+  z-index: 2;
   position: absolute;
   top: 50%;
   right: 10px;
@@ -1198,6 +1273,23 @@ textarea:disabled {
 .source-card .select-shell select {
   height: 29px;
   color: var(--text);
+}
+
+.source-static-value {
+  width: 100%;
+  min-width: 0;
+  height: 29px;
+  display: block;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--app-bg);
+  color: var(--text);
+  padding: 6px 10px 0;
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .source-card .select-shell select,
@@ -1218,7 +1310,9 @@ textarea:disabled {
 
 .source-dropdown {
   position: relative;
+  width: 100%;
   min-width: 0;
+  max-width: 100%;
 }
 
 .source-dropdown-button {
@@ -1798,6 +1892,27 @@ textarea:disabled {
 .action-button svg {
   flex: 0 0 auto;
   color: var(--control-text);
+}
+
+.action-button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@container assistant-column (max-width: 260px) {
+  .quick-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .action-button {
+    padding: 0;
+  }
+
+  .action-button span {
+    display: none;
+  }
 }
 
 .assistant-response {

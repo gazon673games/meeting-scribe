@@ -95,6 +95,7 @@ export function AudioInputs({
             devices={[]}
             disabled={disabled || sourceSelectionLocked}
             icon={<Activity size={16} />}
+            removable
             source={source}
             title={source.label || source.name}
             onAdd={onAdd}

@@ -53,7 +53,7 @@ export function AddDevicePicker({ groups, disabled, onAdd, onOpen }) {
         <span>Add Source</span>
       </summary>
       <div className="add-source-picker">
-        <SelectShell iconSize={14}>
+        <SelectShell displayLabel={selectedLabel} iconSize={14}>
           <select
             disabled={disabled}
             title={selectedLabel}
