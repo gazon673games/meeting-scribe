@@ -140,9 +140,12 @@ def codex_command_config_value(command_tokens: List[str]) -> Any:
 
 def parse_codex_settings(raw: Any) -> CodexSettings:
     codex = raw if isinstance(raw, dict) else {}
+    proxy = codex.get("proxy", DEFAULT_CODEX_PROXY)
+    if proxy is None:
+        proxy = DEFAULT_CODEX_PROXY
     return CodexSettings(
         enabled=bool(codex.get("enabled", False)),
-        proxy=str(codex.get("proxy", DEFAULT_CODEX_PROXY) or DEFAULT_CODEX_PROXY).strip(),
+        proxy=str(proxy).strip(),
         answer_keyword=str(codex.get("answer_keyword", "ANSWER") or "ANSWER").strip() or "ANSWER",
         timeout_s=_safe_int(codex.get("timeout_s", 90), default=90, lo=10, hi=1200),
         max_log_chars=_safe_int(codex.get("max_log_chars", 24000), default=24000, lo=2000, hi=200000),

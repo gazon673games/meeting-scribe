@@ -43,6 +43,8 @@ export const ASR_FIELDS = [...ASR_RESOURCE_FIELDS, ...ASR_TIMING_FIELDS];
 export function makeSettingsDraft(config) {
   const ui = objectSection(config?.ui);
   const asr = objectSection(config?.asr);
+  const codex = objectSection(config?.codex);
+  const proxy = parseProxy(codex.proxy);
   return {
     wavEnabled: boolWithDefault(ui.wav_enabled, false),
     offlineOnStop: false,
@@ -58,6 +60,12 @@ export function makeSettingsDraft(config) {
     computeType: String(asr.compute_type || "float16"),
     overloadStrategy: String(asr.overload_strategy || "drop_old"),
     perProcessAudio: boolWithDefault(ui.per_process_audio, false),
+    assistantProxyEnabled: proxy.enabled,
+    assistantProxyScheme: proxy.scheme,
+    assistantProxyHost: proxy.host,
+    assistantProxyPort: proxy.port,
+    assistantProxyUsername: proxy.username,
+    assistantProxyPassword: proxy.password,
     asr: Object.fromEntries(ASR_FIELDS.map((field) => [field.key, asr[field.key] ?? field.defaultValue]))
   };
 }
@@ -90,6 +98,10 @@ export function applySettingsToConfig(config, draft) {
       compute_type: String(draft.computeType || "float16"),
       overload_strategy: String(draft.overloadStrategy || "drop_old"),
       ...Object.fromEntries(ASR_FIELDS.map((field) => [field.key, normalizeNumber(draft.asr[field.key], field)]))
+    },
+    codex: {
+      ...objectSection(current.codex),
+      proxy: buildProxyUrl(draft)
     }
   };
 }
@@ -139,6 +151,63 @@ function boolWithDefault(value, fallback) {
 
 function normalizeTheme(value) {
   return String(value || "").trim().toLowerCase() === "light" ? "light" : "dark";
+}
+
+function parseProxy(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return emptyProxyDraft();
+  }
+  try {
+    const url = raw.includes("://") ? new URL(raw) : new URL(`http://${raw}`);
+    return {
+      enabled: true,
+      scheme: normalizeProxyScheme(url.protocol.replace(":", "")),
+      host: url.hostname || "127.0.0.1",
+      port: url.port || "",
+      username: decodeUrlPart(url.username),
+      password: decodeUrlPart(url.password)
+    };
+  } catch {
+    return { ...emptyProxyDraft(), enabled: true, host: raw.replace(/^(https?|socks5):\/\//, "") };
+  }
+}
+
+function buildProxyUrl(draft) {
+  if (!draft.assistantProxyEnabled) {
+    return "";
+  }
+  const scheme = normalizeProxyScheme(draft.assistantProxyScheme);
+  const host = String(draft.assistantProxyHost || "127.0.0.1").trim() || "127.0.0.1";
+  const port = String(draft.assistantProxyPort || "").trim();
+  const username = String(draft.assistantProxyUsername || "").trim();
+  const password = String(draft.assistantProxyPassword || "");
+  const auth = username ? `${encodeURIComponent(username)}${password ? `:${encodeURIComponent(password)}` : ""}@` : "";
+  return port ? `${scheme}://${auth}${host}:${port}` : `${scheme}://${auth}${host}`;
+}
+
+function emptyProxyDraft() {
+  return {
+    enabled: false,
+    scheme: "http",
+    host: "127.0.0.1",
+    port: "10808",
+    username: "",
+    password: ""
+  };
+}
+
+function normalizeProxyScheme(value) {
+  const scheme = String(value || "http").trim().toLowerCase();
+  return ["http", "https", "socks5"].includes(scheme) ? scheme : "http";
+}
+
+function decodeUrlPart(value) {
+  try {
+    return decodeURIComponent(String(value || ""));
+  } catch {
+    return String(value || "");
+  }
 }
 
 function normalizeNumber(value, field) {

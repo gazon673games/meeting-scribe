@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from application.codex_config import CodexProfile
+from application.codex_config import DEFAULT_CODEX_PROXY, CodexProfile, parse_codex_settings
 from application.commands import InvokeAssistantCommand, StartSessionCommand, StopSessionCommand, SwitchProfileCommand
 
 
@@ -43,6 +43,10 @@ class CommandObjectTests(unittest.TestCase):
         self.assertEqual(command.context_source, "transcript")
         self.assertEqual(command.context_text, "current words")
         self.assertEqual(command.fallback_max_log_chars, 2000)
+
+    def test_codex_proxy_can_be_disabled_explicitly(self) -> None:
+        self.assertEqual(parse_codex_settings({}).proxy, DEFAULT_CODEX_PROXY)
+        self.assertEqual(parse_codex_settings({"proxy": ""}).proxy, "")
 
 
 if __name__ == "__main__":
