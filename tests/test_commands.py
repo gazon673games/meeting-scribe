@@ -58,6 +58,9 @@ class CommandObjectTests(unittest.TestCase):
                         "provider": "codex",
                         "model": "gpt-5.3-codex",
                         "reasoning_effort": "high",
+                        "base_url": "http://127.0.0.1:11434",
+                        "temperature": 0.4,
+                        "max_tokens": 256,
                     }
                 ]
             }
@@ -66,6 +69,9 @@ class CommandObjectTests(unittest.TestCase):
         self.assertEqual(settings.profiles[0].provider_id, "codex")
         self.assertEqual(settings.profiles[0].model, "gpt-5.3-codex")
         self.assertEqual(settings.profiles[0].reasoning_effort, "high")
+        self.assertEqual(settings.profiles[0].base_url, "http://127.0.0.1:11434")
+        self.assertEqual(settings.profiles[0].temperature, 0.4)
+        self.assertEqual(settings.profiles[0].max_tokens, 256)
 
 
 if __name__ == "__main__":

@@ -202,16 +202,17 @@ export function useMeetingScribeApp() {
     [refresh]
   );
 
-  const pingAssistantProvider = React.useCallback(async (providerId = "codex") => {
+  const pingAssistantProvider = React.useCallback(async (providerId = "codex", profileId = "") => {
     setError("");
-    setAssistantPing({ busy: true, providerId });
+    setAssistantPing({ busy: true, providerId, profileId });
     try {
-      const result = await meetingScribeClient.request("ping_assistant_provider", { providerId });
-      setAssistantPing({ busy: false, providerId, ...result, ts: Date.now() });
+      const result = await meetingScribeClient.request("ping_assistant_provider", { providerId, profileId });
+      setAssistantPing({ busy: false, providerId, profileId, ...result, ts: Date.now() });
     } catch (requestError) {
       setAssistantPing({
         busy: false,
         providerId,
+        profileId,
         ok: false,
         message: `${requestError.name || "Error"}: ${requestError.message || requestError}`,
         errorCode: "ping_failed",

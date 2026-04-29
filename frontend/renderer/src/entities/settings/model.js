@@ -43,6 +43,11 @@ export const ASR_TIMING_FIELDS = [
 export const ASR_FIELDS = [...ASR_RESOURCE_FIELDS, ...ASR_TIMING_FIELDS];
 
 export const ASSISTANT_REASONING_OPTIONS = ["low", "medium", "high", "xhigh"];
+export const ASSISTANT_PROVIDER_OPTIONS = [
+  { id: "codex", label: "Codex CLI", defaultBaseUrl: "" },
+  { id: "ollama", label: "Ollama", defaultBaseUrl: "http://127.0.0.1:11434" },
+  { id: "openai_local", label: "Local OpenAI", defaultBaseUrl: "http://127.0.0.1:1234/v1" }
+];
 export const DIARIZATION_BACKENDS = ["online", "sherpa_onnx", "nemo", "pyannote"];
 export const DIARIZATION_PROVIDERS = ["cpu", "cuda"];
 
@@ -55,6 +60,10 @@ const DEFAULT_ASSISTANT_PROFILES = [
     model: "",
     reasoning_effort: "low",
     codex_profile: "",
+    base_url: "",
+    api_key: "",
+    temperature: "",
+    max_tokens: 0,
     answer_prompt: "Command ANSWER: provide a quick candidate response for the latest question.",
     extra_args: []
   }
@@ -211,6 +220,10 @@ export function normalizeAssistantProfiles(value) {
         model: String(item.model || ""),
         reasoning_effort: normalizeReasoningEffort(item.reasoning_effort || item.reasoningEffort),
         codex_profile: String(item.codex_profile || item.codexProfile || ""),
+        base_url: String(item.base_url || item.baseUrl || item.endpoint || ""),
+        api_key: String(item.api_key || item.apiKey || ""),
+        temperature: normalizeOptionalNumber(item.temperature, 0, 2),
+        max_tokens: normalizeInteger(item.max_tokens ?? item.maxTokens, 0, 0, 200000),
         answer_prompt: String(item.answer_prompt || item.answerPrompt || ""),
         extra_args: Array.isArray(item.extra_args || item.extraArgs)
           ? (item.extra_args || item.extraArgs).map((arg) => String(arg)).filter(Boolean)
@@ -327,4 +340,16 @@ function normalizeInteger(value, fallback, min, max) {
   const parsed = Number(String(value ?? fallback).replace(",", "."));
   const next = Number.isFinite(parsed) ? Math.round(parsed) : fallback;
   return Math.max(Number(min), Math.min(Number(max), next));
+}
+
+function normalizeOptionalNumber(value, min, max) {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return "";
+  }
+  const parsed = Number(raw.replace(",", "."));
+  if (!Number.isFinite(parsed)) {
+    return "";
+  }
+  return Math.max(Number(min), Math.min(Number(max), parsed));
 }

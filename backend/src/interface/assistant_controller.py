@@ -145,6 +145,7 @@ class AssistantController:
 
     def ping_provider(self, params: Dict[str, Any]) -> Dict[str, Any]:
         settings = self._settings()
+        profile = self._profile_from_params(params, settings)
         provider_id = self._provider_id_from_params(params, settings)
         ping_fn = getattr(self.assistant_service, "ping_provider", None)
         if not callable(ping_fn):
@@ -158,7 +159,7 @@ class AssistantController:
                 "suggestion": "",
                 "statusCode": 0,
             }
-        result = ping_fn(provider_id, options=self._runtime_options(settings))
+        result = ping_fn(provider_id, options=self._runtime_options(settings), profile=profile)
         return result.as_dict()
 
     def _run_worker(self, command: InvokeAssistantCommand, settings: CodexSettings) -> None:
@@ -236,16 +237,25 @@ class AssistantController:
             path_hints=list(settings.path_hints),
             proxy=str(settings.proxy or ""),
             default_timeout_s=int(settings.timeout_s),
+            profiles=list(settings.profiles),
         )
 
     def _provider_id_from_params(self, params: Dict[str, Any], settings: CodexSettings) -> str:
-        profile = self._selected_profile(settings) if settings.profiles else None
+        profile = self._profile_from_params(params, settings)
         return str(
             params.get("providerId")
             or params.get("provider_id")
             or getattr(profile, "provider_id", "")
             or ASSISTANT_PROVIDER_CODEX
         )
+
+    def _profile_from_params(self, params: Dict[str, Any], settings: CodexSettings) -> CodexProfile | None:
+        if not settings.profiles:
+            return None
+        profile_id = str(params.get("profileId", params.get("profile_id", "")) or "").strip()
+        if profile_id:
+            return self._select_profile(settings, profile_id)
+        return self._selected_profile(settings)
 
     def _provider_records(self, settings: CodexSettings) -> list[Dict[str, Any]]:
         status_fn = getattr(self.assistant_service, "provider_statuses", None)
@@ -372,13 +382,16 @@ class AssistantController:
 
 
 def _profile_record(profile: CodexProfile) -> Dict[str, Any]:
+    provider_id = getattr(profile, "provider_id", ASSISTANT_PROVIDER_CODEX)
     return {
         "id": profile.id,
         "label": profile.label,
-        "providerId": getattr(profile, "provider_id", ASSISTANT_PROVIDER_CODEX),
-        "provider": getattr(profile, "provider_id", ASSISTANT_PROVIDER_CODEX),
+        "providerId": provider_id,
+        "provider": provider_id,
         "model": profile.model,
         "reasoningEffort": profile.reasoning_effort,
+        "baseUrl": getattr(profile, "base_url", ""),
+        "offline": str(provider_id).lower() != ASSISTANT_PROVIDER_CODEX,
     }
 
 

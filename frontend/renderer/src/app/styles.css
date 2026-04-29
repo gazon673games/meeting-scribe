@@ -805,6 +805,12 @@ textarea:disabled {
   width: max-content;
 }
 
+.assistant-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .assistant-profile-ping {
   display: flex;
   align-items: center;

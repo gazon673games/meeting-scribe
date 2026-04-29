@@ -68,7 +68,7 @@ export function AssistantColumn({
                   className="assistant-ping-btn"
                   disabled={disabled || assistantPing?.busy}
                   type="button"
-                  onClick={() => onPing?.(selectedProviderId)}
+                  onClick={() => onPing?.(selectedProviderId, profileId)}
                 >
                   <Radio size={13} />
                   Ping
@@ -96,7 +96,7 @@ export function AssistantColumn({
 
 function PingStatus({ ping }) {
   if (!ping || (!ping.busy && ping.ts == null)) return null;
-  if (ping.busy) return <span className="ping-status ping-busy">pinging…</span>;
+  if (ping.busy) return <span className="ping-status ping-busy">pinging...</span>;
   const isAuthError = /auth|unauthorized|not_logged|login/i.test(ping.errorCode || "");
   if (ping.ok) return <span className="ping-status ping-ok">ok</span>;
   if (isAuthError) return <span className="ping-status ping-err">not authorized</span>;
