@@ -8,15 +8,26 @@ from application.event_types import event_from_record, event_to_record
 
 PUBLIC_EVENT_TYPES = {
     "utterance",
+    "transcript_speaker_update",
     "asr_overload",
     "segment_dropped",
     "segment_skipped_overload",
+    "segment",
+    "segment_ready",
     "asr_metrics",
     "asr_init_start",
     "asr_started",
     "asr_init_ok",
+    "asr_segment_processing",
+    "asr_segment_done",
     "error",
     "asr_stopped",
+    "diar_init_ok",
+    "diar_sidecar_started",
+    "diar_debug",
+    "diar_segment_processing",
+    "diar_segment_done",
+    "diar_segment_dropped",
 }
 
 

@@ -12,6 +12,8 @@ from assistant.application.provider import (
     AssistantExecutionSettings,
     AssistantProviderError,
     AssistantProviderInfo,
+    AssistantProviderLoginResult,
+    AssistantProviderPingResult,
     AssistantProviderPort,
     AssistantProviderRequest,
     AssistantProviderResult,
@@ -121,3 +123,80 @@ class AssistantRequestUseCase:
                 )
             )
         return statuses
+
+    def start_provider_login(
+        self,
+        provider_id: str,
+        settings: AssistantExecutionSettings,
+        *,
+        device_auth: bool = False,
+    ) -> AssistantProviderLoginResult:
+        normalized = normalize_provider_id(provider_id)
+        provider = self._providers.get(normalized)
+        if provider is None:
+            return AssistantProviderLoginResult(
+                id=normalized,
+                label=normalized,
+                started=False,
+                error_code="provider_unavailable",
+                message=f"Assistant provider '{normalized}' is not configured.",
+                suggestion="Choose an available assistant profile or configure this provider in settings.",
+            )
+
+        login_fn = getattr(provider, "start_login", None)
+        if not callable(login_fn):
+            return AssistantProviderLoginResult(
+                id=normalized,
+                label=str(getattr(provider, "provider_label", normalized)),
+                started=False,
+                error_code="login_not_supported",
+                message=f"Assistant provider '{normalized}' does not support interactive login.",
+            )
+
+        try:
+            return login_fn(settings, device_auth=bool(device_auth))
+        except Exception as exc:
+            return AssistantProviderLoginResult(
+                id=normalized,
+                label=str(getattr(provider, "provider_label", normalized)),
+                started=False,
+                error_code="login_start_failed",
+                message=f"{type(exc).__name__}: {exc}",
+                suggestion="Run codex login manually in a terminal if the login window did not open.",
+            )
+
+    def ping_provider(self, provider_id: str, settings: AssistantExecutionSettings) -> AssistantProviderPingResult:
+        normalized = normalize_provider_id(provider_id)
+        provider = self._providers.get(normalized)
+        if provider is None:
+            return AssistantProviderPingResult(
+                id=normalized,
+                label=normalized,
+                ok=False,
+                error_code="provider_unavailable",
+                message=f"Assistant provider '{normalized}' is not configured.",
+                suggestion="Choose an available assistant profile or configure this provider in settings.",
+            )
+
+        ping_fn = getattr(provider, "ping", None)
+        if not callable(ping_fn):
+            return AssistantProviderPingResult(
+                id=normalized,
+                label=str(getattr(provider, "provider_label", normalized)),
+                ok=False,
+                error_code="ping_not_supported",
+                message=f"Assistant provider '{normalized}' does not support connectivity ping.",
+            )
+
+        try:
+            return ping_fn(settings)
+        except Exception as exc:
+            return AssistantProviderPingResult(
+                id=normalized,
+                label=str(getattr(provider, "provider_label", normalized)),
+                ok=False,
+                error_code="ping_failed",
+                message=f"{type(exc).__name__}: {exc}",
+                retryable=True,
+                suggestion="Check internet access, DNS, firewall, or proxy settings.",
+            )

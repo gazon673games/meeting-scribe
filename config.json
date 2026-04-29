@@ -32,7 +32,14 @@
     "overload_strategy": "drop_old",
     "device": "cuda",
     "cpu_threads": 0,
-    "num_workers": 2
+    "num_workers": 2,
+    "diarization_enabled": false,
+    "diar_backend": "sherpa_onnx",
+    "diarization_sidecar_enabled": true,
+    "diarization_queue_size": 50,
+    "diar_sherpa_embedding_model_path": "D:\\work\\own\\voice2textTest\\models\\diarization\\3dspeaker_speech_eres2net_base_200k_sv_zh-cn_16k-common.onnx",
+    "diar_sherpa_provider": "cpu",
+    "diar_sherpa_num_threads": 1
   },
   "codex": {
     "enabled": true,
@@ -49,6 +56,7 @@
       {
         "id": "interview_fast",
         "label": "Interview Fast",
+        "provider": "codex",
         "prompt": "Give concise, practical interview support based on session context.",
         "model": "gpt-5.3-codex",
         "reasoning_effort": "low",
@@ -59,6 +67,7 @@
       {
         "id": "interview_deep",
         "label": "Interview Deep",
+        "provider": "codex",
         "prompt": "Give a structured answer with trade-offs and implementation details based on session context.",
         "model": "gpt-5.1-codex-max",
         "reasoning_effort": "high",

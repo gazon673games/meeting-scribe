@@ -1,4 +1,5 @@
 import { DIARIZATION_BACKENDS, DIARIZATION_PROVIDERS, FALLBACK_OPTIONS, uniqueOptions } from "../../entities/settings/model";
+import { CollapsibleSection } from "../../shared/ui/CollapsibleSection";
 import { Field } from "../../shared/ui/Field";
 import { FeatureToggle } from "../../shared/ui/FeatureToggle";
 
@@ -20,10 +21,7 @@ export function DiarizationSettings({ draft, locked, options, onChange }) {
   const isSherpa = draft.diarizationBackend === "sherpa_onnx";
 
   return (
-    <section className="settings-section">
-      <div className="settings-section-head">
-        <h3>Speaker ID</h3>
-      </div>
+    <CollapsibleSection title="Speaker ID" defaultOpen={false}>
       <div className="feature-grid settings-feature-grid">
         <FeatureToggle
           checked={enabled}
@@ -100,6 +98,6 @@ export function DiarizationSettings({ draft, locked, options, onChange }) {
           </>
         ) : null}
       </div>
-    </section>
+    </CollapsibleSection>
   );
 }

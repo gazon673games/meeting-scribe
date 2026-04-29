@@ -3,8 +3,10 @@ const preloadApi = globalThis.window?.meetingScribe;
 export const meetingScribeClient = preloadApi
   ? {
       ...preloadApi,
+      recentBackendEvents: preloadApi.recentBackendEvents || (async () => []),
       reloadApp: preloadApi.reloadApp || (async () => ({ reloaded: false })),
       resourceUsage: () => electronResourceUsageWithFallback(preloadApi),
+      showDebugConsole: preloadApi.showDebugConsole || (async () => ({ shown: false })),
       setContentProtection: preloadApi.setContentProtection || (async () => ({ enabled: false }))
     }
   : {
@@ -13,6 +15,8 @@ export const meetingScribeClient = preloadApi
       return { reloaded: true };
     },
     resourceUsage: async () => emptyResourceUsage("Electron preload unavailable"),
+    recentBackendEvents: async () => [],
+    showDebugConsole: async () => ({ shown: false }),
     status: async () => ({ ready: false, running: false, lastError: "Electron preload unavailable" }),
     setContentProtection: async () => ({ enabled: false }),
     request: async () => {

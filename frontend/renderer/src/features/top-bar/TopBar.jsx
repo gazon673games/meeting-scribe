@@ -1,9 +1,9 @@
-import { Activity, Play, RefreshCw, Square } from "lucide-react";
+import { Activity, Moon, Play, RefreshCw, Square, SquareTerminal, Sun } from "lucide-react";
 
 import { SettingsDialogButton } from "../settings/SettingsDialogButton";
 import { ColumnLayoutMenu } from "./ColumnLayoutMenu";
 
-export function TopBar({ canStart, canStop, loading, pipelineLayout, settingsPanel, status, asrMetrics, onRefresh, onStartStop }) {
+export function TopBar({ canStart, canStop, loading, pipelineLayout, settingsPanel, status, asrMetrics, onOpenDebugConsole, onRefresh, onStartStop }) {
   const running = status === "recording";
   const disabled = running ? !canStop : !canStart;
   const latencyMs = Math.max(0, Math.round(Number(asrMetrics.avgLatencyS || 0) * 1000));
@@ -14,6 +14,11 @@ export function TopBar({ canStart, canStop, loading, pipelineLayout, settingsPan
       : status === "processing"
         ? { label: "Processing", tone: "warn" }
         : { label: "Ready", tone: "idle" };
+
+  const theme = settingsPanel.draft?.theme || "dark";
+  const handleThemeToggle = () => {
+    settingsPanel.onChange?.({ theme: theme === "dark" ? "light" : "dark" });
+  };
 
   return (
     <header className="control-bar">
@@ -38,7 +43,18 @@ export function TopBar({ canStart, canStop, loading, pipelineLayout, settingsPan
           <span />
           <strong>{statusView.label}</strong>
         </div>
+        <button
+          className="icon-button"
+          title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+          type="button"
+          onClick={handleThemeToggle}
+        >
+          {theme === "dark" ? <Moon size={16} /> : <Sun size={16} />}
+        </button>
         <SettingsDialogButton {...settingsPanel} />
+        <button className="icon-button" title="Open diagnostics console" type="button" onClick={onOpenDebugConsole}>
+          <SquareTerminal size={16} />
+        </button>
         <ColumnLayoutMenu layout={pipelineLayout} />
       </div>
     </header>

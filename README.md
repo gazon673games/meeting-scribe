@@ -66,16 +66,14 @@ Release archives are built by GitHub Actions when a `v*` tag is pushed. The curr
 - Linux x64
 - macOS x64
 
-## Notes
-
-high priority r
-1. add support for different codex models
+## Notes 
 
 medium priority
 1. reaseach idea - add support for diffrent ai assistent mode that use seleium to interact with deepseek
 (to avoid api, off the top of my head it needs to use selenium and profiel with authorized deepseek acc, it might be the way that reduce delay even more that current that use fast model of codex )
-2. reseach idea - add logic for diarization (use diart or WhisperLiveKit + diarization), when we have try on feature flag we not only process asr in real time, but also try to indentify diffrent speakers in real time and
-write logs with difffrent speakers signiture
+2. fix frontend issues
+3. optimization
 
 low priority
 1. review, goal - find all places where we shoud make refactoring by ddd aprouch and clean code princilples
+2. rewirte readmi - add architecture, video

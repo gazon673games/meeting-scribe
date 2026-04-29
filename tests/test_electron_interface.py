@@ -12,6 +12,7 @@ from unittest.mock import patch
 from application.event_types import TranscriptSpeakerUpdateEvent, UtteranceEvent
 from application.codex_assistant import CodexAssistantResult
 from application.codex_config import CodexProfile
+from application.diarization_model_download import RECOMMENDED_DIARIZATION_MODELS, diarization_models_dir
 from interface.assistant_controller import AssistantController
 from interface.backend import ElectronBackend
 from interface.jsonl_bridge import JsonLineBridge
@@ -389,6 +390,46 @@ class ElectronInterfaceTests(unittest.TestCase):
             self.assertEqual(asr_factory.settings.diarization_queue_size, 12)
             self.assertEqual(asr_factory.settings.diar_sherpa_embedding_model_path, "models/speaker.onnx")
             self.assertEqual(asr_factory.settings.diar_sherpa_num_threads, 2)
+
+    def test_backend_uses_cached_sherpa_model_when_online_backend_dependency_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            spec = RECOMMENDED_DIARIZATION_MODELS[0]
+            model_dir = diarization_models_dir(root, root / "models")
+            model_dir.mkdir(parents=True)
+            model_path = model_dir / spec.file_name
+            model_path.write_bytes(b"onnx")
+            repository = JsonConfigRepository(root / "config.json")
+            repository.write(
+                {
+                    "ui": {"asr_enabled": True, "model": "medium", "lang": "en"},
+                    "asr": {
+                        "diarization_enabled": True,
+                        "diar_backend": "online",
+                        "diar_sherpa_embedding_model_path": "",
+                    },
+                    "models": {"cache_dir": str(root / "models")},
+                }
+            )
+            asr_factory = _FakeAsrRuntimeFactory()
+            controller = HeadlessSessionController(
+                project_root=root,
+                audio_runtime_factory=_FakeAudioRuntimeFactory(),
+                audio_source_factory=_FakeAudioSourceFactory(),
+                wav_recorder_factory=_FakeWavRecorderFactory(),
+                asr_runtime_factory=asr_factory,
+                transcription_startup_service=TranscriptionStartupService(),
+            )
+            backend = ElectronBackend(root, repository, _DeviceCatalog(), controller)
+
+            backend.handle("list_devices")
+            backend.handle("add_source", {"deviceId": "input:0"})
+            with patch("interface.backend._module_available", return_value=False):
+                backend.handle("start_session", {})
+            backend.handle("stop_session", {"runOfflinePass": False})
+
+            self.assertEqual(asr_factory.settings.diar_backend, "sherpa_onnx")
+            self.assertEqual(asr_factory.settings.diar_sherpa_embedding_model_path, str(model_path))
 
     def test_headless_session_applies_post_fact_speaker_update(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:

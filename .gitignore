@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 node_modules/
 .idea/
+.claude/
 
 logs/
 human_logs/

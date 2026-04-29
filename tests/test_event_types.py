@@ -136,6 +136,17 @@ class EventTypesTests(unittest.TestCase):
         self.assertEqual(event.seg_dropped_total, 2)
         self.assertEqual(event.seg_skipped_total, 1)
 
+    def test_asr_publisher_publishes_speaker_updates_and_debug_events(self) -> None:
+        q: queue.Queue[object] = queue.Queue()
+        logger = _Logger()
+        publisher = ASREventPublisher(logger=logger, event_queue=q)
+
+        publisher.log({"type": "transcript_speaker_update", "stream": "desktop", "speaker": "Remote S1", "ts": 12.0})
+        publisher.log({"type": "diar_segment_processing", "stream": "desktop", "ts": 13.0})
+
+        self.assertIsInstance(q.get_nowait(), TranscriptSpeakerUpdateEvent)
+        self.assertEqual(q.get_nowait().as_record()["type"], "diar_segment_processing")
+
     def test_explicit_ui_events_are_typed(self) -> None:
         self.assertEqual(SourceErrorEvent(source="mic", error="boom").event_type, EventType.SOURCE_ERROR)
         self.assertEqual(

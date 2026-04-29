@@ -1,4 +1,5 @@
 import { ASR_RESOURCE_FIELDS, ASR_TIMING_FIELDS } from "../../entities/settings/model";
+import { CollapsibleSection } from "../../shared/ui/CollapsibleSection";
 import { Field } from "../../shared/ui/Field";
 
 export function AdvancedAsrSettings({
@@ -13,10 +14,7 @@ export function AdvancedAsrSettings({
 }) {
   return (
     <>
-      <section className="settings-section">
-        <div className="settings-section-head">
-          <h3>ASR Runtime</h3>
-        </div>
+      <CollapsibleSection title="ASR Runtime" defaultOpen={false}>
         <div className="settings-grid">
           <Field label="Device">
             <select disabled={locked} value={draft.device} onChange={(event) => onChange({ device: event.target.value })}>
@@ -59,12 +57,9 @@ export function AdvancedAsrSettings({
             </Field>
           ))}
         </div>
-      </section>
+      </CollapsibleSection>
 
-      <section className="settings-section">
-        <div className="settings-section-head">
-          <h3>Advanced ASR</h3>
-        </div>
+      <CollapsibleSection title="Advanced ASR" defaultOpen={false}>
         <div className="settings-grid">
           <Field label="Overload">
             <select disabled={locked} value={draft.overloadStrategy} onChange={(event) => onChange({ overloadStrategy: event.target.value })}>
@@ -92,7 +87,7 @@ export function AdvancedAsrSettings({
             </Field>
           ))}
         </div>
-      </section>
+      </CollapsibleSection>
     </>
   );
 }

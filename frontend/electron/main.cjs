@@ -22,14 +22,29 @@ class PythonBackend {
     this.nextId = 1;
     this.pending = new Map();
     this.stdoutBuffer = "";
-    this.window = null;
+    this.windows = new Set();
+    this.eventBuffer = [];
     this.ready = false;
     this.lastError = "";
     this.activeDownloads = 0;
+    this.activeModelDownloads = 0;
+    this.activeSpeakerIdDownloads = 0;
   }
 
   attachWindow(window) {
-    this.window = window;
+    if (!window) {
+      return;
+    }
+    this.windows.add(window);
+    window.on("closed", () => this.detachWindow(window));
+  }
+
+  detachWindow(window) {
+    this.windows.delete(window);
+  }
+
+  recentEvents() {
+    return this.eventBuffer.map((event) => ({ ...event }));
   }
 
   start() {
@@ -62,6 +77,8 @@ class PythonBackend {
       this.ready = false;
       this.process = null;
       this.activeDownloads = 0;
+      this.activeModelDownloads = 0;
+      this.activeSpeakerIdDownloads = 0;
       const message = `Python backend exited (${code ?? "null"}, ${signal ?? "null"})`;
       for (const { reject } of this.pending.values()) {
         reject(new Error(message));
@@ -136,7 +153,12 @@ class PythonBackend {
         this.ready = true;
       }
       if (message.event.type === "model_download_updated") {
-        this.activeDownloads = toNumber(message.event.activeDownloads);
+        this.activeModelDownloads = toNumber(message.event.activeDownloads);
+        this.activeDownloads = this.activeModelDownloads + this.activeSpeakerIdDownloads;
+      }
+      if (message.event.type === "diarization_model_download_updated") {
+        this.activeSpeakerIdDownloads = toNumber(message.event.activeDownloads);
+        this.activeDownloads = this.activeModelDownloads + this.activeSpeakerIdDownloads;
       }
       this.sendEvent(message.event);
       return;
@@ -157,8 +179,17 @@ class PythonBackend {
   }
 
   sendEvent(event) {
-    if (this.window && !this.window.isDestroyed()) {
-      this.window.webContents.send("backend:event", event);
+    const record = { ts: Date.now() / 1000, ...event };
+    this.eventBuffer.push(record);
+    if (this.eventBuffer.length > 1200) {
+      this.eventBuffer.splice(0, this.eventBuffer.length - 1200);
+    }
+    for (const window of [...this.windows]) {
+      if (window.isDestroyed()) {
+        this.windows.delete(window);
+        continue;
+      }
+      window.webContents.send("backend:event", record);
     }
   }
 
@@ -194,6 +225,8 @@ class PythonBackend {
 
 const backend = new PythonBackend({ root: appRoot, backendRoot, runtimeRoot });
 let gpuUsageCache = { ts: 0, gpus: [] };
+let mainWindow = null;
+let debugWindow = null;
 
 function readSavedContentProtection() {
   const configPath = path.join(runtimeRoot, "config.json");
@@ -338,6 +371,7 @@ function createWindow() {
     }
   });
 
+  mainWindow = window;
   setWindowContentProtection(window, readSavedContentProtection());
   backend.attachWindow(window);
   backend.start();
@@ -352,24 +386,89 @@ function createWindow() {
       defaultId: 0,
       cancelId: 0,
       message: "Model download is still running",
-      detail: "Closing the app now will stop the Python backend and interrupt the Hugging Face download."
+      detail: "Closing the app now will stop the Python backend and interrupt the model download."
     });
     if (choice === 0) {
       event.preventDefault();
     }
   });
 
+  loadRenderer(window);
+  window.on("closed", () => {
+    if (mainWindow === window) {
+      mainWindow = null;
+    }
+    if (debugWindow && !debugWindow.isDestroyed()) {
+      debugWindow.destroy();
+    }
+  });
+}
+
+function showDebugConsole() {
+  if (!debugWindow || debugWindow.isDestroyed()) {
+    debugWindow = createDebugWindow();
+  }
+  if (debugWindow.isMinimized()) {
+    debugWindow.restore();
+  }
+  debugWindow.showInactive();
+  return { shown: true };
+}
+
+function createDebugWindow() {
+  const window = new BrowserWindow({
+    width: 980,
+    height: 720,
+    minWidth: 720,
+    minHeight: 520,
+    backgroundColor: "#0a0a0a",
+    title: "Meeting Scribe Diagnostics",
+    icon: windowIconPath,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  });
+
+  backend.attachWindow(window);
+  window.setAlwaysOnTop(false);
+  window.on("close", (event) => {
+    if (app.isQuitting) {
+      return;
+    }
+    event.preventDefault();
+    window.hide();
+  });
+  window.on("closed", () => {
+    if (debugWindow === window) {
+      debugWindow = null;
+    }
+  });
+  loadRenderer(window, { debugConsole: "1" });
+  return window;
+}
+
+function loadRenderer(window, query = {}) {
   const rendererUrl = process.env.ELECTRON_RENDERER_URL || "http://127.0.0.1:5173";
   if (app.isPackaged && !process.env.ELECTRON_RENDERER_URL) {
-    window.loadFile(path.join(appRoot, "build", "electron-renderer", "index.html"));
-  } else {
-    window.loadURL(rendererUrl);
+    window.loadFile(path.join(appRoot, "build", "electron-renderer", "index.html"), { query });
+    return;
   }
+  const url = new URL(rendererUrl);
+  for (const [key, value] of Object.entries(query)) {
+    url.searchParams.set(key, String(value));
+  }
+  window.loadURL(url.toString());
 }
 
 app.whenReady().then(() => {
   ipcMain.handle("backend:request", (_event, method, params) => backend.request(method, params));
   ipcMain.handle("backend:status", () => backend.status());
+  ipcMain.handle("backend:recent-events", () => backend.recentEvents());
+  ipcMain.handle("debug:show", () => showDebugConsole());
   ipcMain.handle("window:set-content-protection", (event, enabled) => {
     return setWindowContentProtection(BrowserWindow.fromWebContents(event.sender), enabled);
   });
@@ -387,6 +486,7 @@ app.whenReady().then(() => {
 });
 
 app.on("before-quit", () => {
+  app.isQuitting = true;
   backend.stop();
 });
 

@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 import { AssistantColumn } from "../features/assistant/AssistantColumn";
 import { AudioInputs } from "../features/audio-inputs/AudioInputs";
 import { ProcessingColumn } from "../features/processing/ProcessingColumn";
+import { RuntimeNoticeTray } from "../features/runtime/RuntimeNoticeTray";
 import { TopBar } from "../features/top-bar/TopBar";
 import { TranscriptColumn } from "../features/transcript/TranscriptColumn";
 import { ResizablePipeline } from "../shared/ui/pipeline/ResizablePipeline";
@@ -68,9 +69,12 @@ export function App() {
       element: (
         <AssistantColumn
           assistant={app.assistant}
+          assistantPing={app.assistantPing}
           contextReady={app.assistantContextReady}
-          disabled={!app.capabilities.assistant || !app.assistant.enabled || app.assistant.busy}
+          disabled={!app.capabilities.assistant || !app.assistant.enabled || app.assistant.busy || app.assistant.providerAvailable === false}
           profiles={app.assistantProfiles}
+          onAuthorize={app.startAssistantLogin}
+          onPing={app.pingAssistantProvider}
           onInvoke={(params) => app.runBackendAction("invoke_assistant", params)}
         />
       )
@@ -101,6 +105,7 @@ export function App() {
         status={app.status}
         asrMetrics={app.asrMetrics}
         onRefresh={app.refresh}
+        onOpenDebugConsole={app.openDebugConsole}
         onStartStop={app.startOrStop}
       />
 
@@ -119,6 +124,7 @@ export function App() {
         onReorderColumn={pipelineLayout.moveColumnTo}
         resetSignal={pipelineLayout.resetRevision}
       />
+      <RuntimeNoticeTray notices={app.runtimeNotices} onDismiss={app.dismissRuntimeNotice} />
     </main>
   );
 }

@@ -9,7 +9,12 @@ from application.assistant_use_case import AssistantRequestInput, AssistantReque
 from application.commands import InvokeAssistantCommand
 from application.event_types import CodexFallbackStartedEvent, CodexResultEvent
 from application.supervision import SupervisionReport
-from assistant.application.provider import AssistantExecutionSettings, AssistantProviderInfo
+from assistant.application.provider import (
+    AssistantExecutionSettings,
+    AssistantProviderInfo,
+    AssistantProviderLoginResult,
+    AssistantProviderPingResult,
+)
 
 
 @dataclass(frozen=True)
@@ -82,6 +87,7 @@ class AssistantApplicationService:
                         timeout_s=int(
                             attempt.timeout_s if attempt.timeout_s is not None else options.default_timeout_s
                         ),
+                        project_root=Path(options.project_root),
                     ),
                 )
             )
@@ -119,5 +125,37 @@ class AssistantApplicationService:
                 path_hints=list(options.path_hints),
                 proxy=str(options.proxy or ""),
                 timeout_s=int(options.default_timeout_s),
+                project_root=Path(options.project_root),
             )
+        )
+
+    def start_provider_login(
+        self,
+        provider_id: str,
+        *,
+        options: AssistantRuntimeOptions,
+        device_auth: bool = False,
+    ) -> AssistantProviderLoginResult:
+        return self._use_case.start_provider_login(
+            provider_id,
+            AssistantExecutionSettings(
+                command_tokens=list(options.command_tokens),
+                path_hints=list(options.path_hints),
+                proxy=str(options.proxy or ""),
+                timeout_s=int(options.default_timeout_s),
+                project_root=Path(options.project_root),
+            ),
+            device_auth=bool(device_auth),
+        )
+
+    def ping_provider(self, provider_id: str, *, options: AssistantRuntimeOptions) -> AssistantProviderPingResult:
+        return self._use_case.ping_provider(
+            provider_id,
+            AssistantExecutionSettings(
+                command_tokens=list(options.command_tokens),
+                path_hints=list(options.path_hints),
+                proxy=str(options.proxy or ""),
+                timeout_s=int(options.default_timeout_s),
+                project_root=Path(options.project_root),
+            ),
         )
