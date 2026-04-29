@@ -40,6 +40,8 @@ class ElectronBackend:
     _download_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
     _diarization_downloads: Dict[str, Any] = field(default_factory=dict, init=False, repr=False)
     _diarization_download_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
+    _llm_downloads: Dict[str, Any] = field(default_factory=dict, init=False, repr=False)
+    _llm_download_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
     _event_sink: Any = field(default=None, init=False, repr=False)
 
     protocol_version: int = 1
@@ -446,6 +448,96 @@ class ElectronBackend:
         )
         return {"deleted": True, "path": path}
 
+    def list_llm_models(self, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        from application.llm_model_download import list_llm_models
+
+        return list_llm_models(
+            project_root=self.project_root,
+            models_dir=self._llm_models_dir_from_params(params),
+            downloads=self._llm_download_snapshot(),
+        )
+
+    def download_llm_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from application.llm_model_download import download_llm_model_async, parse_llm_source
+
+        name = str(params.get("name") or "").strip()
+        if not name:
+            raise ValueError("download_llm_model requires params.name")
+        source = parse_llm_source(name)
+        key = source.filename or source.folder or source.repo_id or name
+        if self._llm_download_record(key).get("state") == "downloading":
+            return {"started": False, "message": "Already downloading"}
+        if "useProxy" in params or "use_proxy" in params:
+            use_proxy = bool(params.get("useProxy", params.get("use_proxy", False)))
+            proxy = str(params.get("proxy") or "").strip() if use_proxy else ""
+        else:
+            proxy = self._model_download_proxy()
+        self._set_llm_download_state(
+            key,
+            {
+                "state": "downloading",
+                "message": "Starting...",
+                "error": "",
+                "downloadedBytes": 0,
+                "totalBytes": 0,
+                "speedBps": 0,
+                "path": "",
+                "proxy": bool(proxy),
+            },
+        )
+
+        def on_progress(update: Any) -> None:
+            payload = update if isinstance(update, dict) else {"message": str(update)}
+            self._set_llm_download_state(
+                key,
+                {
+                    "state": "downloading",
+                    "message": str(payload.get("message") or "Downloading..."),
+                    "error": "",
+                    "downloadedBytes": _int_or_zero(payload.get("downloadedBytes")),
+                    "totalBytes": _int_or_zero(payload.get("totalBytes")),
+                    "speedBps": float(payload.get("speedBps") or 0.0),
+                    "path": str(payload.get("path") or ""),
+                    "proxy": bool(proxy),
+                },
+            )
+
+        def on_done(error: Optional[str]) -> None:
+            previous = self._llm_download_record(key)
+            self._set_llm_download_state(
+                key,
+                {
+                    "state": "error" if error else "done",
+                    "message": "" if error else "Downloaded",
+                    "error": str(error or ""),
+                    "downloadedBytes": _int_or_zero(previous.get("downloadedBytes")),
+                    "totalBytes": _int_or_zero(previous.get("totalBytes")),
+                    "speedBps": 0,
+                    "path": str(previous.get("path") or ""),
+                    "proxy": bool(proxy),
+                },
+            )
+
+        download_llm_model_async(
+            name=name,
+            project_root=self.project_root,
+            models_dir=self._llm_models_dir_from_params(params),
+            proxy=proxy,
+            on_progress=on_progress,
+            on_done=on_done,
+        )
+        label = source.filename or source.repo_id or name
+        return {"started": True, "message": f"Downloading language model {label}...", "proxy": bool(proxy)}
+
+    def delete_llm_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from application.llm_model_download import delete_llm_model
+
+        path = str(params.get("path") or "").strip()
+        if not path:
+            raise ValueError("delete_llm_model requires params.path")
+        delete_llm_model(project_root=self.project_root, path=path, models_dir=self._llm_models_dir_from_params(params))
+        return {"deleted": True, "path": path}
+
     def save_config(self, params: Dict[str, Any]) -> Dict[str, Any]:
         config = params.get("config")
         if not isinstance(config, dict):
@@ -585,6 +677,12 @@ class ElectronBackend:
             return self.download_diarization_model(params)
         if method == "delete_diarization_model":
             return self.delete_diarization_model(params)
+        if method == "list_llm_models":
+            return self.list_llm_models(params)
+        if method == "download_llm_model":
+            return self.download_llm_model(params)
+        if method == "delete_llm_model":
+            return self.delete_llm_model(params)
         if method == "list_process_sessions":
             return self.list_process_sessions()
         raise KeyError(f"Unknown backend method: {method}")
@@ -604,6 +702,10 @@ class ElectronBackend:
         with self._diarization_download_lock:
             return {str(name): dict(record) for name, record in self._diarization_downloads.items()}
 
+    def _llm_download_snapshot(self) -> Dict[str, Dict[str, Any]]:
+        with self._llm_download_lock:
+            return {str(name): dict(record) for name, record in self._llm_downloads.items()}
+
     def _download_record(self, name: str) -> Dict[str, Any]:
         from application.model_download import normalize_model_reference
 
@@ -614,6 +716,10 @@ class ElectronBackend:
     def _diarization_download_record(self, name: str) -> Dict[str, Any]:
         with self._diarization_download_lock:
             return dict(self._diarization_downloads.get(str(name)) or {})
+
+    def _llm_download_record(self, name: str) -> Dict[str, Any]:
+        with self._llm_download_lock:
+            return dict(self._llm_downloads.get(str(name)) or {})
 
     def _download_fields(self, name: str, downloads: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         from application.model_download import normalize_model_reference
@@ -649,6 +755,19 @@ class ElectronBackend:
             active_downloads = self._active_download_count(self._diarization_downloads)
         self._emit(
             "diarization_model_download_updated",
+            {
+                "model": str(name),
+                **dict(record),
+                "activeDownloads": active_downloads,
+            },
+        )
+
+    def _set_llm_download_state(self, name: str, record: Dict[str, Any]) -> None:
+        with self._llm_download_lock:
+            self._llm_downloads[str(name)] = dict(record)
+            active_downloads = self._active_download_count(self._llm_downloads)
+        self._emit(
+            "llm_model_download_updated",
             {
                 "model": str(name),
                 **dict(record),
@@ -694,6 +813,12 @@ class ElectronBackend:
         if isinstance(params, dict):
             raw = str(params.get("modelsDir", params.get("models_dir", "")) or "").strip()
         return Path(raw).expanduser().resolve() if raw else self._models_dir(config)
+
+    def _llm_models_dir_from_params(self, params: Dict[str, Any] | None = None) -> Path | None:
+        raw = ""
+        if isinstance(params, dict):
+            raw = str(params.get("modelsDir", params.get("models_dir", "")) or "").strip()
+        return Path(raw).expanduser().resolve() if raw else None
 
     def _model_is_selected_or_running(self, name: str) -> bool:
         from application.model_download import normalize_model_reference

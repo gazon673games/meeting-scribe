@@ -1,7 +1,7 @@
 import React from "react";
 import { Check, ChevronDown, ChevronUp, Download, Network, RefreshCw, Save, Settings, Trash2, X } from "lucide-react";
 
-import { FALLBACK_OPTIONS, buildProxyUrl, uniqueOptions } from "../../entities/settings/model";
+import { FALLBACK_OPTIONS, buildProxyUrl, normalizeAssistantProfiles, uniqueOptions } from "../../entities/settings/model";
 import { meetingScribeClient } from "../../shared/api/meetingScribeClient";
 import { formatBytes } from "../../shared/lib/format";
 import { CollapsibleSection } from "../../shared/ui/CollapsibleSection";
@@ -61,6 +61,17 @@ function diarDownloadLabel(model) {
   const totStr = tot > 0 ? ` / ${formatBytes(tot)}` : "";
   const spStr = sp > 0 ? ` – ${formatBytes(sp)}/s` : "";
   return `${dlStr}${totStr}${spStr}`;
+}
+
+function llmStatusLabel(model, selected, isDownloading) {
+  if (selected) return "selected";
+  if (isDownloading) return diarDownloadLabel(model);
+  if (model.downloadError) return "error";
+  return model.bytes ? formatBytes(model.bytes) : "ready";
+}
+
+function isLocalAssistantProfile(profile) {
+  return profile && profile.provider && profile.provider !== "codex";
 }
 
 // ─── metadata panel ─────────────────────────────────────────────────────────
@@ -150,6 +161,10 @@ function ModelsSection({ draft, onChange, open }) {
   const diarDir = joinDir(baseDir, draft.diarModelsSubdir);
 
   // LLM
+  const [llmModels, setLlmModels] = React.useState(null);
+  const [llmError, setLlmError] = React.useState("");
+  const [llmDownloading, setLlmDownloading] = React.useState(new Set());
+  const [llmCustomUrl, setLlmCustomUrl] = React.useState("");
   const llmDir = joinDir(baseDir, draft.llmModelsSubdir);
 
   // ── loaders ──────────────────────────────────────────────────────────────
@@ -167,11 +182,19 @@ function ModelsSection({ draft, onChange, open }) {
       .catch((e) => setDiarError(String(e?.message || e)));
   }, [diarDir]);
 
+  const loadLlmModels = React.useCallback(() => {
+    meetingScribeClient
+      .request("list_llm_models", { modelsDir: llmDir })
+      .then((r) => setLlmModels(r?.models || []))
+      .catch((e) => setLlmError(String(e?.message || e)));
+  }, [llmDir]);
+
   React.useEffect(() => {
     if (!open) return;
     loadAsrModels();
     loadDiarModels();
-  }, [open, loadAsrModels, loadDiarModels]);
+    loadLlmModels();
+  }, [open, loadAsrModels, loadDiarModels, loadLlmModels]);
 
   // polling while downloading
   React.useEffect(() => {
@@ -185,6 +208,12 @@ function ModelsSection({ draft, onChange, open }) {
     const h = window.setInterval(loadDiarModels, 1000);
     return () => window.clearInterval(h);
   }, [diarModels, loadDiarModels]);
+
+  React.useEffect(() => {
+    if (!llmModels?.some((m) => m.downloading)) return undefined;
+    const h = window.setInterval(loadLlmModels, 1000);
+    return () => window.clearInterval(h);
+  }, [llmModels, loadLlmModels]);
 
   // auto-select first ready diar model
   React.useEffect(() => {
@@ -301,16 +330,83 @@ function ModelsSection({ draft, onChange, open }) {
     });
   }, []);
 
+  const handleLlmUse = React.useCallback((model) => {
+    const alias = String(model.modelAlias || model.name || "").trim();
+    if (!alias) return;
+    const profiles = normalizeAssistantProfiles(draft.assistantProfiles);
+    const selected = profiles.find((profile) => profile.id === draft.assistantSelectedProfileId);
+    const target = isLocalAssistantProfile(selected) ? selected : profiles.find(isLocalAssistantProfile);
+    if (target) {
+      onChange({
+        assistantSelectedProfileId: target.id,
+        assistantProfiles: profiles.map((profile) => profile.id === target.id ? { ...profile, model: alias } : profile)
+      });
+      return;
+    }
+    const id = `local_${Date.now().toString(36)}`;
+    onChange({
+      assistantSelectedProfileId: id,
+      assistantProfiles: [
+        ...profiles,
+        {
+          id,
+          label: "Local OpenAI API",
+          provider: "openai_local",
+          prompt: "Give concise, practical interview support based on session context.",
+          model: alias,
+          reasoning_effort: "",
+          codex_profile: "",
+          base_url: "http://127.0.0.1:1234/v1",
+          api_key: "",
+          temperature: "",
+          max_tokens: 0,
+          answer_prompt: "Command ANSWER: provide a short candidate response, key points, and one clarification question.",
+          extra_args: [],
+          offline: true
+        }
+      ]
+    });
+  }, [draft.assistantProfiles, draft.assistantSelectedProfileId, onChange]);
+
+  const handleLlmDownload = React.useCallback(async (name) => {
+    setLlmDownloading((p) => new Set([...p, name]));
+    setLlmError("");
+    try {
+      await meetingScribeClient.request("download_llm_model", {
+        name,
+        modelsDir: llmDir,
+        useProxy: Boolean(draft.modelsUseProxy),
+        proxy: buildProxyUrl(draft, { forceEnabled: Boolean(draft.modelsUseProxy) }),
+      });
+      loadLlmModels();
+    } catch (e) {
+      setLlmError(String(e?.message || e));
+    } finally {
+      setLlmDownloading((p) => { const n = new Set(p); n.delete(name); return n; });
+    }
+  }, [draft, llmDir, loadLlmModels]);
+
+  const handleLlmDelete = React.useCallback(async (model) => {
+    setLlmError("");
+    try {
+      await meetingScribeClient.request("delete_llm_model", { path: model.path, modelsDir: llmDir });
+      loadLlmModels();
+    } catch (e) {
+      setLlmError(String(e?.message || e));
+    }
+  }, [llmDir, loadLlmModels]);
+
   if (!open) return null;
 
-  const proxyArgs = { useProxy: Boolean(draft.modelsUseProxy), proxy: buildProxyUrl(draft, { forceEnabled: Boolean(draft.modelsUseProxy) }) };
+  const assistantProfiles = normalizeAssistantProfiles(draft.assistantProfiles);
+  const selectedLlmAliases = new Set(assistantProfiles.filter(isLocalAssistantProfile).map((profile) => String(profile.model || "")));
 
   return (
     <CollapsibleSection
       title="Models"
       defaultOpen={false}
       action={
-        <button className="icon-button" title="Refresh all models" type="button" onClick={() => { loadAsrModels(); loadDiarModels(); }}>
+        <button className="icon-button" title="Refresh all models" type="button" onClick={() => { loadAsrModels(); loadDiarModels(); loadLlmModels(); }}>
           <RefreshCw size={13} />
         </button>
       }
@@ -521,12 +617,62 @@ function ModelsSection({ draft, onChange, open }) {
             <input
               spellCheck={false}
               value={draft.llmModelsSubdir || ""}
-              placeholder="e.g. llm"
+              placeholder="Default: llm"
               onChange={(e) => onChange({ llmModelsSubdir: e.target.value })}
             />
           </Field>
+          <div className="custom-model-row">
+            <Field label="Hugging Face Repo/File or URL">
+              <input
+                spellCheck={false}
+                value={llmCustomUrl}
+                placeholder="https://huggingface.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF"
+                onChange={(e) => setLlmCustomUrl(e.target.value)}
+              />
+            </Field>
+            <button
+              className="model-download-button"
+              disabled={!llmCustomUrl.trim()}
+              type="button"
+              onClick={() => { handleLlmDownload(llmCustomUrl.trim()); setLlmCustomUrl(""); }}
+            >
+              <Download size={13} />
+              Download
+            </button>
+          </div>
         </div>
-        <div className="inner-collapsible-empty">No language models configured yet</div>
+        {llmError ? <div className="models-error">{llmError}</div> : null}
+        {llmModels === null ? (
+          <div className="models-loading">Loading...</div>
+        ) : llmModels.length === 0 ? (
+          <div className="inner-collapsible-empty">No GGUF language models found</div>
+        ) : (
+          <div className="models-list">
+            {llmModels.map((model) => {
+              const alias = String(model.modelAlias || model.name || "");
+              const selected = selectedLlmAliases.has(alias);
+              const isDownloading = model.downloading || llmDownloading.has(model.name);
+              const statusLabel = llmStatusLabel(model, selected, isDownloading);
+              const statusClass = selected || model.cached ? "model-status-cached" : isDownloading ? "model-status-downloading" : model.downloadError ? "model-status-error" : "model-status-missing";
+              return (
+                <div key={model.path || model.name} className="model-row-shell">
+                  <div className="model-row">
+                    <span className="model-row-name" title={model.path || model.name}>{model.label || model.name}</span>
+                    <span className={`model-row-status ${statusClass}`} title={model.downloadError || model.downloadMessage || statusLabel}>
+                      {statusLabel}
+                    </span>
+                    <button className="model-row-btn" disabled={selected || isDownloading || !alias} title={selected ? "Already selected" : `Use ${alias}`} type="button" onClick={() => handleLlmUse(model)}>
+                      <Check size={12} />
+                    </button>
+                    <button className="model-row-btn danger" disabled={selected || isDownloading || !model.path} title={selected ? "Selected model cannot be deleted" : `Delete ${model.label || model.name}`} type="button" onClick={() => handleLlmDelete(model)}>
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </InnerCollapsible>
     </CollapsibleSection>
   );

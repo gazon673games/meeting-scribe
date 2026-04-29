@@ -431,6 +431,22 @@ class ElectronInterfaceTests(unittest.TestCase):
             self.assertEqual(asr_factory.settings.diar_backend, "sherpa_onnx")
             self.assertEqual(asr_factory.settings.diar_sherpa_embedding_model_path, str(model_path))
 
+    def test_backend_lists_local_llm_gguf_models(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            model_dir = root / "models" / "llm" / "llama3"
+            model_dir.mkdir(parents=True)
+            model_path = model_dir / "Meta-Llama-3-8B-Instruct-Q4_K_M.gguf"
+            model_path.write_bytes(b"gguf")
+            repository = JsonConfigRepository(root / "config.json")
+            repository.write({})
+            backend = ElectronBackend(root, repository, _DeviceCatalog())
+
+            result = backend.handle("list_llm_models", {})
+
+            self.assertEqual(result["models"][0]["label"], model_path.name)
+            self.assertEqual(result["models"][0]["modelAlias"], "Meta-Llama-3-8B-Instruct-Q4_K_M")
+
     def test_headless_session_applies_post_fact_speaker_update(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
