@@ -62,8 +62,13 @@ class AssistantController:
             return {
                 "enabled": bool(settings.enabled),
                 "providerAvailable": bool(selected_provider.get("available", False)) if selected_provider else False,
+                "providerId": str(selected_provider.get("id", "")) if selected_provider else "",
                 "providerMessage": str(selected_provider.get("message", "")) if selected_provider else "",
                 "providerErrorCode": str(selected_provider.get("errorCode", "")) if selected_provider else "",
+                "providerSuggestion": str(selected_provider.get("suggestion", "")) if selected_provider else "",
+                "providerAuthRequired": bool(selected_provider.get("authRequired", False)) if selected_provider else False,
+                "providerLoginSupported": bool(selected_provider.get("loginSupported", False)) if selected_provider else False,
+                "providerLocalHome": str(selected_provider.get("localHome", "")) if selected_provider else "",
                 "busy": bool(self._job_state.is_busy),
                 "fallback": bool(self._job_state.is_fallback),
                 "selectedProfileId": selected.id if selected is not None else "",
@@ -116,6 +121,45 @@ class AssistantController:
         worker = threading.Thread(target=self._run_worker, args=(command, settings), name="electron-assistant", daemon=True)
         worker.start()
         return self.snapshot()
+
+    def start_provider_login(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        settings = self._settings()
+        provider_id = self._provider_id_from_params(params, settings)
+        login_fn = getattr(self.assistant_service, "start_provider_login", None)
+        if not callable(login_fn):
+            return {
+                "id": provider_id,
+                "label": provider_id,
+                "started": False,
+                "message": "Assistant service does not support provider login.",
+                "errorCode": "login_not_supported",
+                "suggestion": "",
+                "localHome": "",
+            }
+        result = login_fn(
+            provider_id,
+            options=self._runtime_options(settings),
+            device_auth=bool(params.get("deviceAuth", params.get("device_auth", False))),
+        )
+        return result.as_dict()
+
+    def ping_provider(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        settings = self._settings()
+        provider_id = self._provider_id_from_params(params, settings)
+        ping_fn = getattr(self.assistant_service, "ping_provider", None)
+        if not callable(ping_fn):
+            return {
+                "id": provider_id,
+                "label": provider_id,
+                "ok": False,
+                "message": "Assistant service does not support provider ping.",
+                "errorCode": "ping_not_supported",
+                "retryable": False,
+                "suggestion": "",
+                "statusCode": 0,
+            }
+        result = ping_fn(provider_id, options=self._runtime_options(settings))
+        return result.as_dict()
 
     def _run_worker(self, command: InvokeAssistantCommand, settings: CodexSettings) -> None:
         try:
@@ -192,6 +236,15 @@ class AssistantController:
             path_hints=list(settings.path_hints),
             proxy=str(settings.proxy or ""),
             default_timeout_s=int(settings.timeout_s),
+        )
+
+    def _provider_id_from_params(self, params: Dict[str, Any], settings: CodexSettings) -> str:
+        profile = self._selected_profile(settings) if settings.profiles else None
+        return str(
+            params.get("providerId")
+            or params.get("provider_id")
+            or getattr(profile, "provider_id", "")
+            or ASSISTANT_PROVIDER_CODEX
         )
 
     def _provider_records(self, settings: CodexSettings) -> list[Dict[str, Any]]:

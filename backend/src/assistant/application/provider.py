@@ -15,6 +15,7 @@ class AssistantExecutionSettings:
     path_hints: List[str]
     proxy: str
     timeout_s: int
+    project_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,9 @@ class AssistantProviderInfo:
     retryable: bool = False
     suggestion: str = ""
     models: list[str] = field(default_factory=list)
+    auth_required: bool = False
+    login_supported: bool = False
+    local_home: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -47,6 +51,55 @@ class AssistantProviderInfo:
             "retryable": bool(self.retryable),
             "suggestion": self.suggestion,
             "models": list(self.models),
+            "authRequired": bool(self.auth_required),
+            "loginSupported": bool(self.login_supported),
+            "localHome": self.local_home,
+        }
+
+
+@dataclass(frozen=True)
+class AssistantProviderLoginResult:
+    id: str
+    label: str
+    started: bool
+    message: str = ""
+    error_code: str = ""
+    suggestion: str = ""
+    local_home: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "label": self.label,
+            "started": bool(self.started),
+            "message": self.message,
+            "errorCode": self.error_code,
+            "suggestion": self.suggestion,
+            "localHome": self.local_home,
+        }
+
+
+@dataclass(frozen=True)
+class AssistantProviderPingResult:
+    id: str
+    label: str
+    ok: bool
+    message: str = ""
+    error_code: str = ""
+    retryable: bool = False
+    suggestion: str = ""
+    status_code: int = 0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "label": self.label,
+            "ok": bool(self.ok),
+            "message": self.message,
+            "errorCode": self.error_code,
+            "retryable": bool(self.retryable),
+            "suggestion": self.suggestion,
+            "statusCode": int(self.status_code),
         }
 
 

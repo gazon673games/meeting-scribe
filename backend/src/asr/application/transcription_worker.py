@@ -173,6 +173,15 @@ class TranscriptionWorkerRuntime:
         beam_to_use = self._over.limit_beam(int(self._beam_ctl.cur_beam))
         queue_wait_s = seg.queue_wait_s(time.time())
 
+        self._log_event({
+            "type": "asr_segment_processing",
+            "stream": str(seg.stream),
+            "t_start": float(seg.t_start),
+            "t_end": float(seg.t_end),
+            "seg_dur_s": float(seg_dur_s),
+            "seg_qsize": int(self._seg_q.qsize()),
+            "ts": time.time(),
+        })
         asr_result = self._run_asr(seg, speaker, beam_to_use)
         if asr_result is None:
             return
@@ -183,6 +192,17 @@ class TranscriptionWorkerRuntime:
         self._metrics.record_latency(asr_latency_s=asr_latency_s, total_lag_s=total_lag_s)
         self._maybe_update_beam(seg_dur_s, asr_latency_s)
         self._log_segment_event(seg, speaker, text, asr_latency_s, seg_dur_s, beam_to_use, removed)
+        self._log_event({
+            "type": "asr_segment_done",
+            "stream": str(seg.stream),
+            "speaker": str(speaker),
+            "t_start": float(seg.t_start),
+            "t_end": float(seg.t_end),
+            "latency_s": float(asr_latency_s),
+            "text_chars": len(text),
+            "seg_qsize": int(self._seg_q.qsize()),
+            "ts": time.time(),
+        })
         if self._utt.enabled and text.strip():
             self._update_utterances(seg, speaker, text)
 

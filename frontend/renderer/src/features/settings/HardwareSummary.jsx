@@ -1,15 +1,14 @@
 import { Cpu, HardDrive, Microchip } from "lucide-react";
 
+import { CollapsibleSection } from "../../shared/ui/CollapsibleSection";
+
 export function HardwareSummary({ hardware }) {
   const cpu = hardware?.cpu || {};
   const memory = hardware?.memory || {};
   const gpus = Array.isArray(hardware?.gpus) ? hardware.gpus : [];
 
   return (
-    <section className="settings-section">
-      <div className="settings-section-head">
-        <h3>Current Hardware</h3>
-      </div>
+    <CollapsibleSection title="Current Hardware" defaultOpen={true}>
       <div className="hardware-grid">
         <HardwareTile icon={Cpu} label="CPU" value={cpu.name || "CPU"} meta={`${Number(cpu.logicalCores || 0) || "-"} logical cores`} />
         <HardwareTile icon={HardDrive} label="Memory" value={formatBytes(memory.totalBytes)} meta="Total RAM" />
@@ -27,7 +26,7 @@ export function HardwareSummary({ hardware }) {
           <HardwareTile icon={Microchip} label="GPU" value="No NVIDIA GPU data" meta="CUDA may be unavailable" />
         )}
       </div>
-    </section>
+    </CollapsibleSection>
   );
 }
 

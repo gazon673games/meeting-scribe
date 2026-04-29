@@ -48,7 +48,7 @@ class ASRPipelineSettings:
     vad_pre_speech_ms: int = 120
     vad_min_end_silence_ms: int = 220
     min_segment_ms: int = 650
-    diarization_enabled: bool = True
+    diarization_enabled: bool = False
     diar_backend: DiarBackend = "pyannote"
     diar_sim_threshold: float = 0.74
     diar_min_segment_s: float = 1.0

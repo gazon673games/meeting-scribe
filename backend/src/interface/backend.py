@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import importlib.util
 import os
 import platform
 import shutil
@@ -37,6 +38,8 @@ class ElectronBackend:
     _resource_wall_time_s: float = field(default=0.0, init=False, repr=False)
     _downloads: Dict[str, Any] = field(default_factory=dict, init=False, repr=False)
     _download_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
+    _diarization_downloads: Dict[str, Any] = field(default_factory=dict, init=False, repr=False)
+    _diarization_download_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
     _event_sink: Any = field(default=None, init=False, repr=False)
 
     protocol_version: int = 1
@@ -351,6 +354,98 @@ class ElectronBackend:
             raise ValueError("model_metadata requires params.name")
         return model_metadata(name, models_dir=self._models_dir_from_params(params))
 
+    def list_diarization_models(self, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        from application.diarization_model_download import list_diarization_models
+
+        return list_diarization_models(
+            project_root=self.project_root,
+            models_dir=self._models_dir_from_params(params),
+            downloads=self._diarization_download_snapshot(),
+        )
+
+    def download_diarization_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from application.diarization_model_download import download_diarization_model_async
+
+        name = str(params.get("name") or "").strip()
+        if not name:
+            raise ValueError("download_diarization_model requires params.name")
+        if self._diarization_download_record(name).get("state") == "downloading":
+            return {"started": False, "message": "Already downloading"}
+        if "useProxy" in params or "use_proxy" in params:
+            use_proxy = bool(params.get("useProxy", params.get("use_proxy", False)))
+            proxy = str(params.get("proxy") or "").strip() if use_proxy else ""
+        else:
+            proxy = self._model_download_proxy()
+        self._set_diarization_download_state(
+            name,
+            {
+                "state": "downloading",
+                "message": "Starting...",
+                "error": "",
+                "downloadedBytes": 0,
+                "totalBytes": 0,
+                "speedBps": 0,
+                "proxy": bool(proxy),
+            },
+        )
+
+        def on_progress(update: Any) -> None:
+            payload = update if isinstance(update, dict) else {"message": str(update)}
+            self._set_diarization_download_state(
+                name,
+                {
+                    "state": "downloading",
+                    "message": str(payload.get("message") or "Downloading..."),
+                    "error": "",
+                    "downloadedBytes": _int_or_zero(payload.get("downloadedBytes")),
+                    "totalBytes": _int_or_zero(payload.get("totalBytes")),
+                    "speedBps": float(payload.get("speedBps") or 0.0),
+                    "path": str(payload.get("path") or ""),
+                    "proxy": bool(proxy),
+                },
+            )
+
+        def on_done(error: Optional[str]) -> None:
+            previous = self._diarization_download_record(name)
+            self._set_diarization_download_state(
+                name,
+                {
+                    "state": "error" if error else "done",
+                    "message": "" if error else "Downloaded",
+                    "error": str(error or ""),
+                    "downloadedBytes": _int_or_zero(previous.get("downloadedBytes")),
+                    "totalBytes": _int_or_zero(previous.get("totalBytes")),
+                    "speedBps": 0,
+                    "path": str(previous.get("path") or ""),
+                    "proxy": bool(proxy),
+                },
+            )
+
+        download_diarization_model_async(
+            name=name,
+            project_root=self.project_root,
+            models_dir=self._models_dir_from_params(params),
+            proxy=proxy,
+            on_progress=on_progress,
+            on_done=on_done,
+        )
+        return {"started": True, "message": f"Downloading Speaker ID model {name}...", "proxy": bool(proxy)}
+
+    def delete_diarization_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from application.diarization_model_download import delete_diarization_model
+
+        path = str(params.get("path") or "").strip()
+        if not path:
+            raise ValueError("delete_diarization_model requires params.path")
+        if self._diarization_model_is_selected_or_running(path):
+            raise RuntimeError("Cannot delete the Speaker ID model that is selected or currently used by ASR")
+        delete_diarization_model(
+            project_root=self.project_root,
+            path=path,
+            models_dir=self._models_dir_from_params(params),
+        )
+        return {"deleted": True, "path": path}
+
     def save_config(self, params: Dict[str, Any]) -> Dict[str, Any]:
         config = params.get("config")
         if not isinstance(config, dict):
@@ -413,6 +508,7 @@ class ElectronBackend:
     def start_session(self, params: Dict[str, Any]) -> Dict[str, Any]:
         merged = self._start_params_from_config()
         merged.update(params)
+        merged = self._resolve_diarization_start_params(merged)
         return self._require_session_controller().start_session(merged)
 
     def stop_session(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -430,6 +526,16 @@ class ElectronBackend:
         if self.assistant_controller is None:
             raise RuntimeError("Assistant controller is not configured")
         return self.assistant_controller.invoke(params)
+
+    def start_assistant_login(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        if self.assistant_controller is None:
+            raise RuntimeError("Assistant controller is not configured")
+        return self.assistant_controller.start_provider_login(params)
+
+    def ping_assistant_provider(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        if self.assistant_controller is None:
+            raise RuntimeError("Assistant controller is not configured")
+        return self.assistant_controller.ping_provider(params)
 
     def handle(self, method: str, params: Dict[str, Any] | None = None) -> Any:
         params = dict(params or {})
@@ -461,6 +567,10 @@ class ElectronBackend:
             return self.clear_transcript()
         if method == "invoke_assistant":
             return self.invoke_assistant(params)
+        if method == "start_assistant_login":
+            return self.start_assistant_login(params)
+        if method == "ping_assistant_provider":
+            return self.ping_assistant_provider(params)
         if method == "list_models":
             return self.list_models(params)
         if method == "download_model":
@@ -469,6 +579,12 @@ class ElectronBackend:
             return self.delete_model(params)
         if method == "model_metadata":
             return self.model_metadata(params)
+        if method == "list_diarization_models":
+            return self.list_diarization_models(params)
+        if method == "download_diarization_model":
+            return self.download_diarization_model(params)
+        if method == "delete_diarization_model":
+            return self.delete_diarization_model(params)
         if method == "list_process_sessions":
             return self.list_process_sessions()
         raise KeyError(f"Unknown backend method: {method}")
@@ -484,12 +600,20 @@ class ElectronBackend:
         with self._download_lock:
             return {str(name): dict(record) for name, record in self._downloads.items()}
 
+    def _diarization_download_snapshot(self) -> Dict[str, Dict[str, Any]]:
+        with self._diarization_download_lock:
+            return {str(name): dict(record) for name, record in self._diarization_downloads.items()}
+
     def _download_record(self, name: str) -> Dict[str, Any]:
         from application.model_download import normalize_model_reference
 
         key = normalize_model_reference(name)
         with self._download_lock:
             return dict(self._downloads.get(name) or self._downloads.get(key) or {})
+
+    def _diarization_download_record(self, name: str) -> Dict[str, Any]:
+        with self._diarization_download_lock:
+            return dict(self._diarization_downloads.get(str(name)) or {})
 
     def _download_fields(self, name: str, downloads: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         from application.model_download import normalize_model_reference
@@ -512,6 +636,19 @@ class ElectronBackend:
             active_downloads = self._active_download_count(self._downloads)
         self._emit(
             "model_download_updated",
+            {
+                "model": str(name),
+                **dict(record),
+                "activeDownloads": active_downloads,
+            },
+        )
+
+    def _set_diarization_download_state(self, name: str, record: Dict[str, Any]) -> None:
+        with self._diarization_download_lock:
+            self._diarization_downloads[str(name)] = dict(record)
+            active_downloads = self._active_download_count(self._diarization_downloads)
+        self._emit(
+            "diarization_model_download_updated",
             {
                 "model": str(name),
                 **dict(record),
@@ -571,6 +708,16 @@ class ElectronBackend:
             return True
         return False
 
+    def _diarization_model_is_selected_or_running(self, path: str) -> bool:
+        wanted = str(Path(path).expanduser().resolve())
+        config = self._read_config()
+        asr = config.get("asr", {}) if isinstance(config.get("asr"), dict) else {}
+        current = str(asr.get("diar_sherpa_embedding_model_path") or "").strip()
+        if current and str(Path(current).expanduser().resolve()) == wanted:
+            return True
+        session = self._session_snapshot()
+        return bool(session.get("running") and current and str(Path(current).expanduser().resolve()) == wanted)
+
     def _asr_model_options(self, config: Dict[str, Any]) -> List[str]:
         try:
             from application.model_download import scan_local_models
@@ -608,6 +755,44 @@ class ElectronBackend:
             **asr,
         }
 
+    def _resolve_diarization_start_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        if not bool(params.get("diarizationEnabled", params.get("diarization_enabled", False))):
+            return params
+
+        backend = str(params.get("diarBackend", params.get("diar_backend", "online")) or "online").strip().lower()
+        sherpa_path = str(
+            params.get(
+                "diarSherpaEmbeddingModelPath",
+                params.get("diar_sherpa_embedding_model_path", ""),
+            )
+            or ""
+        ).strip()
+
+        if backend == "sherpa_onnx" and not sherpa_path:
+            return self._with_default_sherpa_model(params)
+        if backend == "online" and not _module_available("resemblyzer"):
+            return self._with_default_sherpa_model(params)
+        return params
+
+    def _with_default_sherpa_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from application.diarization_model_download import default_cached_diarization_model
+
+        model = default_cached_diarization_model(
+            project_root=self.project_root,
+            models_dir=self._models_dir(),
+        )
+        path = str(model.get("path") or "") if model else ""
+        if not path:
+            return params
+        next_params = dict(params)
+        next_params["diarBackend"] = "sherpa_onnx"
+        next_params["diar_backend"] = "sherpa_onnx"
+        next_params["diarSherpaEmbeddingModelPath"] = path
+        next_params["diar_sherpa_embedding_model_path"] = path
+        next_params.setdefault("diarSherpaProvider", str(model.get("provider") or "cpu"))
+        next_params.setdefault("diar_sherpa_provider", str(model.get("provider") or "cpu"))
+        return next_params
+
     def _hardware_snapshot(self) -> Dict[str, Any]:
         now = time.monotonic()
         if self._hardware_cache is not None and now - self._hardware_cache_ts < 10.0:
@@ -644,8 +829,13 @@ class ElectronBackend:
             return {
                 "enabled": False,
                 "providerAvailable": False,
+                "providerId": "",
                 "providerMessage": "",
                 "providerErrorCode": "",
+                "providerSuggestion": "",
+                "providerAuthRequired": False,
+                "providerLoginSupported": False,
+                "providerLocalHome": "",
                 "busy": False,
                 "profiles": [],
                 "providers": [],
@@ -688,6 +878,13 @@ def _per_process_audio_supported() -> bool:
     try:
         from infrastructure.process_session_catalog import is_per_process_audio_supported
         return is_per_process_audio_supported()
+    except Exception:
+        return False
+
+
+def _module_available(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
     except Exception:
         return False
 

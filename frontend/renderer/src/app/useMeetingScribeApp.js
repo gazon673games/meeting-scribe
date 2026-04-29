@@ -1,6 +1,7 @@
 import React from "react";
 
 import { ASR_FIELDS, FALLBACK_OPTIONS, applySettingsToConfig, draftToStartParams, makeSettingsDraft } from "../entities/settings/model";
+import { noticeFromBackendEvent, upsertRuntimeNotice } from "../entities/runtimeNotice/model";
 import { meetingScribeClient } from "../shared/api/meetingScribeClient";
 
 const REFRESHING_EVENTS = [
@@ -31,6 +32,8 @@ export function useMeetingScribeApp() {
   const [error, setError] = React.useState("");
   const [loading, setLoading] = React.useState(true);
   const [resourceUsage, setResourceUsage] = React.useState({ app: {}, system: {}, gpus: [] });
+  const [runtimeNotices, setRuntimeNotices] = React.useState([]);
+  const [assistantPing, setAssistantPing] = React.useState({ busy: false });
 
   const refresh = React.useCallback(async () => {
     setLoading(true);
@@ -57,6 +60,10 @@ export function useMeetingScribeApp() {
     refresh();
     return meetingScribeClient.onBackendEvent((event) => {
       setEvents((current) => [event, ...current].slice(0, 8));
+      const runtimeNotice = noticeFromBackendEvent(event);
+      if (runtimeNotice) {
+        setRuntimeNotices((current) => upsertRuntimeNotice(current, runtimeNotice));
+      }
       if (event.type === "transcript_line") {
         setState((current) => appendTranscriptLine(current, event));
       }
@@ -158,12 +165,59 @@ export function useMeetingScribeApp() {
     setError("");
   }, []);
 
+  const dismissRuntimeNotice = React.useCallback((key) => {
+    setRuntimeNotices((current) => current.filter((notice) => notice.key !== key));
+  }, []);
+
   const reloadApp = React.useCallback(async () => {
     setError("");
     try {
       await meetingScribeClient.reloadApp();
     } catch (requestError) {
       setError(`${requestError.name || "Error"}: ${requestError.message || requestError}`);
+    }
+  }, []);
+
+  const openDebugConsole = React.useCallback(async () => {
+    try {
+      await meetingScribeClient.showDebugConsole();
+    } catch (requestError) {
+      setError(`${requestError.name || "Error"}: ${requestError.message || requestError}`);
+    }
+  }, []);
+
+  const startAssistantLogin = React.useCallback(
+    async (providerId = "codex") => {
+      setError("");
+      try {
+        const result = await meetingScribeClient.request("start_assistant_login", { providerId });
+        await refresh();
+        if (result?.errorCode) {
+          setError(result.suggestion || result.message || result.errorCode);
+        }
+      } catch (requestError) {
+        setError(`${requestError.name || "Error"}: ${requestError.message || requestError}`);
+      }
+    },
+    [refresh]
+  );
+
+  const pingAssistantProvider = React.useCallback(async (providerId = "codex") => {
+    setError("");
+    setAssistantPing({ busy: true, providerId });
+    try {
+      const result = await meetingScribeClient.request("ping_assistant_provider", { providerId });
+      setAssistantPing({ busy: false, providerId, ...result, ts: Date.now() });
+    } catch (requestError) {
+      setAssistantPing({
+        busy: false,
+        providerId,
+        ok: false,
+        message: `${requestError.name || "Error"}: ${requestError.message || requestError}`,
+        errorCode: "ping_failed",
+        retryable: true,
+        ts: Date.now()
+      });
     }
   }, []);
 
@@ -249,6 +303,7 @@ export function useMeetingScribeApp() {
   return {
     assistant,
     assistantContextReady,
+    assistantPing,
     asrMetrics,
     backendStatus,
     canStart,
@@ -273,12 +328,17 @@ export function useMeetingScribeApp() {
     applyProfile,
     refresh,
     reloadApp,
+    openDebugConsole,
     resourceUsage,
+    runtimeNotices,
+    pingAssistantProvider,
     runBackendAction,
     saveSettings,
+    startAssistantLogin,
     startOrStop,
     updateAsrSetting,
     clearError,
+    dismissRuntimeNotice,
     updateSettings
   };
 }

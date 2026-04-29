@@ -1,7 +1,15 @@
-export function AssistantResponse({ assistant, busy, response }) {
+import { LogIn } from "lucide-react";
+
+export function AssistantResponse({ assistant, busy, response, onAuthorize }) {
   const error = response?.ok === false ? response.error || {} : null;
   const providerUnavailable = assistant?.enabled && assistant?.providerAvailable === false;
   const providerMessage = assistant?.providerMessage || "Assistant provider is unavailable";
+  const providerSuggestion = assistant?.providerSuggestion || "";
+  const canAuthorize =
+    providerUnavailable &&
+    assistant?.providerErrorCode === "auth_error" &&
+    assistant?.providerLoginSupported !== false &&
+    typeof onAuthorize === "function";
 
   return (
     <div className="assistant-response">
@@ -17,7 +25,18 @@ export function AssistantResponse({ assistant, busy, response }) {
           ) : null}
         </>
       ) : (
-        <p className="muted">{busy ? "Working..." : providerUnavailable ? providerMessage : "No response yet"}</p>
+        <>
+          <p className="muted">{busy ? "Working..." : providerUnavailable ? providerMessage : "No response yet"}</p>
+          {providerSuggestion && providerUnavailable ? <em className="assistant-provider-hint">{providerSuggestion}</em> : null}
+          {canAuthorize ? (
+            <div className="assistant-provider-actions">
+              <button className="assistant-auth-button" disabled={busy} onClick={onAuthorize} type="button">
+                <LogIn size={15} />
+                Authorize Codex
+              </button>
+            </div>
+          ) : null}
+        </>
       )}
     </div>
   );

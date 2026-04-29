@@ -214,7 +214,8 @@ export function normalizeAssistantProfiles(value) {
         answer_prompt: String(item.answer_prompt || item.answerPrompt || ""),
         extra_args: Array.isArray(item.extra_args || item.extraArgs)
           ? (item.extra_args || item.extraArgs).map((arg) => String(arg)).filter(Boolean)
-          : []
+          : [],
+        offline: Boolean(item.offline)
       };
     })
     .filter((profile) => profile.id);
