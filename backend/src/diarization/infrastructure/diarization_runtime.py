@@ -6,15 +6,17 @@ from typing import Callable, Dict, List, Optional
 
 import numpy as np
 
-from asr.application.diarization import DiarizationConfig, DiarizationPort
-from asr.application.ports import (
+from asr.domain.segments import Segment
+from diarization.application.diarization import DiarizationConfig, DiarizationPort
+from diarization.application.ports import (
     OnlineDiarizerFactoryPort,
     OnlineDiarizerPort,
     PyannoteDiarizerFactoryPort,
     PyannoteDiarizerPort,
 )
-from asr.domain.segments import DiarSegment, Segment, pick_speaker
-from asr.domain.types import DiarBackend
+from diarization.domain.segments import DiarSegment, pick_speaker
+from diarization.domain.speaker_labels import source_speaker_label
+from diarization.domain.types import DiarBackend
 
 LogEvent = Callable[[dict], None]
 
@@ -36,6 +38,10 @@ class DiarizationRuntime:
         self.step_s = float(config.step_s)
         self.device = str(config.device)
         self.temp_dir = Path(config.temp_dir) if config.temp_dir is not None else None
+        self.source_speaker_labels = dict(config.source_speaker_labels or {})
+        self.sherpa_embedding_model_path = str(config.sherpa_embedding_model_path or "")
+        self.sherpa_provider = str(config.sherpa_provider or "cpu")
+        self.sherpa_num_threads = max(1, int(config.sherpa_num_threads))
         self._online_diarizer_factory = online_diarizer_factory
         self._pyannote_diarizer_factory = pyannote_diarizer_factory
 
@@ -50,14 +56,17 @@ class DiarizationRuntime:
         if not self.enabled:
             return
 
-        if self.backend in ("online", "nemo") and name not in self._diarizers:
+        if self.backend in ("online", "nemo", "sherpa_onnx") and name not in self._diarizers:
             self._diarizers[name] = self._online_diarizer_factory(
                 similarity_threshold=self.sim_threshold,
                 min_segment_s=self.min_segment_s,
                 window_s=self.window_s,
-                backend=("nemo" if self.backend == "nemo" else "resemblyzer"),
+                backend=_embedding_backend_name(self.backend),
                 device=self.device,
                 temp_dir=self.temp_dir,
+                sherpa_model_path=self.sherpa_embedding_model_path,
+                sherpa_provider=self.sherpa_provider,
+                sherpa_num_threads=self.sherpa_num_threads,
             )
 
         if self.backend == "pyannote" and name not in self._ring16:
@@ -110,21 +119,25 @@ class DiarizationRuntime:
             log_event({"type": "diar_init_ok", "backend": "nemo", "ts": time.time()})
             return
 
+        if self.backend == "sherpa_onnx":
+            log_event({"type": "diar_init_ok", "backend": "sherpa_onnx", "ts": time.time()})
+            return
+
     def speaker_for_segment(self, seg: Segment, log_event: LogEvent) -> str:
         if not self.enabled:
-            return "S?"
+            return self._fallback_speaker(seg.stream)
 
         self.ensure_stream(seg.stream)
 
         if self.backend == "pyannote":
             self._maybe_update_pyannote_timeline(seg.stream, log_event)
             timeline = self._timeline.get(seg.stream, [])
-            return pick_speaker(timeline, seg.t_start, seg.t_end)
+            return self._with_fallback(pick_speaker(timeline, seg.t_start, seg.t_end), seg.stream)
 
         try:
             diar = self._diarizers.get(seg.stream)
             if diar is None:
-                return "S?"
+                return self._fallback_speaker(seg.stream)
 
             audio = np.asarray(seg.audio.samples, dtype=np.float32)
             speaker, nsp, best_sim, created = diar.assign_with_debug(audio, ts=time.time())
@@ -155,10 +168,19 @@ class DiarizationRuntime:
                     "ts": time.time(),
                 }
             )
-            return str(speaker)
+            return self._with_fallback(str(speaker), seg.stream)
         except Exception as e:
             log_event({"type": "error", "where": "diar_assign", "error": str(e), "ts": time.time()})
-            return "S?"
+            return self._fallback_speaker(seg.stream)
+
+    def _fallback_speaker(self, stream: str) -> str:
+        return source_speaker_label(self.source_speaker_labels, stream)
+
+    def _with_fallback(self, speaker: str, stream: str) -> str:
+        text = str(speaker or "").strip()
+        if not text or text == "S?" or text.startswith("S_ERR"):
+            return self._fallback_speaker(stream)
+        return text
 
     def _maybe_update_pyannote_timeline(self, stream: str, log_event: LogEvent) -> None:
         if not self.enabled or self.backend != "pyannote" or self._pyannote is None:
@@ -198,3 +220,11 @@ class DefaultDiarizationRuntimeFactory:
             online_diarizer_factory=self._online_diarizer_factory,
             pyannote_diarizer_factory=self._pyannote_diarizer_factory,
         )
+
+
+def _embedding_backend_name(backend: DiarBackend) -> str:
+    if backend == "nemo":
+        return "nemo"
+    if backend == "sherpa_onnx":
+        return "sherpa_onnx"
+    return "resemblyzer"

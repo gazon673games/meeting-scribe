@@ -60,6 +60,9 @@ export function useMeetingScribeApp() {
       if (event.type === "transcript_line") {
         setState((current) => appendTranscriptLine(current, event));
       }
+      if (event.type === "transcript_line_update") {
+        setState((current) => updateTranscriptLine(current, event));
+      }
       if (event.type === "asr_metrics") {
         setState((current) => applyAsrMetrics(current, event));
       }
@@ -285,14 +288,18 @@ function appendTranscriptLine(state, event) {
     return state;
   }
   const line = {
+    id: String(event.id || transcriptLineId(event)),
     ts: Number(event.ts || Date.now() / 1000),
     stream: String(event.stream || "mix"),
+    speaker: String(event.speaker || ""),
+    t_start: optionalNumber(event.t_start),
+    t_end: optionalNumber(event.t_end),
     text: String(event.text || ""),
     overload: Boolean(event.overload)
   };
   const transcript = state.session.transcript || [];
   const last = transcript[transcript.length - 1];
-  if (last && last.ts === line.ts && last.stream === line.stream && last.text === line.text) {
+  if (last && last.id === line.id && last.ts === line.ts && last.stream === line.stream && last.speaker === line.speaker && last.text === line.text) {
     return state;
   }
   return {
@@ -302,6 +309,64 @@ function appendTranscriptLine(state, event) {
       transcript: [...transcript, line].slice(-200)
     }
   };
+}
+
+function updateTranscriptLine(state, event) {
+  if (!state?.session) {
+    return state;
+  }
+  const id = String(event?.id || "");
+  const transcript = state.session.transcript || [];
+  let changed = false;
+  const updated = transcript.map((line) => {
+    if (!sameTranscriptLine(line, event, id)) {
+      return line;
+    }
+    changed = true;
+    return {
+      ...line,
+      speaker: String(event.speaker || line.speaker || ""),
+      speakerSource: String(event.speakerSource || line.speakerSource || ""),
+      speakerConfidence: event.speakerConfidence ?? line.speakerConfidence
+    };
+  });
+  if (!changed) {
+    return state;
+  }
+  return {
+    ...state,
+    session: {
+      ...state.session,
+      transcript: updated
+    }
+  };
+}
+
+function sameTranscriptLine(line, event, id) {
+  if (id && String(line.id || "") === id) {
+    return true;
+  }
+  return (
+    String(line.stream || "") === String(event?.stream || "") &&
+    Number(line.t_start ?? -1) === Number(event?.t_start ?? -2) &&
+    Number(line.t_end ?? -1) === Number(event?.t_end ?? -2)
+  );
+}
+
+function transcriptLineId(event) {
+  const stream = String(event?.stream || "mix").replace(/[^a-zA-Z0-9_-]+/g, "_") || "mix";
+  const ts = Math.round(Number(event?.ts || Date.now() / 1000) * 1000);
+  const start = optionalNumber(event?.t_start);
+  const end = optionalNumber(event?.t_end);
+  return `${stream}:${Math.round((start ?? event?.ts ?? 0) * 1000) || ts}:${Math.round((end ?? event?.ts ?? 0) * 1000) || ts}`;
+}
+
+function optionalNumber(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 function applyAsrMetrics(state, event) {

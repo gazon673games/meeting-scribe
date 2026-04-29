@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Protocol
+from typing import Any, Dict, Optional, Protocol
 
 from asr.domain.types import Mode, OverloadStrategy
+from diarization.domain.types import DiarBackend
 
 
 class ASRRuntime(Protocol):
@@ -38,6 +39,14 @@ class ASRSessionSettings:
     overload_overlap_ms: float
     asr_language: Optional[str]
     asr_initial_prompt: Optional[str]
+    source_speaker_labels: Dict[str, str] = field(default_factory=dict)
+    diarization_enabled: bool = False
+    diar_backend: DiarBackend = "online"
+    diarization_sidecar_enabled: bool = True
+    diarization_queue_size: int = 50
+    diar_sherpa_embedding_model_path: str = ""
+    diar_sherpa_provider: str = "cpu"
+    diar_sherpa_num_threads: int = 1
 
 
 class ASRRuntimeFactory(Protocol):

@@ -9,6 +9,7 @@ from typing import Any, ClassVar, Dict, Optional
 class EventType(str, Enum):
     SOURCE_ERROR = "source_error"
     UTTERANCE = "utterance"
+    TRANSCRIPT_SPEAKER_UPDATE = "transcript_speaker_update"
     ASR_OVERLOAD = "asr_overload"
     SEGMENT_DROPPED = "segment_dropped"
     SEGMENT_SKIPPED_OVERLOAD = "segment_skipped_overload"

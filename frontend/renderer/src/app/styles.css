@@ -1738,6 +1738,10 @@ textarea:disabled {
   gap: 8px;
 }
 
+.settings-feature-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .feature-toggle {
   min-height: 40px;
   display: flex;

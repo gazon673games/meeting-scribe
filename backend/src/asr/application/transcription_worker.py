@@ -10,6 +10,7 @@ from asr.application.worker_config import TranscriptionWorkerConfig
 from asr.domain.dedup import StreamDedupFilter
 from asr.domain.segments import Segment
 from asr.domain.text import normalize_text
+from diarization.domain.speaker_labels import source_speaker_label
 
 LogEvent = Callable[[dict], None]
 
@@ -49,6 +50,9 @@ class TranscriptionWorkerRuntime:
         self._initial_prompt = config.initial_prompt
         self._adaptive_beam_enabled = bool(config.adaptive_beam_enabled)
         self._log_speaker_labels = bool(config.log_speaker_labels)
+        self._init_diarization = bool(config.init_diarization)
+        self._diarization_blocking_lookup = bool(config.diarization_blocking_lookup)
+        self._source_speaker_labels = dict(config.source_speaker_labels or {})
 
         self._dedup = StreamDedupFilter(
             enabled=bool(config.text_dedup_enabled),
@@ -91,7 +95,8 @@ class TranscriptionWorkerRuntime:
             self._log_event({"type": "error", "where": "asr_init", "error": str(e), "ts": time.time()})
             return
 
-        self._diar.init_backend(self._log_event)
+        if self._init_diarization:
+            self._diar.init_backend(self._log_event)
 
         while not self._stop.is_set():
             self._update_overload_state()
@@ -163,7 +168,7 @@ class TranscriptionWorkerRuntime:
         })
 
     def _transcribe_segment(self, seg: Segment) -> None:
-        speaker = self._diar.speaker_for_segment(seg, self._log_event)
+        speaker = self._speaker_for_segment(seg)
         seg_dur_s = max(1e-6, float(seg.duration_s))
         beam_to_use = self._over.limit_beam(int(self._beam_ctl.cur_beam))
         queue_wait_s = seg.queue_wait_s(time.time())
@@ -180,6 +185,11 @@ class TranscriptionWorkerRuntime:
         self._log_segment_event(seg, speaker, text, asr_latency_s, seg_dur_s, beam_to_use, removed)
         if self._utt.enabled and text.strip():
             self._update_utterances(seg, speaker, text)
+
+    def _speaker_for_segment(self, seg: Segment) -> str:
+        if self._diarization_blocking_lookup:
+            return self._diar.speaker_for_segment(seg, self._log_event)
+        return source_speaker_label(self._source_speaker_labels, seg.stream)
 
     def _run_asr(
         self, seg: Segment, speaker: str, beam_to_use: int

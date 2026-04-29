@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Callable, Optional, Protocol
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, Optional, Protocol
 
 from asr.domain.segments import Segment
-from asr.domain.types import DiarBackend
+from diarization.domain.types import DiarBackend
 
 LogEvent = Callable[[dict], None]
 
@@ -20,6 +20,10 @@ class DiarizationConfig:
     step_s: float
     device: str
     temp_dir: Optional[Any] = None
+    source_speaker_labels: Dict[str, str] = field(default_factory=dict)
+    sherpa_embedding_model_path: str = ""
+    sherpa_provider: str = "cpu"
+    sherpa_num_threads: int = 1
 
 
 class DiarizationPort(Protocol):

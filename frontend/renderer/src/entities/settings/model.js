@@ -15,6 +15,8 @@ export const FALLBACK_OPTIONS = {
   ],
   asrDevices: ["cuda", "cpu"],
   computeTypes: ["int8_float16", "float16", "int8", "int8_float32", "float32"],
+  diarizationBackends: ["online", "sherpa_onnx", "nemo", "pyannote"],
+  diarizationProviders: ["cpu", "cuda"],
   overloadStrategies: ["drop_old", "keep_all"],
   profileDefaults: {}
 };
@@ -41,6 +43,8 @@ export const ASR_TIMING_FIELDS = [
 export const ASR_FIELDS = [...ASR_RESOURCE_FIELDS, ...ASR_TIMING_FIELDS];
 
 export const ASSISTANT_REASONING_OPTIONS = ["low", "medium", "high", "xhigh"];
+export const DIARIZATION_BACKENDS = ["online", "sherpa_onnx", "nemo", "pyannote"];
+export const DIARIZATION_PROVIDERS = ["cpu", "cuda"];
 
 const DEFAULT_ASSISTANT_PROFILES = [
   {
@@ -83,6 +87,13 @@ export function makeSettingsDraft(config) {
     device: String(asr.device || "cuda"),
     computeType: String(asr.compute_type || "float16"),
     overloadStrategy: String(asr.overload_strategy || "drop_old"),
+    diarizationEnabled: boolWithDefault(asr.diarization_enabled, false),
+    diarizationBackend: normalizeDiarizationBackend(asr.diar_backend),
+    diarizationSidecarEnabled: boolWithDefault(asr.diarization_sidecar_enabled, true),
+    diarizationQueueSize: normalizeInteger(asr.diarization_queue_size, 50, 1, 500),
+    diarSherpaEmbeddingModelPath: String(asr.diar_sherpa_embedding_model_path || ""),
+    diarSherpaProvider: normalizeDiarizationProvider(asr.diar_sherpa_provider),
+    diarSherpaNumThreads: normalizeInteger(asr.diar_sherpa_num_threads, 1, 1, 32),
     perProcessAudio: boolWithDefault(ui.per_process_audio, false),
     assistantProxyEnabled: assistantProxy.enabled,
     assistantProxyScheme: proxy.scheme,
@@ -121,6 +132,13 @@ export function applySettingsToConfig(config, draft) {
       device: String(draft.device || "cuda"),
       compute_type: String(draft.computeType || "float16"),
       overload_strategy: String(draft.overloadStrategy || "drop_old"),
+      diarization_enabled: Boolean(draft.diarizationEnabled),
+      diar_backend: normalizeDiarizationBackend(draft.diarizationBackend),
+      diarization_sidecar_enabled: Boolean(draft.diarizationSidecarEnabled),
+      diarization_queue_size: normalizeInteger(draft.diarizationQueueSize, 50, 1, 500),
+      diar_sherpa_embedding_model_path: String(draft.diarSherpaEmbeddingModelPath || "").trim(),
+      diar_sherpa_provider: normalizeDiarizationProvider(draft.diarSherpaProvider),
+      diar_sherpa_num_threads: normalizeInteger(draft.diarSherpaNumThreads, 1, 1, 32),
       ...Object.fromEntries(ASR_FIELDS.map((field) => [field.key, normalizeNumber(draft.asr[field.key], field)]))
     },
     models: {
@@ -222,6 +240,16 @@ function normalizeReasoningEffort(value) {
   return ASSISTANT_REASONING_OPTIONS.includes(effort) ? effort : "";
 }
 
+function normalizeDiarizationBackend(value) {
+  const backend = String(value || "online").trim().toLowerCase();
+  return DIARIZATION_BACKENDS.includes(backend) ? backend : "online";
+}
+
+function normalizeDiarizationProvider(value) {
+  const provider = String(value || "cpu").trim().toLowerCase();
+  return DIARIZATION_PROVIDERS.includes(provider) ? provider : "cpu";
+}
+
 function boolWithDefault(value, fallback) {
   return value === undefined || value === null ? Boolean(fallback) : Boolean(value);
 }
@@ -292,4 +320,10 @@ function normalizeNumber(value, field) {
   let next = Number.isFinite(parsed) ? parsed : field.defaultValue;
   next = Math.max(Number(field.min), Math.min(Number(field.max), next));
   return field.integer ? Math.round(next) : next;
+}
+
+function normalizeInteger(value, fallback, min, max) {
+  const parsed = Number(String(value ?? fallback).replace(",", "."));
+  const next = Number.isFinite(parsed) ? Math.round(parsed) : fallback;
+  return Math.max(Number(min), Math.min(Number(max), next));
 }

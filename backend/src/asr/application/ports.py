@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Protocol
-
-from asr.domain.segments import DiarSegment
+from typing import Any, Callable, Dict, Optional, Protocol
 
 
 class AsrLoggerPort(Protocol):
@@ -50,53 +48,19 @@ class AsrBackendFactoryPort(Protocol):
         ...
 
 
-class OnlineDiarizerPort(Protocol):
-    def last_error(self) -> Optional[str]:
-        ...
-
-    def assign_with_debug(
-        self, audio_16k: Any, ts: Optional[float] = None
-    ) -> tuple[str, Optional[int], float, bool]:
-        ...
-
-
-class OnlineDiarizerFactoryPort(Protocol):
-    def __call__(
-        self,
-        *,
-        similarity_threshold: float,
-        min_segment_s: float,
-        window_s: float,
-        backend: str,
-        device: str,
-        temp_dir: Optional[Any] = None,
-    ) -> OnlineDiarizerPort:
-        ...
-
-
-class PyannoteDiarizerPort(Protocol):
-    def diarize(self, audio_16k: Any, *, t_offset: float = 0.0) -> List[DiarSegment]:
-        ...
-
-
 class AudioSegmenterFactoryPort(Protocol):
     def __call__(
         self,
         *,
         config: Any,
         segment_queue: Any,
+        diarization_queue: Optional[Any],
         diarization: Any,
         metrics: Any,
         log_event: Callable[[dict], None],
         segmentation_params: Callable[[], tuple[float, float, float]],
     ) -> Any:
         ...
-
-
-class PyannoteDiarizerFactoryPort(Protocol):
-    def __call__(self, *, device: str) -> PyannoteDiarizerPort:
-        ...
-
 
 class StopSignalPort(Protocol):
     def clear(self) -> None:

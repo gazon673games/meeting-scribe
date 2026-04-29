@@ -13,18 +13,32 @@ from application.asr_language import initial_prompt_for_language, normalize_asr_
 from application.asr_session import ASRRuntime, ASRRuntimeFactory, ASRSessionSettings
 from application.audio_runtime import AudioRuntimeFactory, AudioRuntimePort
 from application.audio_sources import AudioSourceFactory
-from application.events import AsrMetricsEvent, SourceErrorEvent, UtteranceEvent, event_from_record, event_to_record
+from application.events import (
+    AsrMetricsEvent,
+    SourceErrorEvent,
+    TranscriptSpeakerUpdateEvent,
+    UtteranceEvent,
+    event_from_record,
+    event_to_record,
+)
 from application.local_paths import project_recordings_dir
 from application.recording import WavRecorder, WavRecorderFactory
 from application.session_tasks import OfflinePassRequest, OfflinePassUseCase, StopAsrRequest, StopAsrSessionUseCase
 from audio.domain.formats import AudioFormat
 from session.domain.aggregate import SessionAggregate
+from session.domain.speaker_labels import default_speaker_label_for_source_kind
 from transcription.application.startup_service import TranscriptionStartupService
 from transcription.application.transcript_store import TranscriptStore
+from transcription.domain.transcript_lines import (
+    best_line_for_speaker_update,
+    build_transcript_line_id,
+    update_line_speaker,
+)
 from transcription.domain.aggregate import TranscriptionJobAggregate
 
 
 EventSink = Callable[[str, Dict[str, Any]], None]
+_MAX_PENDING_SPEAKER_UPDATES = 200
 
 
 @dataclass
@@ -88,6 +102,7 @@ class HeadlessSessionController:
         self._asr_event_stop = threading.Event()
         self._asr_event_thread: Optional[threading.Thread] = None
         self._transcript_lines: list[Dict[str, Any]] = []
+        self._pending_speaker_updates: list[TranscriptSpeakerUpdateEvent] = []
         self._realtime_transcript_enabled = False
         self._human_log_path: Optional[Path] = None
         self._realtime_transcript_path: Optional[Path] = None
@@ -179,6 +194,7 @@ class HeadlessSessionController:
     def clear_transcript(self) -> Dict[str, Any]:
         with self._lock:
             self._transcript_lines.clear()
+            self._pending_speaker_updates.clear()
             self._emit("transcript_cleared", {})
             return self.snapshot()
 
@@ -300,7 +316,7 @@ class HeadlessSessionController:
             lines = list(self._transcript_lines[-int(limit):])
         return "\n".join(
             f"[{time.strftime('%H:%M:%S', time.localtime(float(line.get('ts', time.time()))))}] "
-            f"{line.get('stream', 'mix')}: {line.get('text', '')}"
+            f"{_line_speaker_or_stream(line)}: {line.get('text', '')}"
             for line in lines
         )
 
@@ -377,14 +393,16 @@ class HeadlessSessionController:
             return
         ts = float(line.get("ts") or time.time())
         stream = str(line.get("stream") or "mix")
+        speaker = _clean_speaker(line.get("speaker", ""))
+        label = speaker or stream
         formatted = (
             f"[{time.strftime('%H:%M:%S', time.localtime(ts))}] "
-            f"{stream}: {text}"
+            f"{label}: {text}"
         )
         try:
             store.write_human_line(formatted)
             if self._realtime_transcript_enabled:
-                store.write_realtime_srt_entry(ts, stream, text)
+                store.write_realtime_srt_entry(ts, stream, text, speaker=speaker)
             self._sync_transcript_store_paths_locked()
         except Exception:
             pass
@@ -402,7 +420,7 @@ class HeadlessSessionController:
             return self._last_warning
 
         self._drain_asr_events()
-        settings = _asr_settings_from_params(params)
+        settings = _asr_settings_from_params(params, source_speaker_labels=self._source_speaker_labels_locked())
         self._transcription_state.begin_start(
             model_name=settings.model_name,
             mode=str(settings.mode),
@@ -577,12 +595,37 @@ class HeadlessSessionController:
             if isinstance(event, UtteranceEvent):
                 text = event.text.strip()
                 if text:
-                    line = {"ts": float(event.ts), "stream": str(event.stream), "text": text, "overload": bool(event.overload)}
+                    stream = str(event.stream)
+                    speaker = _clean_speaker(event.speaker) or self._speaker_label_for_stream_locked(stream)
+                    t_start = _optional_float(event.t_start)
+                    t_end = _optional_float(event.t_end)
+                    line = {
+                        "id": build_transcript_line_id(
+                            stream=stream,
+                            t_start=t_start,
+                            t_end=t_end,
+                            ts=float(event.ts),
+                        ),
+                        "ts": float(event.ts),
+                        "stream": stream,
+                        "speaker": speaker,
+                        "t_start": t_start,
+                        "t_end": t_end,
+                        "text": text,
+                        "overload": bool(event.overload),
+                    }
+                    self._apply_pending_speaker_updates_locked(line)
                     self._transcript_lines.append(line)
                     if len(self._transcript_lines) > 500:
                         del self._transcript_lines[:-500]
                     record["line"] = line
                     self._write_transcript_line_locked(line)
+            elif isinstance(event, TranscriptSpeakerUpdateEvent):
+                line = self._find_line_for_speaker_update_locked(event)
+                if line is None:
+                    self._remember_pending_speaker_update_locked(event)
+                elif self._update_line_speaker_from_event_locked(line, event):
+                    record["line"] = dict(line)
             elif isinstance(event, AsrMetricsEvent):
                 self._asr_metrics = {
                     "segDroppedTotal": int(event.seg_dropped_total),
@@ -596,6 +639,8 @@ class HeadlessSessionController:
         self._emit("asr_event", record)
         if isinstance(event, UtteranceEvent) and str(record.get("text", "")).strip():
             self._emit("transcript_line", record.get("line", {}))
+        if isinstance(event, TranscriptSpeakerUpdateEvent) and record.get("line"):
+            self._emit("transcript_line_update", record.get("line", {}))
 
     def _current_output_path(self, raw_name: str) -> Path:
         name = Path(raw_name or "capture_mix.wav").name
@@ -643,6 +688,62 @@ class HeadlessSessionController:
             "missingOutFrames": int(_safe_float(source_meters.get("missing_out_frames", 0), 0.0)),
             "sampleRate": int(_safe_float(source_meters.get("src_rate", 0), 0.0)),
         }
+
+    def _source_speaker_labels_locked(self) -> Dict[str, str]:
+        return {
+            source.name: default_speaker_label_for_source_kind(source.kind)
+            for source in self._sources.values()
+            if default_speaker_label_for_source_kind(source.kind)
+        }
+
+    def _speaker_label_for_stream_locked(self, stream: str) -> str:
+        source = self._sources.get(str(stream))
+        if source is None:
+            return ""
+        return default_speaker_label_for_source_kind(source.kind)
+
+    def _update_line_speaker_from_event_locked(
+        self,
+        line: Dict[str, Any],
+        event: TranscriptSpeakerUpdateEvent,
+    ) -> bool:
+        return update_line_speaker(
+            line,
+            speaker=str(event.speaker),
+            speaker_source=str(event.source or "diarization"),
+            confidence=_optional_float(event.confidence),
+        )
+
+    def _find_line_for_speaker_update_locked(
+        self,
+        event: TranscriptSpeakerUpdateEvent,
+        *,
+        lines: Optional[list[Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        return best_line_for_speaker_update(
+            lines if lines is not None else self._transcript_lines,
+            line_id=str(event.line_id or ""),
+            stream=str(event.stream or ""),
+            t_start=_optional_float(event.t_start),
+            t_end=_optional_float(event.t_end),
+        )
+
+    def _remember_pending_speaker_update_locked(self, event: TranscriptSpeakerUpdateEvent) -> None:
+        if not _clean_speaker(event.speaker):
+            return
+        self._pending_speaker_updates.append(event)
+        if len(self._pending_speaker_updates) > _MAX_PENDING_SPEAKER_UPDATES:
+            del self._pending_speaker_updates[:-_MAX_PENDING_SPEAKER_UPDATES]
+
+    def _apply_pending_speaker_updates_locked(self, line: Dict[str, Any]) -> None:
+        pending: list[TranscriptSpeakerUpdateEvent] = []
+        for event in self._pending_speaker_updates:
+            target = self._find_line_for_speaker_update_locked(event, lines=[line])
+            if target is line:
+                self._update_line_speaker_from_event_locked(line, event)
+            else:
+                pending.append(event)
+        self._pending_speaker_updates = pending[-_MAX_PENDING_SPEAKER_UPDATES:]
 
     def _require_source(self, name: str) -> HeadlessSource:
         source = self._sources.get(str(name))
@@ -705,6 +806,15 @@ def _safe_float(raw: object, default: float) -> float:
         return float(default)
 
 
+def _optional_float(raw: object) -> Optional[float]:
+    try:
+        if raw is None:
+            return None
+        return float(raw)
+    except Exception:
+        return None
+
+
 def _rms_to_pct(rms: float) -> int:
     value = max(0.0, min(1.0, float(rms)))
     return max(0, min(100, int((value**0.5) * 100.0)))
@@ -734,7 +844,11 @@ def _drops_record(meters: Dict[str, Any], writer: WavRecorder) -> Dict[str, Any]
     }
 
 
-def _asr_settings_from_params(params: Dict[str, Any]) -> ASRSessionSettings:
+def _asr_settings_from_params(
+    params: Dict[str, Any],
+    *,
+    source_speaker_labels: Optional[Dict[str, str]] = None,
+) -> ASRSessionSettings:
     language = normalize_asr_language(str(params.get("language", params.get("lang", "ru"))))
     mode_raw = str(params.get("asrMode", params.get("asr_mode", "split"))).strip().lower()
     mode = "split" if mode_raw in {"1", "split", "sources"} else "mix"
@@ -781,7 +895,64 @@ def _asr_settings_from_params(params: Dict[str, Any]) -> ASRSessionSettings:
         ),
         asr_language=runtime_asr_language(language),
         asr_initial_prompt=initial_prompt_for_language(language),
+        source_speaker_labels=dict(source_speaker_labels or {}),
+        diarization_enabled=bool(params.get("diarizationEnabled", params.get("diarization_enabled", False))),
+        diar_backend=_normalize_diar_backend(params.get("diarBackend", params.get("diar_backend", "online"))),
+        diarization_sidecar_enabled=bool(
+            params.get("diarizationSidecarEnabled", params.get("diarization_sidecar_enabled", True))
+        ),
+        diarization_queue_size=_safe_int(
+            params.get("diarization_queue_size", params.get("diarizationQueueSize", 50)),
+            50,
+            1,
+            500,
+        ),
+        diar_sherpa_embedding_model_path=str(
+            _first_param(
+                params,
+                "diarSherpaEmbeddingModelPath",
+                "diar_sherpa_embedding_model_path",
+                "diarizationSherpaEmbeddingModelPath",
+                default="",
+            )
+            or ""
+        ).strip(),
+        diar_sherpa_provider=str(
+            _first_param(params, "diarSherpaProvider", "diar_sherpa_provider", default="cpu") or "cpu"
+        ).strip()
+        or "cpu",
+        diar_sherpa_num_threads=_safe_int(
+            _first_param(params, "diarSherpaNumThreads", "diar_sherpa_num_threads", default=1),
+            1,
+            1,
+            32,
+        ),
     )
+
+
+def _clean_speaker(raw: object) -> str:
+    text = str(raw or "").strip()
+    if not text or text == "S?":
+        return ""
+    return text
+
+
+def _line_speaker_or_stream(line: Dict[str, Any]) -> str:
+    return _clean_speaker(line.get("speaker", "")) or str(line.get("stream") or "mix")
+
+
+def _normalize_diar_backend(raw: object):
+    value = str(raw or "online").strip().lower()
+    if value in {"pyannote", "online", "nemo", "sherpa_onnx"}:
+        return value
+    return "online"
+
+
+def _first_param(params: Dict[str, Any], *keys: str, default: object = None) -> object:
+    for key in keys:
+        if key in params:
+            return params[key]
+    return default
 
 
 def _safe_int(raw: object, default: int, lo: int, hi: int) -> int:

@@ -5,7 +5,6 @@ import time
 from dataclasses import dataclass
 from typing import Any, Optional, Tuple
 
-from asr.application.diarization import DiarizationPort
 from asr.application.events import ASREventPublisher
 from asr.application.ingest import TapIngestRuntime
 from asr.application.metrics import ASRMetrics
@@ -23,6 +22,8 @@ from asr.application.transcription_worker import TranscriptionWorkerRuntime
 from asr.application.utterances import UtteranceAggregator
 from asr.application.worker_config import TranscriptionWorkerConfig
 from asr.domain.segments import Segment
+from diarization.application.diarization import DiarizationPort
+from diarization.application.diarization_updates import DiarizationUpdateConfig, DiarizationUpdateRuntime
 
 
 @dataclass
@@ -38,9 +39,11 @@ class ASRRuntimeGraph:
     segmenter_config: SegmenterConfig
     segmenter: AudioSegmenterPort
     worker: TranscriptionWorkerRuntime
+    diarization_updates: Optional[DiarizationUpdateRuntime]
     ingest: TapIngestRuntime
     ingest_worker: Optional[WorkerHandlePort] = None
     transcription_worker: Optional[WorkerHandlePort] = None
+    diarization_worker: Optional[WorkerHandlePort] = None
 
     def start(self, *, settings: ASRPipelineSettings, session_id: str) -> None:
         self.stop.clear()
@@ -48,6 +51,8 @@ class ASRRuntimeGraph:
         self.metrics.reset()
         self.segmenter.reset_runtime()
         self.worker.reset_runtime()
+        if self.diarization_updates is not None:
+            self.diarization_updates.reset_runtime()
 
         self.events.log(self._build_started_event(settings=settings, session_id=session_id))
         self.ingest_worker = self.worker_runner.start_worker(name="asr-ingest", target=self.ingest.run_safe)
@@ -55,6 +60,11 @@ class ASRRuntimeGraph:
             name="asr-worker",
             target=self.worker.run_safe,
         )
+        if self.diarization_updates is not None:
+            self.diarization_worker = self.worker_runner.start_worker(
+                name="asr-diarization",
+                target=self.diarization_updates.run_safe,
+            )
 
     def stop_runtime(self) -> None:
         self.stop.set()
@@ -64,6 +74,9 @@ class ASRRuntimeGraph:
         if self.transcription_worker:
             self.transcription_worker.join()
             self.transcription_worker = None
+        if self.diarization_worker:
+            self.diarization_worker.join()
+            self.diarization_worker = None
 
         try:
             self.worker.flush_utterances(force=True)
@@ -125,6 +138,7 @@ def build_runtime_graph(
 ) -> ASRRuntimeGraph:
     stop = dependencies.worker_runner.create_stop_signal()
     segment_queue: "queue.Queue[Segment]" = queue.Queue(maxsize=50)
+    diarization_queue = _build_diarization_queue(settings)
 
     logger = dependencies.logger_factory(
         root=project_root,
@@ -162,6 +176,7 @@ def build_runtime_graph(
         metrics=metrics,
         log_event=events.log,
         segmentation_params=segmentation_params,
+        diarization_queue=diarization_queue,
     )
     worker = TranscriptionWorkerRuntime(
         config=TranscriptionWorkerConfig.from_settings(settings),
@@ -183,6 +198,13 @@ def build_runtime_graph(
         log_event=events.log,
         emit_metrics=lambda force=False: worker.emit_metrics(force=bool(force)),
     )
+    diarization_updates = _build_diarization_updates(
+        settings=settings,
+        segment_queue=diarization_queue,
+        stop=stop,
+        diarization=diarization,
+        log_event=events.log,
+    )
     return ASRRuntimeGraph(
         worker_runner=dependencies.worker_runner,
         stop=stop,
@@ -195,5 +217,38 @@ def build_runtime_graph(
         segmenter_config=segmenter_config,
         segmenter=segmenter,
         worker=worker,
+        diarization_updates=diarization_updates,
         ingest=ingest,
+    )
+
+
+def _diarization_sidecar_enabled(settings: ASRPipelineSettings) -> bool:
+    return bool(settings.diarization_enabled and settings.diarization_sidecar_enabled)
+
+
+def _build_diarization_queue(settings: ASRPipelineSettings) -> Optional["queue.Queue[Segment]"]:
+    if not _diarization_sidecar_enabled(settings):
+        return None
+    return queue.Queue(maxsize=max(1, int(settings.diarization_queue_size)))
+
+
+def _build_diarization_updates(
+    *,
+    settings: ASRPipelineSettings,
+    segment_queue: Optional["queue.Queue[Segment]"],
+    stop: StopSignalPort,
+    diarization: DiarizationPort,
+    log_event,
+) -> Optional[DiarizationUpdateRuntime]:
+    if segment_queue is None:
+        return None
+    return DiarizationUpdateRuntime(
+        config=DiarizationUpdateConfig(
+            enabled=_diarization_sidecar_enabled(settings),
+            source_speaker_labels=dict(settings.source_speaker_labels or {}),
+        ),
+        segment_queue=segment_queue,
+        stop_event=stop,
+        diarization=diarization,
+        log_event=log_event,
     )

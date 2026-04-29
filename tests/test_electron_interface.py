@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import List, Tuple
 from unittest.mock import patch
 
-from application.event_types import UtteranceEvent
+from application.event_types import TranscriptSpeakerUpdateEvent, UtteranceEvent
 from application.codex_assistant import CodexAssistantResult
 from application.codex_config import CodexProfile
 from interface.assistant_controller import AssistantController
@@ -193,8 +193,10 @@ class _FakeAsrRuntime:
 class _FakeAsrRuntimeFactory:
     def __init__(self) -> None:
         self.runtime = None
+        self.settings = None
 
     def build(self, settings, *, tap_queue, project_root: Path, event_queue=None):  # noqa: ANN001
+        self.settings = settings
         self.runtime = _FakeAsrRuntime(event_queue)
         return self.runtime
 
@@ -342,7 +344,129 @@ class ElectronInterfaceTests(unittest.TestCase):
             self.assertTrue(started["asrRunning"])
             self.assertTrue(snapshot["transcript"])
             self.assertEqual(snapshot["transcript"][0]["text"], "hello from asr")
+            self.assertEqual(snapshot["transcript"][0]["speaker"], "Me")
             self.assertTrue(asr_factory.runtime.stopped)
+
+    def test_backend_passes_diarization_config_to_asr_session(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            repository = JsonConfigRepository(root / "config.json")
+            repository.write(
+                {
+                    "ui": {"asr_enabled": True, "model": "medium", "lang": "en", "asr_mode": 1},
+                    "asr": {
+                        "diarization_enabled": True,
+                        "diar_backend": "sherpa_onnx",
+                        "diarization_sidecar_enabled": True,
+                        "diarization_queue_size": 12,
+                        "diar_sherpa_embedding_model_path": "models/speaker.onnx",
+                        "diar_sherpa_provider": "cpu",
+                        "diar_sherpa_num_threads": 2,
+                    },
+                }
+            )
+            asr_factory = _FakeAsrRuntimeFactory()
+            controller = HeadlessSessionController(
+                project_root=root,
+                audio_runtime_factory=_FakeAudioRuntimeFactory(),
+                audio_source_factory=_FakeAudioSourceFactory(),
+                wav_recorder_factory=_FakeWavRecorderFactory(),
+                asr_runtime_factory=asr_factory,
+                transcription_startup_service=TranscriptionStartupService(),
+            )
+            backend = ElectronBackend(root, repository, _DeviceCatalog(), controller)
+
+            backend.handle("list_devices")
+            backend.handle("add_source", {"deviceId": "input:0"})
+            state = backend.handle("get_state")
+            backend.handle("start_session", {})
+            backend.handle("stop_session", {"runOfflinePass": False})
+
+            self.assertTrue(state["configSummary"]["diarizationEnabled"])
+            self.assertIn("sherpa_onnx", state["options"]["diarizationBackends"])
+            self.assertTrue(asr_factory.settings.diarization_enabled)
+            self.assertEqual(asr_factory.settings.diar_backend, "sherpa_onnx")
+            self.assertEqual(asr_factory.settings.diarization_queue_size, 12)
+            self.assertEqual(asr_factory.settings.diar_sherpa_embedding_model_path, "models/speaker.onnx")
+            self.assertEqual(asr_factory.settings.diar_sherpa_num_threads, 2)
+
+    def test_headless_session_applies_post_fact_speaker_update(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            events: list[tuple[str, dict]] = []
+            controller = HeadlessSessionController(
+                project_root=root,
+                audio_runtime_factory=_FakeAudioRuntimeFactory(),
+                audio_source_factory=_FakeAudioSourceFactory(),
+                wav_recorder_factory=_FakeWavRecorderFactory(),
+                event_sink=lambda typ, payload: events.append((typ, payload)),
+            )
+            controller.add_source(kind="loopback", token=1, label="Desktop")
+
+            controller._handle_asr_event(  # noqa: SLF001
+                UtteranceEvent(
+                    text="question",
+                    stream="desktop_audio",
+                    speaker="Remote",
+                    t_start=1.0,
+                    t_end=2.0,
+                    ts=2.2,
+                )
+            )
+            line_id = controller.snapshot()["transcript"][0]["id"]
+            controller._handle_asr_event(  # noqa: SLF001
+                TranscriptSpeakerUpdateEvent(
+                    line_id=line_id,
+                    speaker="Remote S1",
+                    confidence=0.9,
+                    source="test",
+                    ts=2.5,
+                )
+            )
+
+            line = controller.snapshot()["transcript"][0]
+            self.assertEqual(line["speaker"], "Remote S1")
+            self.assertEqual(line["speakerSource"], "test")
+            self.assertTrue(any(kind == "transcript_line_update" for kind, _ in events))
+
+    def test_headless_session_applies_pending_speaker_update_to_new_line(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            events: list[tuple[str, dict]] = []
+            controller = HeadlessSessionController(
+                project_root=root,
+                audio_runtime_factory=_FakeAudioRuntimeFactory(),
+                audio_source_factory=_FakeAudioSourceFactory(),
+                wav_recorder_factory=_FakeWavRecorderFactory(),
+                event_sink=lambda typ, payload: events.append((typ, payload)),
+            )
+            controller.add_source(kind="loopback", token=1, label="Desktop")
+
+            controller._handle_asr_event(  # noqa: SLF001
+                TranscriptSpeakerUpdateEvent(
+                    stream="desktop_audio",
+                    speaker="Remote S2",
+                    t_start=1.0,
+                    t_end=2.0,
+                    source="test",
+                    ts=1.5,
+                )
+            )
+            controller._handle_asr_event(  # noqa: SLF001
+                UtteranceEvent(
+                    text="answer",
+                    stream="desktop_audio",
+                    speaker="Remote",
+                    t_start=1.0,
+                    t_end=2.0,
+                    ts=2.2,
+                )
+            )
+
+            line = controller.snapshot()["transcript"][0]
+            self.assertEqual(line["speaker"], "Remote S2")
+            self.assertEqual(line["speakerSource"], "test")
+            self.assertTrue(any(kind == "transcript_line" for kind, _ in events))
 
     def test_assistant_controller_uses_session_transcript_context(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:

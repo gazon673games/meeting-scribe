@@ -4,8 +4,8 @@ from typing import List
 
 import numpy as np
 
-from asr.application.ports import PyannoteDiarizerPort
-from asr.domain.segments import DiarSegment
+from diarization.application.ports import PyannoteDiarizerPort
+from diarization.domain.segments import DiarSegment
 
 
 class PyannoteDiarizer(PyannoteDiarizerPort):

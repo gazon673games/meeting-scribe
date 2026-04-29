@@ -9,6 +9,7 @@ from application.events.asr import (
     SegmentDroppedEvent,
     SegmentSkippedOverloadEvent,
     SourceErrorEvent,
+    TranscriptSpeakerUpdateEvent,
     UtteranceEvent,
 )
 from application.events.assistant import CodexFallbackStartedEvent, CodexResultEvent
@@ -34,6 +35,7 @@ __all__ = [
     "SegmentDroppedEvent",
     "SegmentSkippedOverloadEvent",
     "SourceErrorEvent",
+    "TranscriptSpeakerUpdateEvent",
     "TypedEvent",
     "UnknownEvent",
     "UtteranceEvent",

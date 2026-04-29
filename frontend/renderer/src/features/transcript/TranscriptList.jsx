@@ -8,7 +8,7 @@ const SPEAKER_TONE_COUNT = 10;
 function speakerLabel(line) {
   const speaker = String(line.speaker ?? "").trim();
   const stream = String(line.stream ?? "").trim();
-  return speaker || stream || "mix";
+  return speaker && speaker !== "S?" ? speaker : stream || "mix";
 }
 
 function speakerKey(line) {
@@ -57,7 +57,7 @@ export function TranscriptList({ lines, running }) {
     <div className="transcript-list" onScroll={updateStickiness} ref={listRef}>
       {lines.map((line, index) => (
         <TranscriptLine
-          key={`${line.ts}-${index}`}
+          key={line.id || `${line.ts}-${index}`}
           line={line}
           speaker={speakerLabel(line)}
           tone={resolveSpeakerTone(line, speakerTones)}
