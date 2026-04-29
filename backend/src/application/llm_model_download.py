@@ -65,8 +65,6 @@ def download_llm_model_async(
     source = parse_llm_source(name)
 
     def _run() -> None:
-        stop_event: threading.Event | None = None
-        monitor: threading.Thread | None = None
         try:
             resolved_source = _resolve_repo_source(source, proxy=proxy)
             root = llm_models_dir(project_root, models_dir)
@@ -77,22 +75,7 @@ def download_llm_model_async(
 
             on_progress({"message": f"Downloading {resolved_source.filename}...", "path": str(target), "downloadedBytes": _dir_size(target_dir), "speedBps": 0})
             if resolved_source.repo_id:
-                stop_event = threading.Event()
-                monitor = threading.Thread(
-                    target=_monitor_dir,
-                    args=(target_dir, stop_event, on_progress, str(target)),
-                    name="llm-model-download-progress",
-                    daemon=True,
-                )
-                monitor.start()
-                from huggingface_hub import hf_hub_download  # type: ignore
-
-                with _temporary_proxy_env(proxy):
-                    hf_hub_download(
-                        repo_id=resolved_source.repo_id,
-                        filename=resolved_source.filename,
-                        local_dir=str(target_dir),
-                    )
+                _download_hf_file(resolved_source, target, proxy=proxy, on_progress=on_progress)
             else:
                 _download_url(resolved_source.url, target, proxy=proxy, on_progress=on_progress)
 
@@ -102,11 +85,6 @@ def download_llm_model_async(
             on_done(None)
         except Exception as exc:
             on_done(f"{type(exc).__name__}: {exc}")
-        finally:
-            if stop_event is not None:
-                stop_event.set()
-            if monitor is not None:
-                monitor.join(timeout=0.5)
 
     threading.Thread(target=_run, name="llm-model-download", daemon=True).start()
 
@@ -205,9 +183,34 @@ def _choose_gguf_file(files: list[str]) -> str:
     return sorted(ggufs, key=lambda value: value.lower())[0]
 
 
-def _download_url(url: str, target: Path, *, proxy: str, on_progress: Callable[[dict], None]) -> None:
+def _download_hf_file(source: LlmSource, target: Path, *, proxy: str, on_progress: Callable[[dict], None]) -> None:
+    from huggingface_hub import hf_hub_url  # type: ignore
+
+    url = hf_hub_url(repo_id=source.repo_id, filename=source.filename)
+    _download_url(url, target, proxy=proxy, on_progress=on_progress, headers=_hf_headers())
+
+
+def _hf_headers() -> dict[str, str]:
+    token = (
+        os.environ.get("HF_TOKEN")
+        or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+    )
+    if not token:
+        return {}
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _download_url(
+    url: str,
+    target: Path,
+    *,
+    proxy: str,
+    on_progress: Callable[[dict], None],
+    headers: Optional[dict[str, str]] = None,
+) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
-    request = Request(url, headers={"User-Agent": "MeetingScribe/1.0"})
+    request = Request(url, headers={"User-Agent": "MeetingScribe/1.0", **(headers or {})})
     downloaded = 0
     last_bytes = 0
     last_ts = time.monotonic()
@@ -228,18 +231,6 @@ def _download_url(url: str, target: Path, *, proxy: str, on_progress: Callable[[
                     last_ts = now
                     on_progress({"message": "Downloading...", "path": str(target), "downloadedBytes": downloaded, "totalBytes": total, "speedBps": speed})
     tmp_target.replace(target)
-
-
-def _monitor_dir(path: Path, stop_event: threading.Event, on_progress: Callable[[dict], None], target: str) -> None:
-    last_bytes = _dir_size(path)
-    last_ts = time.monotonic()
-    while not stop_event.wait(1.0):
-        now = time.monotonic()
-        current = _dir_size(path)
-        speed = max(0.0, (current - last_bytes) / max(1e-6, now - last_ts))
-        last_bytes = current
-        last_ts = now
-        on_progress({"message": "Downloading...", "path": target, "downloadedBytes": current, "speedBps": speed})
 
 
 def _local_record(path: Path, downloads: dict[str, dict]) -> dict:
