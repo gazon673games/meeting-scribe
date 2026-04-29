@@ -84,13 +84,14 @@ class FileTranscriptStore:
         self._srt_pending = None
         self._srt_base_ts = None
 
-    def write_realtime_srt_entry(self, ts: float, stream: str, text: str) -> None:
+    def write_realtime_srt_entry(self, ts: float, stream: str, text: str, *, speaker: str = "") -> None:
         if not self._realtime_enabled:
             return
         self._open_realtime_if_needed()
         if self._realtime_transcript_fh is None:
             return
         try:
+            label = str(speaker or stream or "mix")
             if self._srt_base_ts is None:
                 self._srt_base_ts = ts
             relative_ts = max(0.0, ts - self._srt_base_ts)
@@ -101,10 +102,10 @@ class FileTranscriptStore:
                 self._realtime_transcript_fh.write(
                     f"{self._srt_index}\n"
                     f"{_srt_timestamp(prev['relative_ts'])} --> {_srt_timestamp(end_ts)}\n"
-                    f"{prev['stream']}: {prev['text']}\n\n"
+                    f"{prev['label']}: {prev['text']}\n\n"
                 )
                 self._realtime_transcript_fh.flush()
-            self._srt_pending = {"relative_ts": relative_ts, "stream": str(stream), "text": str(text)}
+            self._srt_pending = {"relative_ts": relative_ts, "label": label, "text": str(text)}
         except Exception:
             pass
 
@@ -118,7 +119,7 @@ class FileTranscriptStore:
             self._realtime_transcript_fh.write(
                 f"{self._srt_index}\n"
                 f"{_srt_timestamp(prev['relative_ts'])} --> {_srt_timestamp(end_ts)}\n"
-                f"{prev['stream']}: {prev['text']}\n\n"
+                f"{prev['label']}: {prev['text']}\n\n"
             )
             self._realtime_transcript_fh.flush()
         except Exception:

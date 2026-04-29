@@ -18,13 +18,81 @@ class SourceErrorEvent(TypedEvent):
 
 @dataclass(frozen=True)
 class UtteranceEvent(TypedEvent):
-    record_fields: ClassVar[tuple[str, ...]] = ("text", "stream", "overload")
+    record_fields: ClassVar[tuple[str, ...]] = ("text", "stream", "speaker", "t_start", "t_end", "overload")
     text: str
     stream: str
+    speaker: str = ""
+    t_start: Optional[float] = None
+    t_end: Optional[float] = None
     overload: bool = False
 
-    def __init__(self, *, text: str, stream: str = "", overload: bool = False, ts: Optional[float] = None):
-        init_event(self, EventType.UTTERANCE, ts, text=str(text), stream=str(stream), overload=bool(overload))
+    def __init__(
+        self,
+        *,
+        text: str,
+        stream: str = "",
+        speaker: str = "",
+        t_start: Optional[float] = None,
+        t_end: Optional[float] = None,
+        overload: bool = False,
+        ts: Optional[float] = None,
+    ):
+        init_event(
+            self,
+            EventType.UTTERANCE,
+            ts,
+            text=str(text),
+            stream=str(stream),
+            speaker=str(speaker),
+            t_start=t_start,
+            t_end=t_end,
+            overload=bool(overload),
+        )
+
+
+@dataclass(frozen=True)
+class TranscriptSpeakerUpdateEvent(TypedEvent):
+    record_fields: ClassVar[tuple[str, ...]] = (
+        "line_id",
+        "stream",
+        "speaker",
+        "t_start",
+        "t_end",
+        "confidence",
+        "source",
+    )
+    line_id: str
+    stream: str
+    speaker: str
+    t_start: Optional[float] = None
+    t_end: Optional[float] = None
+    confidence: Optional[float] = None
+    source: str = ""
+
+    def __init__(
+        self,
+        *,
+        speaker: str,
+        line_id: str = "",
+        stream: str = "",
+        t_start: Optional[float] = None,
+        t_end: Optional[float] = None,
+        confidence: Optional[float] = None,
+        source: str = "",
+        ts: Optional[float] = None,
+    ):
+        init_event(
+            self,
+            EventType.TRANSCRIPT_SPEAKER_UPDATE,
+            ts,
+            line_id=str(line_id),
+            stream=str(stream),
+            speaker=str(speaker),
+            t_start=t_start,
+            t_end=t_end,
+            confidence=confidence,
+            source=str(source),
+        )
 
 
 @dataclass(frozen=True)

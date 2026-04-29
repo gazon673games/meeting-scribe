@@ -21,6 +21,7 @@ for package_name in (
     "ctranslate2",
     "faster_whisper",
     "onnxruntime",
+    "sherpa_onnx",
     "soundcard",
     "sounddevice",
     "soundfile",

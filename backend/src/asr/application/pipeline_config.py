@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
-from asr.application.diarization import DiarizationConfig, DiarizationRuntimeFactoryPort
 from asr.application.ports import (
     AudioSegmenterFactoryPort,
     AsrBackendFactoryPort,
@@ -12,7 +11,9 @@ from asr.application.ports import (
     RealtimeWorkerRunnerPort,
 )
 from asr.application.segmentation import SegmenterConfig
-from asr.domain.types import DiarBackend, Mode, OverloadStrategy
+from asr.domain.types import Mode, OverloadStrategy
+from diarization.application.diarization import DiarizationConfig, DiarizationRuntimeFactoryPort
+from diarization.domain.types import DiarBackend
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ class ASRPipelineSettings:
     language: str = "ru"
     mode: Mode = "mix"
     source_names: Optional[List[str]] = None
+    source_speaker_labels: Dict[str, str] = field(default_factory=dict)
     asr_model_name: str = "large-v3"
     device: str = "cuda"
     compute_type: str = "int8_float16"
@@ -53,6 +55,11 @@ class ASRPipelineSettings:
     diar_window_s: float = 120.0
     diar_chunk_s: float = 30.0
     diar_step_s: float = 10.0
+    diarization_sidecar_enabled: bool = True
+    diarization_queue_size: int = 50
+    diar_sherpa_embedding_model_path: str = ""
+    diar_sherpa_provider: str = "cpu"
+    diar_sherpa_num_threads: int = 1
     agc_enabled: bool = True
     agc_target_rms: float = 0.06
     agc_max_gain: float = 6.0
@@ -123,4 +130,8 @@ def build_diarization_config(settings: ASRPipelineSettings, *, project_root: Opt
         step_s=float(settings.diar_step_s),
         device=str(settings.device),
         temp_dir=temp_dir,
+        source_speaker_labels=dict(settings.source_speaker_labels or {}),
+        sherpa_embedding_model_path=str(settings.diar_sherpa_embedding_model_path or ""),
+        sherpa_provider=str(settings.diar_sherpa_provider or "cpu"),
+        sherpa_num_threads=max(1, int(settings.diar_sherpa_num_threads)),
     )

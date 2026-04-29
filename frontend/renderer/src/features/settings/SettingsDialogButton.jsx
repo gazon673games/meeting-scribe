@@ -8,6 +8,7 @@ import { Field } from "../../shared/ui/Field";
 import { AdvancedAsrSettings } from "./AdvancedAsrSettings";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { AssistantProxySettings } from "./AssistantProxySettings";
+import { DiarizationSettings } from "./DiarizationSettings";
 import { HardwareSummary } from "./HardwareSummary";
 
 function ModelsSection({ draft, onChange, open }) {
@@ -437,6 +438,12 @@ export function SettingsDialogButton({
                 modelOptions={modelOptions}
                 overloadOptions={overloadOptions}
                 onAsrChange={onAsrChange}
+                onChange={onChange}
+              />
+              <DiarizationSettings
+                draft={draft}
+                locked={locked}
+                options={options}
                 onChange={onChange}
               />
               <ModelsSection draft={draft} open={open} onChange={onChange} />

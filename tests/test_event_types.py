@@ -9,6 +9,7 @@ from application.event_types import (
     CodexResultEvent,
     EventType,
     SourceErrorEvent,
+    TranscriptSpeakerUpdateEvent,
     UtteranceEvent,
     event_from_record,
     event_to_record,
@@ -26,15 +27,50 @@ class _Logger:
 
 class EventTypesTests(unittest.TestCase):
     def test_decodes_legacy_dict_to_typed_event(self) -> None:
-        event = event_from_record({"type": "utterance", "text": "hello", "stream": "mic", "overload": True, "ts": 1.5})
+        event = event_from_record(
+            {
+                "type": "utterance",
+                "text": "hello",
+                "stream": "mic",
+                "speaker": "Me",
+                "t_start": 1.0,
+                "t_end": 1.4,
+                "overload": True,
+                "ts": 1.5,
+            }
+        )
 
         self.assertIsInstance(event, UtteranceEvent)
         assert isinstance(event, UtteranceEvent)
         self.assertEqual(event.event_type, EventType.UTTERANCE)
         self.assertEqual(event.text, "hello")
         self.assertEqual(event.stream, "mic")
+        self.assertEqual(event.speaker, "Me")
+        self.assertEqual(event.t_start, 1.0)
+        self.assertEqual(event.t_end, 1.4)
         self.assertTrue(event.overload)
         self.assertEqual(event.ts, 1.5)
+
+    def test_decodes_transcript_speaker_update_event(self) -> None:
+        event = event_from_record(
+            {
+                "type": "transcript_speaker_update",
+                "line_id": "desktop:1000:2000",
+                "stream": "desktop",
+                "speaker": "Remote S1",
+                "t_start": 1.0,
+                "t_end": 2.0,
+                "confidence": 0.82,
+                "source": "diarization",
+                "ts": 3.0,
+            }
+        )
+
+        self.assertIsInstance(event, TranscriptSpeakerUpdateEvent)
+        assert isinstance(event, TranscriptSpeakerUpdateEvent)
+        self.assertEqual(event.speaker, "Remote S1")
+        self.assertEqual(event.confidence, 0.82)
+        self.assertEqual(event_to_record(event)["type"], "transcript_speaker_update")
 
     def test_typed_event_round_trips_to_record(self) -> None:
         event = CodexResultEvent(

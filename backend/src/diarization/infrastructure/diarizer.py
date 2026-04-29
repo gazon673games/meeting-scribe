@@ -7,7 +7,7 @@ from typing import Any, List, Optional, Tuple
 
 import numpy as np
 
-from asr.application.ports import OnlineDiarizerPort
+from diarization.application.ports import OnlineDiarizerPort
 
 
 @dataclass
@@ -58,17 +58,31 @@ class _ResemblyzerBackend:
 class _NeMoBackend:
     """
     NeMo TiTaNet embeddings backend.
-    Requires: asr/diar_backend_nemo.py
+    Requires: diarization/diar_backend_nemo.py
     """
 
     def __init__(self, device: str = "cuda", temp_dir: Optional[Any] = None) -> None:
-        from asr.infrastructure.diar_backend_nemo import NeMoTitaNetEmbedder
+        from diarization.infrastructure.diar_backend_nemo import NeMoTitaNetEmbedder
 
         temp_path = Path(temp_dir) if temp_dir is not None else None
         self._emb = NeMoTitaNetEmbedder(device=device, temp_dir=temp_path)
 
     def embed(self, audio_16k: np.ndarray) -> np.ndarray:
         return self._emb.embed_16k(audio_16k, sample_rate=16000)
+
+
+class _SherpaOnnxBackend:
+    def __init__(self, *, model_path: str, provider: str = "cpu", num_threads: int = 1) -> None:
+        from diarization.infrastructure.diar_backend_sherpa import SherpaOnnxSpeakerEmbeddingBackend
+
+        self._emb = SherpaOnnxSpeakerEmbeddingBackend(
+            model_path=model_path,
+            provider=provider,
+            num_threads=num_threads,
+        )
+
+    def embed(self, audio_16k: np.ndarray) -> np.ndarray:
+        return self._emb.embed(audio_16k)
 
 
 @dataclass
@@ -92,9 +106,12 @@ class OnlineDiarizer(OnlineDiarizerPort):
     window_s: float = 120.0  # window for estimating n_speakers
 
     # backend selection
-    backend: str = "resemblyzer"  # "resemblyzer" | "nemo"
+    backend: str = "resemblyzer"  # "resemblyzer" | "nemo" | "sherpa_onnx"
     device: str = "cuda"
     temp_dir: Optional[Any] = None
+    sherpa_model_path: str = ""
+    sherpa_provider: str = "cpu"
+    sherpa_num_threads: int = 1
 
     def __post_init__(self) -> None:
         self._backend: Optional[object] = None
@@ -112,6 +129,12 @@ class OnlineDiarizer(OnlineDiarizerPort):
         b = (self.backend or "resemblyzer").strip().lower()
         if b == "nemo":
             self._backend = _NeMoBackend(device=self.device, temp_dir=self.temp_dir)
+        elif b == "sherpa_onnx":
+            self._backend = _SherpaOnnxBackend(
+                model_path=self.sherpa_model_path,
+                provider=self.sherpa_provider,
+                num_threads=self.sherpa_num_threads,
+            )
         else:
             self._backend = _ResemblyzerBackend()
         return self._backend

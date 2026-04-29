@@ -6,13 +6,13 @@ from typing import Any
 from application.asr_session import ASRRuntime, ASRRuntimeFactory, ASRSessionSettings
 from asr.application.pipeline import ASRPipeline
 from asr.application.pipeline_config import ASRPipelineDependencies, ASRPipelineSettings
-from asr.infrastructure.diar_backend_pyannote import PyannoteDiarizer
-from asr.infrastructure.diarization_runtime import DefaultDiarizationRuntimeFactory
-from asr.infrastructure.diarizer import OnlineDiarizer
 from asr.infrastructure.logger import ASRLogger
 from asr.infrastructure.runtime_workers import ThreadRealtimeWorkerRunner
 from asr.infrastructure.segmentation import AudioSegmenter
 from asr.infrastructure.worker_faster_whisper import FasterWhisperASR
+from diarization.infrastructure.diar_backend_pyannote import PyannoteDiarizer
+from diarization.infrastructure.diarization_runtime import DefaultDiarizationRuntimeFactory
+from diarization.infrastructure.diarizer import OnlineDiarizer
 
 
 class ASRPipelineFactory(ASRRuntimeFactory):
@@ -27,6 +27,7 @@ class ASRPipelineFactory(ASRRuntimeFactory):
         pipeline_settings = ASRPipelineSettings(
             language=settings.language,
             mode=settings.mode,
+            source_speaker_labels=dict(settings.source_speaker_labels or {}),
             asr_model_name=settings.model_name,
             device=settings.device,
             compute_type=settings.compute_type,
@@ -39,8 +40,14 @@ class ASRPipelineFactory(ASRRuntimeFactory):
             vad_energy_threshold=settings.vad_energy_threshold,
             vad_hangover_ms=350,
             vad_min_speech_ms=350,
-            diarization_enabled=False,
-            log_speaker_labels=False,
+            diarization_enabled=bool(settings.diarization_enabled),
+            diar_backend=settings.diar_backend,
+            diarization_sidecar_enabled=bool(settings.diarization_sidecar_enabled),
+            diarization_queue_size=int(settings.diarization_queue_size),
+            diar_sherpa_embedding_model_path=settings.diar_sherpa_embedding_model_path,
+            diar_sherpa_provider=settings.diar_sherpa_provider,
+            diar_sherpa_num_threads=settings.diar_sherpa_num_threads,
+            log_speaker_labels=True,
             overload_strategy=settings.overload_strategy,
             overload_enter_qsize=settings.overload_enter_qsize,
             overload_exit_qsize=settings.overload_exit_qsize,

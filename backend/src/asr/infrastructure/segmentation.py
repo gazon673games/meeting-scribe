@@ -38,9 +38,11 @@ class AudioSegmenter:
         metrics: ASRMetrics,
         log_event: LogEvent,
         segmentation_params: SegmentationParams,
+        diarization_queue: Optional["queue.Queue[Segment]"] = None,
     ) -> None:
         self._cfg = config
         self._seg_q = segment_queue
+        self._diar_q = diarization_queue
         self._diar = diarization
         self._metrics = metrics
         self._log_event = log_event
@@ -184,17 +186,35 @@ class AudioSegmenter:
         return seg_ms >= self._cfg.min_segment_ms and state.vad.speech_long_enough()
 
     def _enqueue_segment(self, stream: str, t_start: float, t_end: float, audio: np.ndarray) -> None:
+        segment = Segment(
+            stream=stream, t_start=float(t_start), t_end=float(t_end),
+            audio=MonoAudio16kBuffer.from_array(audio), enqueue_ts=time.time(),
+        )
         try:
-            self._seg_q.put_nowait(Segment(
-                stream=stream, t_start=float(t_start), t_end=float(t_end),
-                audio=MonoAudio16kBuffer.from_array(audio), enqueue_ts=time.time(),
-            ))
+            self._seg_q.put_nowait(segment)
         except queue.Full:
             self._metrics.record_segment_dropped()
             self._log_event({
                 "type": "segment_dropped", "stream": stream,
                 "reason": "seg_queue_full",
                 "seg_qsize": int(self._seg_q.qsize()), "ts": time.time(),
+            })
+            return
+
+        self._enqueue_diarization_segment(segment)
+
+    def _enqueue_diarization_segment(self, segment: Segment) -> None:
+        if self._diar_q is None:
+            return
+        try:
+            self._diar_q.put_nowait(segment)
+        except queue.Full:
+            self._log_event({
+                "type": "diar_segment_dropped",
+                "stream": segment.stream,
+                "reason": "diar_queue_full",
+                "diar_qsize": int(self._diar_q.qsize()),
+                "ts": time.time(),
             })
 
     def _reseed_overlap(self, stream: str, state: _StreamState, audio: np.ndarray, t_end: float) -> None:

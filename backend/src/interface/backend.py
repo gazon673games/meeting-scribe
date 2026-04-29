@@ -83,6 +83,8 @@ class ElectronBackend:
                 "computeType": str(asr.get("compute_type", "")),
                 "cpuThreads": _int_or_default(asr.get("cpu_threads", 0), 0),
                 "numWorkers": _int_or_default(asr.get("num_workers", 1), 1),
+                "diarizationEnabled": bool(asr.get("diarization_enabled", False)),
+                "diarBackend": str(asr.get("diar_backend", "online") or "online"),
                 "codexEnabled": bool(codex.get("enabled", False)) if isinstance(codex, dict) else False,
                 "codexProfiles": len(profiles) if isinstance(profiles, list) else 0,
             },
@@ -96,6 +98,8 @@ class ElectronBackend:
                 ],
                 "asrDevices": ["cuda", "cpu"],
                 "computeTypes": ["int8_float16", "float16", "int8", "int8_float32", "float32"],
+                "diarizationBackends": ["online", "sherpa_onnx", "nemo", "pyannote"],
+                "diarizationProviders": ["cpu", "cuda"],
                 "overloadStrategies": ["drop_old", "keep_all"],
                 "profileDefaults": {
                     PROFILE_REALTIME: profile_defaults(PROFILE_REALTIME),

@@ -14,6 +14,7 @@ from application.events.asr import (
     SegmentDroppedEvent,
     SegmentSkippedOverloadEvent,
     SourceErrorEvent,
+    TranscriptSpeakerUpdateEvent,
     UtteranceEvent,
 )
 from application.events.assistant import CodexFallbackStartedEvent, CodexResultEvent
@@ -60,11 +61,34 @@ def _float0(raw: Any) -> float:
     return safe_float(raw, 0.0)
 
 
+def _optional_str(raw: Any) -> str:
+    return "" if raw is None else str(raw)
+
+
 EVENT_SPECS: Dict[str, EventSpec] = {
     EventType.SOURCE_ERROR.value: (SourceErrorEvent, (("source", _str, ""), ("error", _str, ""))),
     EventType.UTTERANCE.value: (
         UtteranceEvent,
-        (("text", _str, ""), ("stream", _str, ""), ("overload", _bool, False)),
+        (
+            ("text", _str, ""),
+            ("stream", _str, ""),
+            ("speaker", _str, ""),
+            ("t_start", optional_float, None),
+            ("t_end", optional_float, None),
+            ("overload", _bool, False),
+        ),
+    ),
+    EventType.TRANSCRIPT_SPEAKER_UPDATE.value: (
+        TranscriptSpeakerUpdateEvent,
+        (
+            ("line_id", _optional_str, ""),
+            ("stream", _optional_str, ""),
+            ("speaker", _str, ""),
+            ("t_start", optional_float, None),
+            ("t_end", optional_float, None),
+            ("confidence", optional_float, None),
+            ("source", _optional_str, ""),
+        ),
     ),
     EventType.ASR_OVERLOAD.value: (
         AsrOverloadEvent,
