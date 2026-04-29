@@ -71,10 +71,13 @@ export function App() {
           assistant={app.assistant}
           assistantPing={app.assistantPing}
           contextReady={app.assistantContextReady}
-          disabled={!app.capabilities.assistant || !app.assistant.enabled || app.assistant.busy || app.assistant.providerAvailable === false}
+          disabled={!app.capabilities.assistant || !app.assistant.enabled || app.assistant.busy}
+          localLlmStatus={app.localLlmStatus}
           profiles={app.assistantProfiles}
           onAuthorize={app.startAssistantLogin}
           onPing={app.pingAssistantProvider}
+          onStartLocalModel={app.startLocalModel}
+          onStopLocalModel={app.stopLocalModel}
           onInvoke={(params) => app.runBackendAction("invoke_assistant", params)}
         />
       )

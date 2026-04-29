@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
+import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from application.codex_prompting import normalize_model_name
@@ -24,6 +30,9 @@ from assistant.application.provider import (
 
 OLLAMA_DEFAULT_URL = "http://127.0.0.1:11434"
 OPENAI_LOCAL_DEFAULT_URL = "http://127.0.0.1:1234/v1"
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+_SERVER_LOCK = threading.RLock()
+_SERVER_PROCESSES: dict[str, subprocess.Popen] = {}
 
 
 class OllamaLocalLlmRunner:
@@ -109,10 +118,10 @@ class OpenAICompatibleLocalLlmRunner:
         profile = _profile_for_provider(settings, self.provider_id)
         base_url = _base_url(profile, OPENAI_LOCAL_DEFAULT_URL)
         try:
-            _request_json("GET", f"{base_url}/models", timeout_s=_status_timeout(settings))
+            message = _ensure_openai_local_runtime(profile, settings, base_url)
         except LocalLlmError as exc:
             return _ping_error(self.provider_id, self.provider_label, exc)
-        return _ping_ok(self.provider_id, self.provider_label, f"Local endpoint is reachable at {base_url}.")
+        return _ping_ok(self.provider_id, self.provider_label, message)
 
     def run(self, request: AssistantProviderRequest) -> AssistantProviderResult:
         started = time.time()
@@ -138,10 +147,16 @@ class OpenAICompatibleLocalLlmRunner:
         if (max_tokens := _max_tokens(profile)) > 0:
             body["max_tokens"] = max_tokens
 
+        base_url = _base_url(profile, OPENAI_LOCAL_DEFAULT_URL)
+        try:
+            _ensure_openai_local_runtime(profile, request.settings, base_url)
+        except LocalLlmError as exc:
+            return _error_result(profile, request.original_cmd, self.provider_id, model, exc.as_provider_error(), started)
+
         try:
             data = _request_json(
                 "POST",
-                f"{_base_url(profile, OPENAI_LOCAL_DEFAULT_URL)}/chat/completions",
+                f"{base_url}/chat/completions",
                 payload=body,
                 headers=_auth_header(profile),
                 timeout_s=request.settings.timeout_s,
@@ -168,6 +183,192 @@ class LocalLlmError(Exception):
             retryable=self.retryable,
             suggestion=self.suggestion,
         )
+
+
+def start_local_llm_async(profile: Any, project_root: Path, emit_event: Any) -> dict:
+    """Start llama-server for an openai_local profile in a background thread."""
+    profile_id = str(getattr(profile, "id", "") or getattr(profile, "label", "") or "local")
+    base_url = _base_url(profile, OPENAI_LOCAL_DEFAULT_URL)
+
+    class _Settings:
+        timeout_s = 60
+        project_root = None
+
+    _Settings.project_root = project_root
+
+    def _run() -> None:
+        def _emit(state: str, message: str = "") -> None:
+            if callable(emit_event):
+                emit_event({"type": "local_llm_status", "profileId": profile_id, "state": state, "message": message})
+
+        try:
+            _emit("starting")
+            msg = _ensure_openai_local_runtime(profile, _Settings(), base_url)
+            _emit("running", msg)
+        except LocalLlmError as exc:
+            _emit("error", exc.message)
+        except Exception as exc:
+            _emit("error", str(exc))
+
+    threading.Thread(target=_run, daemon=True, name=f"llm-start-{profile_id}").start()
+    return {"started": True, "profileId": profile_id}
+
+
+def stop_local_llm(profile: Any) -> dict:
+    """Terminate llama-server started for a given profile's base_url host:port."""
+    profile_id = str(getattr(profile, "id", "") or getattr(profile, "label", "") or "local")
+    base_url = _base_url(profile, OPENAI_LOCAL_DEFAULT_URL)
+    parsed = urllib.parse.urlparse(base_url)
+    host = (parsed.hostname or "127.0.0.1").lower()
+    port = int(parsed.port or (443 if parsed.scheme == "https" else 80))
+    prefix = f"{host}:{port}:"
+
+    killed = 0
+    with _SERVER_LOCK:
+        for key in list(_SERVER_PROCESSES.keys()):
+            if key.startswith(prefix):
+                process = _SERVER_PROCESSES.pop(key)
+                if process.poll() is None:
+                    process.terminate()
+                    killed += 1
+
+    return {"stopped": True, "profileId": profile_id, "killed": killed}
+
+
+def _ensure_openai_local_runtime(profile: Any, settings: AssistantExecutionSettings, base_url: str) -> str:
+    try:
+        _request_json("GET", f"{base_url}/models", timeout_s=_status_timeout(settings))
+        return f"Local endpoint is reachable at {base_url}."
+    except LocalLlmError as exc:
+        if exc.code != "local_llm_unavailable":
+            raise
+
+    parsed = urllib.parse.urlparse(base_url)
+    host = parsed.hostname or "127.0.0.1"
+    port = int(parsed.port or (443 if parsed.scheme == "https" else 80))
+    if host.lower() not in LOCAL_HOSTS:
+        raise LocalLlmError(
+            code="local_llm_unavailable",
+            message=f"Local LLM endpoint is not reachable at {base_url}",
+            suggestion="Start the remote/local LLM server or choose a localhost profile.",
+        )
+
+    model = normalize_model_name(getattr(profile, "model", ""))
+    model_path = _find_gguf_model(Path(settings.project_root or "."), model)
+    server = _find_llama_server(Path(settings.project_root or "."))
+    key = f"{host}:{port}:{model_path}"
+
+    with _SERVER_LOCK:
+        process = _SERVER_PROCESSES.get(key)
+        if process is None or process.poll() is not None:
+            _SERVER_PROCESSES[key] = _start_llama_server(server, model_path, model, host, port)
+
+    deadline = time.time() + min(45, max(10, int(getattr(settings, "timeout_s", 30) or 30)))
+    last_error: LocalLlmError | None = None
+    while time.time() < deadline:
+        try:
+            _request_json("GET", f"{base_url}/models", timeout_s=1)
+            return f"Started local llama.cpp server at {base_url}."
+        except LocalLlmError as exc:
+            last_error = exc
+            with _SERVER_LOCK:
+                process = _SERVER_PROCESSES.get(key)
+            if process is not None and process.poll() is not None:
+                raise LocalLlmError(
+                    code="local_llm_server_exited",
+                    message=f"llama-server exited with code {process.returncode}",
+                    suggestion="Check the model file, GPU memory, and llama.cpp runtime files.",
+                ) from exc
+            time.sleep(0.5)
+
+    raise LocalLlmError(
+        code="local_llm_start_timeout",
+        message=f"llama-server did not become ready at {base_url}",
+        suggestion=(last_error.suggestion if last_error else "Check the local LLM server logs."),
+    )
+
+
+def _start_llama_server(server: Path, model_path: Path, alias: str, host: str, port: int) -> subprocess.Popen:
+    command = [
+        str(server),
+        "-m",
+        str(model_path),
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "-a",
+        alias,
+        "-c",
+        os.environ.get("LLAMA_SERVER_CTX", "4096"),
+    ]
+    ngl = str(os.environ.get("LLAMA_SERVER_NGL", "28")).strip()
+    if ngl:
+        command.extend(["-ngl", ngl])
+
+    creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    return subprocess.Popen(
+        command,
+        cwd=str(server.parent),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=creationflags,
+    )
+
+
+def _find_llama_server(project_root: Path) -> Path:
+    env_path = str(os.environ.get("LLAMA_SERVER_EXE", "")).strip()
+    candidates = []
+    if env_path:
+        candidates.append(Path(env_path))
+    candidates.extend(sorted((project_root / ".local" / "llama_cpp").glob("**/llama-server.exe")))
+    candidates.extend(sorted((project_root / ".local" / "llama_cpp").glob("**/llama-server")))
+    if found := shutil.which("llama-server"):
+        candidates.append(Path(found))
+
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate.resolve()
+    raise LocalLlmError(
+        code="local_llm_server_missing",
+        message="llama-server executable was not found",
+        suggestion="Install llama.cpp locally or set LLAMA_SERVER_EXE to llama-server.",
+    )
+
+
+def _find_gguf_model(project_root: Path, model: str) -> Path:
+    text = str(model or "").strip()
+    if not text:
+        raise LocalLlmError(
+            code="model_required",
+            message="Local OpenAI-compatible profile requires a model name.",
+            suggestion="Select a GGUF model in Settings > Models > Language Models.",
+        )
+
+    direct = Path(text).expanduser()
+    direct_candidates = [direct]
+    if not direct.is_absolute():
+        direct_candidates.append(project_root / direct)
+    for candidate in direct_candidates:
+        if candidate.exists() and candidate.is_file() and candidate.suffix.lower() == ".gguf":
+            return candidate.resolve()
+
+    wanted = Path(text).stem if text.lower().endswith(".gguf") else text
+    models_root = project_root / "models" / "llm"
+    matches = [
+        path
+        for path in sorted(models_root.rglob("*.gguf"), key=lambda item: str(item).lower())
+        if path.stem == wanted or path.name == text
+    ]
+    if matches:
+        return matches[0].resolve()
+
+    raise LocalLlmError(
+        code="local_llm_model_missing",
+        message=f"GGUF model '{text}' was not found",
+        suggestion="Download or choose a GGUF model from Settings > Models > Language Models.",
+    )
 
 
 def _request_json(

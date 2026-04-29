@@ -159,8 +159,51 @@ class AssistantController:
                 "suggestion": "",
                 "statusCode": 0,
             }
-        result = ping_fn(provider_id, options=self._runtime_options(settings), profile=profile)
-        return result.as_dict()
+        options = self._runtime_options(settings)
+        thread = threading.Thread(
+            target=self._run_ping,
+            args=(ping_fn, provider_id, options, profile),
+            daemon=True,
+        )
+        thread.start()
+        return {"pending": True, "providerId": provider_id}
+
+    def _run_ping(self, ping_fn: Any, provider_id: str, options: Any, profile: Any) -> None:
+        try:
+            result = ping_fn(provider_id, options=options, profile=profile)
+            payload = result.as_dict()
+        except Exception as exc:
+            payload = {
+                "id": provider_id,
+                "ok": False,
+                "message": str(exc),
+                "errorCode": "ping_failed",
+                "retryable": True,
+            }
+        self._emit("assistant_ping_result", payload)
+
+    def start_local_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from infrastructure.local_llm import start_local_llm_async
+        settings = self._settings()
+        profile = self._profile_from_params(params, settings)
+        if profile is None:
+            raise ValueError("Profile not found")
+
+        def _emit(payload: Dict[str, Any]) -> None:
+            event_type = str(payload.get("type") or "local_llm_status")
+            body = dict(payload)
+            body.pop("type", None)
+            self._emit(event_type, body)
+
+        return start_local_llm_async(profile, self.project_root, _emit)
+
+    def stop_local_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from infrastructure.local_llm import stop_local_llm
+        settings = self._settings()
+        profile = self._profile_from_params(params, settings)
+        if profile is None:
+            raise ValueError("Profile not found")
+        return stop_local_llm(profile)
 
     def _run_worker(self, command: InvokeAssistantCommand, settings: CodexSettings) -> None:
         try:

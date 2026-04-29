@@ -63,15 +63,15 @@ function diarDownloadLabel(model) {
   return `${dlStr}${totStr}${spStr}`;
 }
 
-function llmStatusLabel(model, selected, isDownloading) {
-  if (selected) return "selected";
+function llmStatusLabel(model, linked, isDownloading) {
   if (isDownloading) return diarDownloadLabel(model);
   if (model.downloadError) return "error";
+  if (linked) return "linked";
   return model.bytes ? formatBytes(model.bytes) : "ready";
 }
 
 function isLocalAssistantProfile(profile) {
-  return profile && profile.provider && profile.provider !== "codex";
+  return profile && profile.provider === "openai_local";
 }
 
 // ─── metadata panel ─────────────────────────────────────────────────────────
@@ -335,7 +335,7 @@ function ModelsSection({ draft, onChange, open }) {
     if (!alias) return;
     const profiles = normalizeAssistantProfiles(draft.assistantProfiles);
     const selected = profiles.find((profile) => profile.id === draft.assistantSelectedProfileId);
-    const target = isLocalAssistantProfile(selected) ? selected : profiles.find(isLocalAssistantProfile);
+    const target = isLocalAssistantProfile(selected) ? selected : null;
     if (target) {
       onChange({
         assistantSelectedProfileId: target.id,
@@ -399,7 +399,7 @@ function ModelsSection({ draft, onChange, open }) {
   if (!open) return null;
 
   const assistantProfiles = normalizeAssistantProfiles(draft.assistantProfiles);
-  const selectedLlmAliases = new Set(assistantProfiles.filter(isLocalAssistantProfile).map((profile) => String(profile.model || "")));
+  const linkedLlmAliases = new Set(assistantProfiles.filter(isLocalAssistantProfile).map((profile) => String(profile.model || "")));
 
   return (
     <CollapsibleSection
@@ -650,10 +650,10 @@ function ModelsSection({ draft, onChange, open }) {
           <div className="models-list">
             {llmModels.map((model) => {
               const alias = String(model.modelAlias || model.name || "");
-              const selected = selectedLlmAliases.has(alias);
+              const linked = linkedLlmAliases.has(alias);
               const isDownloading = model.downloading || llmDownloading.has(model.name);
-              const statusLabel = llmStatusLabel(model, selected, isDownloading);
-              const statusClass = selected || model.cached ? "model-status-cached" : isDownloading ? "model-status-downloading" : model.downloadError ? "model-status-error" : "model-status-missing";
+              const statusLabel = llmStatusLabel(model, linked, isDownloading);
+              const statusClass = model.cached ? "model-status-cached" : isDownloading ? "model-status-downloading" : model.downloadError ? "model-status-error" : "model-status-missing";
               return (
                 <div key={model.path || model.name} className="model-row-shell">
                   <div className="model-row">
@@ -661,10 +661,10 @@ function ModelsSection({ draft, onChange, open }) {
                     <span className={`model-row-status ${statusClass}`} title={model.downloadError || model.downloadMessage || statusLabel}>
                       {statusLabel}
                     </span>
-                    <button className="model-row-btn" disabled={selected || isDownloading || !alias} title={selected ? "Already selected" : `Use ${alias}`} type="button" onClick={() => handleLlmUse(model)}>
+                    <button className="model-row-btn" disabled={isDownloading || !alias} title={`Use ${alias} in selected assistant profile`} type="button" onClick={() => handleLlmUse(model)}>
                       <Check size={12} />
                     </button>
-                    <button className="model-row-btn danger" disabled={selected || isDownloading || !model.path} title={selected ? "Selected model cannot be deleted" : `Delete ${model.label || model.name}`} type="button" onClick={() => handleLlmDelete(model)}>
+                    <button className="model-row-btn danger" disabled={linked || isDownloading || !model.path} title={linked ? "Model is used by an assistant profile" : `Delete ${model.label || model.name}`} type="button" onClick={() => handleLlmDelete(model)}>
                       <Trash2 size={12} />
                     </button>
                   </div>

@@ -6,7 +6,7 @@ export function AssistantProfileSelect({ disabled, profileId, profiles, onProfil
     <>
       <SectionLabel>Profile</SectionLabel>
       <SelectShell>
-        <select disabled={disabled || !profiles.length} value={profileId} onChange={(event) => onProfileChange(event.target.value)}>
+        <select disabled={!profiles.length} value={profileId} onChange={(event) => onProfileChange(event.target.value)}>
           {profiles.length ? (
             profiles.map((profile) => (
               <option key={profile.id || profile.label} value={profile.id}>

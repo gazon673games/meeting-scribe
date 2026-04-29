@@ -51,7 +51,7 @@
     "path_hints": [],
     "context_source": "transcript",
     "console_expanded": true,
-    "selected_profile": "interview_fast",
+    "selected_profile": "openai_local_5",
     "profiles": [
       {
         "id": "interview_fast",
@@ -61,8 +61,13 @@
         "model": "gpt-5.3-codex",
         "reasoning_effort": "low",
         "codex_profile": "",
+        "base_url": "",
+        "api_key": "",
+        "temperature": "",
+        "max_tokens": 0,
         "answer_prompt": "Command ANSWER: provide a short candidate response, key points, and one clarification question.",
-        "extra_args": []
+        "extra_args": [],
+        "offline": false
       },
       {
         "id": "interview_deep",
@@ -72,15 +77,20 @@
         "model": "gpt-5.1-codex-max",
         "reasoning_effort": "high",
         "codex_profile": "",
+        "base_url": "",
+        "api_key": "",
+        "temperature": "",
+        "max_tokens": 0,
         "answer_prompt": "Command ANSWER: provide a detailed candidate response and brief fallback option.",
-        "extra_args": []
+        "extra_args": [],
+        "offline": false
       },
       {
         "id": "local_ollama",
         "label": "Local Ollama",
         "provider": "ollama",
         "prompt": "Give concise, practical interview support based on session context.",
-        "model": "llama3.2",
+        "model": "Qwen2.5-Coder-7B-Instruct-Q4_K_M",
         "reasoning_effort": "",
         "codex_profile": "",
         "base_url": "http://127.0.0.1:11434",
@@ -88,7 +98,8 @@
         "temperature": "",
         "max_tokens": 0,
         "answer_prompt": "Command ANSWER: provide a short candidate response, key points, and one clarification question.",
-        "extra_args": []
+        "extra_args": [],
+        "offline": false
       },
       {
         "id": "local_openai",
@@ -103,7 +114,24 @@
         "temperature": "",
         "max_tokens": 0,
         "answer_prompt": "Command ANSWER: provide a short candidate response, key points, and one clarification question.",
-        "extra_args": []
+        "extra_args": [],
+        "offline": false
+      },
+      {
+        "id": "openai_local_5",
+        "label": "qwen",
+        "provider": "openai_local",
+        "prompt": "Give concise, practical interview support based on session context.",
+        "model": "local-model",
+        "reasoning_effort": "",
+        "codex_profile": "",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "api_key": "",
+        "temperature": "",
+        "max_tokens": 0,
+        "answer_prompt": "Command ANSWER: provide a short candidate response, key points, and one clarification question.",
+        "extra_args": [],
+        "offline": true
       }
     ]
   },

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import sys
 import threading
@@ -22,11 +23,12 @@ class JsonLineBridge:
 
     def serve_forever(self) -> None:
         self.emit_event("backend_ready", {"ts": time.time()})
-        for line in self.stdin:
-            line = line.strip()
-            if not line:
-                continue
-            self._handle_line(line)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=16, thread_name_prefix="bridge") as executor:
+            for line in self.stdin:
+                line = line.strip()
+                if not line:
+                    continue
+                executor.submit(self._handle_line, line)
 
     def emit_event(self, event_type: str, payload: Dict[str, Any] | None = None) -> None:
         self._write({"event": {"type": str(event_type), **dict(payload or {})}})

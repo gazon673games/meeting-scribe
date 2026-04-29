@@ -16,10 +16,12 @@ export function SystemAudioPicker({
   onSelect
 }) {
   const rootRef = React.useRef(null);
+  const buttonRef = React.useRef(null);
   const [open, setOpen] = React.useState(false);
   const [catalog, setCatalog] = React.useState(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState("");
+  const [panelStyle, setPanelStyle] = React.useState(null);
 
   const activeCatalog = externalCatalog || catalog;
   const activeLoading = Boolean(externalLoading || loading);
@@ -38,6 +40,27 @@ export function SystemAudioPicker({
       .then((result) => setCatalog(result || { groups: [], sessions: [] }))
       .catch((err) => setError(String(err?.message || err)))
       .finally(() => setLoading(false));
+  }, [onRefresh]);
+
+  const updatePanelPosition = React.useCallback(() => {
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect) {
+      return;
+    }
+    const gap = 5;
+    const margin = 12;
+    const viewportWidth = window.innerWidth || 0;
+    const viewportHeight = window.innerHeight || 0;
+    const availableWidth = Math.max(160, viewportWidth - margin * 2);
+    const width = Math.min(Math.max(rect.width, 320), availableWidth);
+    const left = Math.max(margin, Math.min(rect.left, viewportWidth - width - margin));
+    const maxHeight = Math.max(180, viewportHeight - rect.bottom - margin - gap);
+    setPanelStyle({
+      left: `${Math.round(left)}px`,
+      maxHeight: `${Math.round(maxHeight)}px`,
+      top: `${Math.round(rect.bottom + gap)}px`,
+      width: `${Math.round(width)}px`
+    });
   }, []);
 
   React.useEffect(() => {
@@ -68,12 +91,29 @@ export function SystemAudioPicker({
     };
   }, [open]);
 
-  const choose = async (item) => {
+  React.useLayoutEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+    updatePanelPosition();
+    window.addEventListener("resize", updatePanelPosition);
+    window.addEventListener("scroll", updatePanelPosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePanelPosition);
+      window.removeEventListener("scroll", updatePanelPosition, true);
+    };
+  }, [open, updatePanelPosition]);
+
+  const choose = (item) => {
     if (!item || disabled) {
       return;
     }
-    await onSelect(item);
     setOpen(false);
+    try {
+      Promise.resolve(onSelect(item)).catch(() => {});
+    } catch {
+      // The app-level action handler reports backend errors; keep the picker responsive.
+    }
   };
 
   const selectedLabel = selected ? displayDeviceLabel(selected.fullLabel || selected.label) : "No devices found";
@@ -81,6 +121,7 @@ export function SystemAudioPicker({
   return (
     <div className="source-dropdown" ref={rootRef}>
       <button
+        ref={buttonRef}
         className="source-dropdown-button"
         disabled={disabled}
         title={selectedLabel}
@@ -92,7 +133,7 @@ export function SystemAudioPicker({
       </button>
 
       {open ? (
-        <div className="source-dropdown-panel">
+        <div className="source-dropdown-panel" style={panelStyle || undefined}>
           <section className="source-dropdown-section">
             <div className="source-dropdown-title">System Outputs</div>
             {devices.length ? (

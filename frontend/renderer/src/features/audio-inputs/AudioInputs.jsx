@@ -51,13 +51,12 @@ export function AudioInputs({
   }, [useProcessDropdown]);
 
   React.useEffect(() => {
-    if (useProcessDropdown) {
-      loadProcessCatalog();
-    } else {
+    if (!useProcessDropdown) {
       setProcessCatalog(null);
+      setProcessLoading(false);
       setProcessError("");
     }
-  }, [loadProcessCatalog, useProcessDropdown]);
+  }, [useProcessDropdown]);
 
   return (
     <PipelinePanel title="Audio Inputs" active={active} className="inputs-column" headerControls={layoutControls} headerProps={headerProps}>

@@ -36,6 +36,7 @@ class ElectronBackend:
     _hardware_cache_ts: float = field(default=0.0, init=False, repr=False)
     _resource_cpu_time_s: float = field(default=0.0, init=False, repr=False)
     _resource_wall_time_s: float = field(default=0.0, init=False, repr=False)
+    _device_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
     _downloads: Dict[str, Any] = field(default_factory=dict, init=False, repr=False)
     _download_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
     _diarization_downloads: Dict[str, Any] = field(default_factory=dict, init=False, repr=False)
@@ -148,51 +149,53 @@ class ElectronBackend:
     def list_process_sessions(self) -> Dict[str, Any]:
         from infrastructure.process_session_catalog import list_process_session_groups, is_per_process_audio_supported
 
-        supported = is_per_process_audio_supported()
-        raw_groups = list_process_session_groups() if supported else []
-        groups: List[Dict[str, Any]] = []
-        sessions: List[Dict[str, Any]] = []
-        counter = 0
+        with self._device_lock:
+            supported = is_per_process_audio_supported()
+            raw_groups = list_process_session_groups() if supported else []
+            groups: List[Dict[str, Any]] = []
+            sessions: List[Dict[str, Any]] = []
+            counter = 0
+            self._clear_device_tokens_for_kinds({"process"})
 
-        for group_index, group in enumerate(raw_groups):
-            group_label = str(group.get("label") or f"Output {group_index + 1}")
-            group_id = str(group.get("id") or f"process-output:{group_index}")
-            group_sessions: List[Dict[str, Any]] = []
-            for session in group.get("sessions", []):
-                pid = _int_or_zero(session.get("pid"))
-                if pid <= 0:
-                    continue
-                label = str(session.get("label") or f"PID {pid}")
-                device_id = f"process:{counter}"
-                counter += 1
-                record = {
-                    **session,
-                    "id": device_id,
-                    "kind": "process",
-                    "pid": pid,
-                    "label": label,
-                    "groupId": group_id,
-                    "groupLabel": group_label,
-                    "endpointId": str(session.get("endpointId") or group_id),
-                    "endpointLabel": str(session.get("endpointLabel") or group_label),
-                    "fullLabel": f"{group_label} / {label}",
-                }
-                self._device_tokens[device_id] = (
-                    "process",
-                    {
+            for group_index, group in enumerate(raw_groups):
+                group_label = str(group.get("label") or f"Output {group_index + 1}")
+                group_id = str(group.get("id") or f"process-output:{group_index}")
+                group_sessions: List[Dict[str, Any]] = []
+                for session in group.get("sessions", []):
+                    pid = _int_or_zero(session.get("pid"))
+                    if pid <= 0:
+                        continue
+                    label = str(session.get("label") or f"PID {pid}")
+                    device_id = f"process:{counter}"
+                    counter += 1
+                    record = {
+                        **session,
+                        "id": device_id,
+                        "kind": "process",
                         "pid": pid,
-                        "index": session.get("index", 0),
-                        "endpointId": record["endpointId"],
-                        "endpointLabel": record["endpointLabel"],
-                    },
-                    str(record["fullLabel"]),
-                )
-                group_sessions.append(record)
-                sessions.append(record)
-            if group_sessions:
-                groups.append({"id": group_id, "label": group_label, "sessions": group_sessions})
+                        "label": label,
+                        "groupId": group_id,
+                        "groupLabel": group_label,
+                        "endpointId": str(session.get("endpointId") or group_id),
+                        "endpointLabel": str(session.get("endpointLabel") or group_label),
+                        "fullLabel": f"{group_label} / {label}",
+                    }
+                    self._device_tokens[device_id] = (
+                        "process",
+                        {
+                            "pid": pid,
+                            "index": session.get("index", 0),
+                            "endpointId": record["endpointId"],
+                            "endpointLabel": record["endpointLabel"],
+                        },
+                        str(record["fullLabel"]),
+                    )
+                    group_sessions.append(record)
+                    sessions.append(record)
+                if group_sessions:
+                    groups.append({"id": group_id, "label": group_label, "sessions": group_sessions})
 
-        return {"sessions": sessions, "groups": groups, "supported": supported}
+            return {"sessions": sessions, "groups": groups, "supported": supported}
 
     def list_models(self, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
         from application.model_download import (
@@ -552,26 +555,28 @@ class ElectronBackend:
         return {"saved": True, "config": self._read_config()}
 
     def list_devices(self) -> Dict[str, Any]:
-        self._device_tokens.clear()
-        loopback, loopback_error = self._read_device_group("loopback")
-        inputs, input_error = self._read_device_group("input")
-        return {
-            "loopback": loopback,
-            "input": inputs,
-            "errors": [error for error in (loopback_error, input_error) if error],
-        }
+        with self._device_lock:
+            self._clear_device_tokens_for_kinds({"loopback", "input"})
+            loopback, loopback_error = self._read_device_group("loopback")
+            inputs, input_error = self._read_device_group("input")
+            return {
+                "loopback": loopback,
+                "input": inputs,
+                "errors": [error for error in (loopback_error, input_error) if error],
+            }
 
     def add_source(self, params: Dict[str, Any]) -> Dict[str, Any]:
         controller = self._require_session_controller()
         device_id = str(params.get("deviceId", params.get("device_id", "")) or "")
         if not device_id:
             raise ValueError("add_source requires params.deviceId")
-        if device_id not in self._device_tokens:
-            if device_id.startswith("process:"):
-                self.list_process_sessions()
-            else:
-                self.list_devices()
-        token_record = self._device_tokens.get(device_id)
+        with self._device_lock:
+            if device_id not in self._device_tokens:
+                if device_id.startswith("process:"):
+                    self.list_process_sessions()
+                else:
+                    self.list_devices()
+            token_record = self._device_tokens.get(device_id)
         if token_record is None:
             raise KeyError(f"Unknown device id: {device_id}")
         kind, token, label = token_record
@@ -629,6 +634,16 @@ class ElectronBackend:
             raise RuntimeError("Assistant controller is not configured")
         return self.assistant_controller.ping_provider(params)
 
+    def start_local_llm(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        if self.assistant_controller is None:
+            raise RuntimeError("Assistant controller is not configured")
+        return self.assistant_controller.start_local_model(params)
+
+    def stop_local_llm(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        if self.assistant_controller is None:
+            raise RuntimeError("Assistant controller is not configured")
+        return self.assistant_controller.stop_local_model(params)
+
     def handle(self, method: str, params: Dict[str, Any] | None = None) -> Any:
         params = dict(params or {})
         if method == "ping":
@@ -683,6 +698,10 @@ class ElectronBackend:
             return self.download_llm_model(params)
         if method == "delete_llm_model":
             return self.delete_llm_model(params)
+        if method == "start_local_llm":
+            return self.start_local_llm(params)
+        if method == "stop_local_llm":
+            return self.stop_local_llm(params)
         if method == "list_process_sessions":
             return self.list_process_sessions()
         raise KeyError(f"Unknown backend method: {method}")
@@ -997,6 +1016,11 @@ class ElectronBackend:
                 }
             )
         return devices, None
+
+    def _clear_device_tokens_for_kinds(self, kinds: set[str]) -> None:
+        for device_id, token_record in list(self._device_tokens.items()):
+            if token_record[0] in kinds:
+                self._device_tokens.pop(device_id, None)
 
 
 def _per_process_audio_supported() -> bool:
