@@ -16,7 +16,7 @@ export function DebugConsoleApp() {
     let cancelled = false;
     meetingScribeClient.recentBackendEvents().then((result) => {
       if (!cancelled) {
-        setEvents((result || []).slice(-MAX_EVENTS).reverse());
+        setEvents((current) => mergeEventLists((result || []).slice(-MAX_EVENTS).reverse(), current));
       }
     }).catch(() => {});
     return () => {
@@ -26,7 +26,7 @@ export function DebugConsoleApp() {
 
   React.useEffect(() => {
     return meetingScribeClient.onBackendEvent((event) => {
-      setEvents((current) => [event, ...current].slice(0, MAX_EVENTS));
+      setEvents((current) => mergeEventLists([event], current));
     });
   }, []);
 
@@ -107,6 +107,29 @@ function LogRow({ event }) {
       <span title={JSON.stringify(event)}>{eventSummary(event)}</span>
     </div>
   );
+}
+
+function mergeEventLists(primary, secondary) {
+  const merged = [];
+  const seen = new Set();
+  for (const event of [...(primary || []), ...(secondary || [])]) {
+    const key = eventKey(event, merged.length);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(event);
+  }
+  return merged
+    .sort((left, right) => Number(right?.ts || 0) - Number(left?.ts || 0))
+    .slice(0, MAX_EVENTS);
+}
+
+function eventKey(event, fallbackIndex) {
+  const ts = Number(event?.ts || 0).toFixed(6);
+  const type = String(event?.type || "");
+  const payload = JSON.stringify(event || {});
+  return `${ts}:${type}:${payload || fallbackIndex}`;
 }
 
 function buildProcessRows({ backendStatus, events, resourceUsage }) {

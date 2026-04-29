@@ -30,6 +30,7 @@ class PythonBackend {
     this.activeModelDownloads = 0;
     this.activeSpeakerIdDownloads = 0;
     this.activeLlmDownloads = 0;
+    this.stoppingProcess = null;
   }
 
   attachWindow(window) {
@@ -53,7 +54,7 @@ class PythonBackend {
       return;
     }
     const command = this.findBackendCommand();
-    this.process = spawn(command.executable, command.args, {
+    const child = spawn(command.executable, command.args, {
       cwd: command.cwd,
       env: {
         ...process.env,
@@ -65,28 +66,42 @@ class PythonBackend {
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"]
     });
+    this.process = child;
+    this.stoppingProcess = null;
 
-    this.process.stdout.setEncoding("utf8");
-    this.process.stdout.on("data", (chunk) => this.handleStdout(chunk));
-    this.process.stderr.setEncoding("utf8");
-    this.process.stderr.on("data", (chunk) => {
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => this.handleStdout(chunk));
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
       this.lastError = String(chunk);
       console.error("[python-backend]", String(chunk).trim());
       this.sendEvent({ type: "backend_stderr", text: String(chunk) });
     });
-    this.process.on("exit", (code, signal) => {
+    child.on("exit", (code, signal) => {
+      const expectedStop = this.stoppingProcess === child || app.isQuitting;
       this.ready = false;
-      this.process = null;
+      if (this.process === child) {
+        this.process = null;
+      }
+      if (this.stoppingProcess === child) {
+        this.stoppingProcess = null;
+      }
       this.activeDownloads = 0;
       this.activeModelDownloads = 0;
       this.activeSpeakerIdDownloads = 0;
       this.activeLlmDownloads = 0;
       const message = `Python backend exited (${code ?? "null"}, ${signal ?? "null"})`;
-      for (const { reject } of this.pending.values()) {
-        reject(new Error(message));
+      for (const pending of this.pending.values()) {
+        if (expectedStop) {
+          pending.resolve(stoppedResultForMethod(pending.method));
+        } else {
+          pending.reject(new Error(message));
+        }
       }
       this.pending.clear();
-      this.sendEvent({ type: "backend_exit", code, signal });
+      if (!expectedStop) {
+        this.sendEvent({ type: "backend_exit", code, signal });
+      }
     });
   }
 
@@ -94,8 +109,15 @@ class PythonBackend {
     if (!this.process) {
       return;
     }
-    this.process.kill();
+    const child = this.process;
+    this.stoppingProcess = child;
     this.process = null;
+    this.ready = false;
+    for (const pending of this.pending.values()) {
+      pending.resolve(stoppedResultForMethod(pending.method));
+    }
+    this.pending.clear();
+    child.kill();
   }
 
   status() {
@@ -107,6 +129,9 @@ class PythonBackend {
   }
 
   request(method, params = {}) {
+    if (app.isQuitting) {
+      return Promise.resolve(stoppedResultForMethod(method));
+    }
     this.start();
     if (!this.process || !this.process.stdin.writable) {
       return Promise.reject(new Error("Python backend is not writable"));
@@ -115,7 +140,7 @@ class PythonBackend {
     const id = String(this.nextId++);
     const payload = JSON.stringify({ id, method, params });
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(id, { resolve, reject, method });
       this.process.stdin.write(`${payload}\n`, "utf8", (error) => {
         if (error) {
           this.pending.delete(id);
@@ -327,11 +352,21 @@ function toNumber(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function stoppedResultForMethod(method) {
+  if (method === "get_resource_usage") {
+    return { pid: 0, cpuPct: 0, memoryBytes: 0 };
+  }
+  if (method === "list_devices") {
+    return { loopback: [], input: [], errors: ["Python backend is stopping"] };
+  }
+  return null;
+}
+
 async function getResourceUsage() {
   const electron = electronResourceUsage();
   let backendUsage = { pid: backend.process?.pid || 0, cpuPct: 0, memoryBytes: 0 };
   try {
-    backendUsage = await backend.request("get_resource_usage", {});
+    backendUsage = (await backend.request("get_resource_usage", {})) || backendUsage;
   } catch (error) {
     backendUsage = { ...backendUsage, error: String(error?.message || error) };
   }

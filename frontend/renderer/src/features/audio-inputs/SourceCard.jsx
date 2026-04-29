@@ -34,7 +34,7 @@ export function SourceCard({
   const staticSelected = !Picker && selected?.current && selectableDevices.length === 1;
   const level = Math.max(0, Math.min(100, Number(source?.level || 0)));
   const meterClass = level > 80 ? "hot" : level > 45 ? "warm" : "";
-  const canToggle = Boolean(source) || Boolean(selected && !selected.current);
+  const canToggle = !disabled && (Boolean(source) || Boolean(selected && !selected.current));
 
   React.useEffect(() => {
     setSelectedId((current) => (selectableDevices.some((device) => device.id === current) ? current : preferredId));

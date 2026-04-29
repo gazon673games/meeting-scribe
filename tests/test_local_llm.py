@@ -4,11 +4,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from application.codex_config import CodexProfile
 from assistant.application.provider import AssistantExecutionSettings, AssistantProviderRequest
-from infrastructure.local_llm import OllamaLocalLlmRunner, OpenAICompatibleLocalLlmRunner
+from infrastructure import local_llm
+from infrastructure.local_llm import LocalLlmError, OllamaLocalLlmRunner, OpenAICompatibleLocalLlmRunner
 
 
 class _Response:
@@ -50,6 +51,9 @@ def _settings(root: Path, profile: CodexProfile) -> AssistantExecutionSettings:
 
 
 class LocalLlmProviderTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        local_llm._SERVER_PROCESSES.clear()
+
     def test_ollama_status_uses_profile_base_url_and_lists_models(self) -> None:
         profile = CodexProfile(
             id="ollama",
@@ -134,6 +138,46 @@ class LocalLlmProviderTests(unittest.TestCase):
         self.assertEqual(body["model"], "local-model")
         self.assertEqual(body["messages"][0]["content"], "question")
         self.assertEqual(opener.request.get_header("Authorization"), "Bearer secret")
+
+    def test_openai_ping_starts_llama_server_for_local_gguf(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            server = root / ".local" / "llama_cpp" / "b1" / "llama-server.exe"
+            server.parent.mkdir(parents=True)
+            server.write_bytes(b"exe")
+            model = root / "models" / "llm" / "qwen" / "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"
+            model.parent.mkdir(parents=True)
+            model.write_bytes(b"gguf")
+            profile = CodexProfile(
+                id="local",
+                label="Local",
+                prompt="",
+                provider_id="openai_local",
+                model="Qwen2.5-Coder-7B-Instruct-Q4_K_M",
+                base_url="http://127.0.0.1:1234/v1",
+            )
+            process = Mock()
+            process.poll.return_value = None
+            process.returncode = None
+
+            with (
+                patch(
+                    "infrastructure.local_llm._request_json",
+                    side_effect=[
+                        LocalLlmError("local_llm_unavailable", "refused"),
+                        {},
+                    ],
+                ),
+                patch("infrastructure.local_llm.subprocess.Popen", return_value=process) as popen,
+                patch("infrastructure.local_llm.time.sleep", return_value=None),
+            ):
+                result = OpenAICompatibleLocalLlmRunner().ping(_settings(root, profile))
+
+        self.assertTrue(result.ok)
+        command = popen.call_args.args[0]
+        self.assertIn(str(model), command)
+        self.assertIn("1234", command)
+        self.assertIn("Qwen2.5-Coder-7B-Instruct-Q4_K_M", command)
 
 
 if __name__ == "__main__":

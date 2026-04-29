@@ -293,6 +293,38 @@ class ElectronInterfaceTests(unittest.TestCase):
             self.assertEqual(source["kind"], "process")
             self.assertEqual(source["label"], "Headphones / Browser")
 
+    def test_backend_keeps_process_tokens_when_refreshing_devices(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            repository = JsonConfigRepository(root / "config.json")
+            repository.write({})
+            controller = HeadlessSessionController(
+                project_root=root,
+                audio_runtime_factory=_FakeAudioRuntimeFactory(),
+                audio_source_factory=_FakeAudioSourceFactory(),
+                wav_recorder_factory=_FakeWavRecorderFactory(),
+            )
+            backend = ElectronBackend(root, repository, _DeviceCatalog(), controller)
+
+            grouped_sessions = [
+                {
+                    "id": "endpoint-speakers",
+                    "label": "Speakers",
+                    "sessions": [{"pid": 4321, "label": "Player", "streams": 1, "endpointId": "endpoint-speakers"}],
+                }
+            ]
+
+            with (
+                patch("infrastructure.process_session_catalog.is_per_process_audio_supported", return_value=True),
+                patch("infrastructure.process_session_catalog.list_process_session_groups", return_value=grouped_sessions),
+            ):
+                catalog = backend.handle("list_process_sessions")
+                backend.handle("list_devices")
+                source = backend.handle("add_source", {"deviceId": catalog["sessions"][0]["id"]})
+
+            self.assertEqual(source["kind"], "process")
+            self.assertEqual(source["label"], "Speakers / Player")
+
     def test_backend_removes_source_and_clears_transcript_when_idle(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -597,6 +629,58 @@ class ElectronInterfaceTests(unittest.TestCase):
 
             self.assertFalse(events)
             self.assertFalse(assistant.snapshot()["busy"])
+
+    def test_assistant_controller_emits_local_model_status_events(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            repository = JsonConfigRepository(root / "config.json")
+            repository.write(
+                {
+                    "codex": {
+                        "enabled": True,
+                        "selected_profile": "qwen",
+                        "profiles": [
+                            {
+                                "id": "qwen",
+                                "label": "qwen",
+                                "provider": "openai_local",
+                                "model": "local-model",
+                                "base_url": "http://127.0.0.1:1234/v1",
+                            }
+                        ],
+                    }
+                }
+            )
+            events: list[tuple[str, dict]] = []
+            assistant = AssistantController(
+                project_root=root,
+                config_repository=repository,
+                assistant_service=_FakeAssistantService(),  # type: ignore[arg-type]
+                event_sink=lambda typ, payload: events.append((typ, payload)),
+            )
+
+            def fake_start(profile, project_root, emit_event):  # noqa: ANN001
+                emit_event(
+                    {
+                        "type": "local_llm_status",
+                        "profileId": profile.id,
+                        "state": "running",
+                        "message": "ready",
+                    }
+                )
+                return {"started": True, "profileId": profile.id}
+
+            with patch("infrastructure.local_llm.start_local_llm_async", side_effect=fake_start):
+                result = assistant.start_local_model({"profileId": "qwen"})
+
+            self.assertTrue(result["started"])
+            self.assertEqual(len(events), 1)
+            kind, payload = events[0]
+            self.assertEqual(kind, "local_llm_status")
+            self.assertEqual(payload["profileId"], "qwen")
+            self.assertEqual(payload["state"], "running")
+            self.assertEqual(payload["message"], "ready")
+            self.assertIn("ts", payload)
 
     def test_jsonl_bridge_wraps_success_and_errors(self) -> None:
         stdin = io.StringIO(

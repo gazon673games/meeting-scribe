@@ -7,10 +7,6 @@ import { meetingScribeClient } from "../shared/api/meetingScribeClient";
 const REFRESHING_EVENTS = [
   "session_started",
   "session_stopped",
-  "source_added",
-  "source_removed",
-  "source_updated",
-  "source_error",
   "transcript_cleared",
   "assistant_started",
   "assistant_fallback",
@@ -19,6 +15,7 @@ const REFRESHING_EVENTS = [
   "offline_pass_done",
   "offline_pass_error"
 ];
+const DEVICE_CACHE_KEY = "meeting-scribe.devices.v1";
 
 export function useMeetingScribeApp() {
   const [backendStatus, setBackendStatus] = React.useState({ ready: false, running: false, lastError: "" });
@@ -27,34 +24,47 @@ export function useMeetingScribeApp() {
   const [settingsDraft, setSettingsDraft] = React.useState(() => makeSettingsDraft(null));
   const [settingsDirty, setSettingsDirty] = React.useState(false);
   const [savingSettings, setSavingSettings] = React.useState(false);
-  const [devices, setDevices] = React.useState({ loopback: [], input: [], errors: [] });
+  const [devices, setDevices] = React.useState(() => readCachedDevices());
   const [events, setEvents] = React.useState([]);
   const [error, setError] = React.useState("");
   const [loading, setLoading] = React.useState(true);
   const [resourceUsage, setResourceUsage] = React.useState({ app: {}, system: {}, gpus: [] });
   const [runtimeNotices, setRuntimeNotices] = React.useState([]);
   const [assistantPing, setAssistantPing] = React.useState({ busy: false });
+  const [localLlmStatus, setLocalLlmStatus] = React.useState({});
+
+  const refreshDevices = React.useCallback(async () => {
+    try {
+      const devicesResult = normalizeDevicesResult(await meetingScribeClient.request("list_devices"));
+      setDevices(devicesResult);
+      writeCachedDevices(devicesResult);
+    } catch (requestError) {
+      setDevices((current) => ({
+        ...(current || { loopback: [], input: [] }),
+        errors: [`devices: ${requestError.name || "Error"}: ${requestError.message || requestError}`]
+      }));
+    }
+  }, []);
 
   const refresh = React.useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const [statusResult, stateResult, configResult, devicesResult] = await Promise.all([
+      const [statusResult, stateResult, configResult] = await Promise.all([
         meetingScribeClient.status(),
         meetingScribeClient.request("get_state"),
-        meetingScribeClient.request("get_config"),
-        meetingScribeClient.request("list_devices")
+        meetingScribeClient.request("get_config")
       ]);
       setBackendStatus(statusResult);
-      setState(stateResult);
+      setState((current) => mergeBackendStateSnapshot(current, stateResult));
       setConfig(configResult);
-      setDevices(devicesResult);
+      refreshDevices();
     } catch (requestError) {
       setError(`${requestError.name || "Error"}: ${requestError.message || requestError}`);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [refreshDevices]);
 
   React.useEffect(() => {
     refresh();
@@ -73,12 +83,27 @@ export function useMeetingScribeApp() {
       if (event.type === "asr_metrics") {
         setState((current) => applyAsrMetrics(current, event));
       }
+      if (event.type === "assistant_ping_result") {
+        setAssistantPing((current) => ({ ...current, busy: false, ...event, ts: Date.now() }));
+      }
+      if (event.type === "local_llm_status") {
+        setLocalLlmStatus((current) => ({ ...current, [event.profileId]: { state: event.state, message: event.message || "" } }));
+      }
       if (event.type === "backend_ready") {
         setBackendStatus((current) => ({ ...current, ready: true, running: true }));
       }
       if (event.type === "backend_exit") {
         setBackendStatus((current) => ({ ...current, ready: false, running: false, lastError: "Python backend stopped" }));
         setError(`Python backend stopped (${event.code ?? "null"}, ${event.signal ?? "null"})`);
+      }
+      if (event.type === "source_added" && event.source) {
+        setState((current) => upsertSessionSource(current, event.source));
+      }
+      if (event.type === "source_removed" && event.source) {
+        setState((current) => removeSessionSource(current, event.source));
+      }
+      if (event.type === "source_updated" && event.source) {
+        setState((current) => upsertSessionSource(current, event.source));
       }
       if (REFRESHING_EVENTS.includes(event.type)) {
         refresh();
@@ -110,7 +135,7 @@ export function useMeetingScribeApp() {
     const handle = window.setInterval(() => {
       meetingScribeClient
         .request("get_state")
-        .then(setState)
+        .then((result) => setState((current) => mergeBackendStateSnapshot(current, result)))
         .catch((requestError) => setError(`${requestError.name || "Error"}: ${requestError.message || requestError}`));
     }, 600);
     return () => window.clearInterval(handle);
@@ -202,24 +227,36 @@ export function useMeetingScribeApp() {
     [refresh]
   );
 
-  const pingAssistantProvider = React.useCallback(async (providerId = "codex", profileId = "") => {
+  const pingAssistantProvider = React.useCallback((providerId = "codex", profileId = "") => {
     setError("");
     setAssistantPing({ busy: true, providerId, profileId });
-    try {
-      const result = await meetingScribeClient.request("ping_assistant_provider", { providerId, profileId });
-      setAssistantPing({ busy: false, providerId, profileId, ...result, ts: Date.now() });
-    } catch (requestError) {
-      setAssistantPing({
-        busy: false,
-        providerId,
-        profileId,
-        ok: false,
-        message: `${requestError.name || "Error"}: ${requestError.message || requestError}`,
-        errorCode: "ping_failed",
-        retryable: true,
-        ts: Date.now()
+    meetingScribeClient
+      .request("ping_assistant_provider", { providerId, profileId })
+      .catch((requestError) => {
+        setAssistantPing({
+          busy: false,
+          providerId,
+          profileId,
+          ok: false,
+          message: `${requestError.name || "Error"}: ${requestError.message || requestError}`,
+          errorCode: "ping_failed",
+          retryable: true,
+          ts: Date.now()
+        });
       });
-    }
+  }, []);
+
+  const startLocalModel = React.useCallback((profileId) => {
+    setLocalLlmStatus((s) => ({ ...s, [profileId]: { state: "starting", message: "" } }));
+    meetingScribeClient.request("start_local_llm", { profileId }).catch(() => {
+      setLocalLlmStatus((s) => ({ ...s, [profileId]: { state: "error", message: "Failed to start" } }));
+    });
+  }, []);
+
+  const stopLocalModel = React.useCallback((profileId) => {
+    meetingScribeClient.request("stop_local_llm", { profileId }).then(() => {
+      setLocalLlmStatus((s) => ({ ...s, [profileId]: { state: "stopped", message: "" } }));
+    }).catch(() => {});
   }, []);
 
   const updateAsrSetting = React.useCallback((key, value) => {
@@ -258,7 +295,7 @@ export function useMeetingScribeApp() {
       setSettingsDirty(false);
       setConfig(result.config);
       const stateResult = await meetingScribeClient.request("get_state");
-      setState(stateResult);
+      setState((current) => mergeBackendStateSnapshot(current, stateResult));
       return true;
     } catch (requestError) {
       setError(`${requestError.name || "Error"}: ${requestError.message || requestError}`);
@@ -275,6 +312,10 @@ export function useMeetingScribeApp() {
         const result = await meetingScribeClient.request(method, params);
         if (method === "start_session" || method === "stop_session" || method === "clear_transcript") {
           setState((current) => ({ ...(current || {}), session: result }));
+        } else if (method === "add_source" || method === "set_source_enabled") {
+          setState((current) => upsertSessionSource(current, result));
+        } else if (method === "remove_source") {
+          setState((current) => removeSessionSource(current, result));
         } else {
           await refresh();
         }
@@ -332,7 +373,10 @@ export function useMeetingScribeApp() {
     openDebugConsole,
     resourceUsage,
     runtimeNotices,
+    localLlmStatus,
     pingAssistantProvider,
+    startLocalModel,
+    stopLocalModel,
     runBackendAction,
     saveSettings,
     startAssistantLogin,
@@ -359,9 +403,19 @@ function appendTranscriptLine(state, event) {
     overload: Boolean(event.overload)
   };
   const transcript = state.session.transcript || [];
-  const last = transcript[transcript.length - 1];
-  if (last && last.id === line.id && last.ts === line.ts && last.stream === line.stream && last.speaker === line.speaker && last.text === line.text) {
-    return state;
+  const existingIndex = transcript.findIndex((item) => transcriptLineKey(item) === transcriptLineKey(line));
+  if (existingIndex >= 0) {
+    const existing = transcript[existingIndex];
+    if (existing.ts === line.ts && existing.stream === line.stream && existing.speaker === line.speaker && existing.text === line.text) {
+      return state;
+    }
+    return {
+      ...state,
+      session: {
+        ...state.session,
+        transcript: transcript.map((item, index) => (index === existingIndex ? { ...item, ...line } : item))
+      }
+    };
   }
   return {
     ...state,
@@ -445,6 +499,126 @@ function applyAsrMetrics(state, event) {
         p95LatencyS: Number(event.p95_latency_s ?? state.session.asrMetrics?.p95LatencyS ?? 0),
         lagS: Number(event.lag_s ?? state.session.asrMetrics?.lagS ?? 0)
       }
+    }
+  };
+}
+
+function mergeBackendStateSnapshot(current, next) {
+  if (!next || !current?.session || !next?.session) {
+    return next || current;
+  }
+  if (!current.session.running || !next.session.running) {
+    return next;
+  }
+  return {
+    ...next,
+    session: {
+      ...next.session,
+      transcript: mergeTranscriptLines(current.session.transcript || [], next.session.transcript || [])
+    }
+  };
+}
+
+function mergeTranscriptLines(currentLines, nextLines) {
+  const merged = [];
+  const indexByKey = new Map();
+  const appendOrUpdate = (line) => {
+    if (!line || !String(line.text || "").trim()) {
+      return;
+    }
+    const key = transcriptLineKey(line);
+    const existingIndex = indexByKey.get(key);
+    if (existingIndex === undefined) {
+      indexByKey.set(key, merged.length);
+      merged.push(line);
+      return;
+    }
+    merged[existingIndex] = { ...merged[existingIndex], ...line };
+  };
+  currentLines.forEach(appendOrUpdate);
+  nextLines.forEach(appendOrUpdate);
+  return merged.sort(compareTranscriptLines).slice(-200);
+}
+
+function transcriptLineKey(line) {
+  if (line?.id) {
+    return String(line.id);
+  }
+  return [
+    line?.stream || "mix",
+    optionalNumber(line?.t_start) ?? "",
+    optionalNumber(line?.t_end) ?? "",
+    optionalNumber(line?.ts) ?? "",
+    String(line?.text || "")
+  ].join(":");
+}
+
+function compareTranscriptLines(left, right) {
+  const leftStart = optionalNumber(left?.t_start) ?? optionalNumber(left?.ts) ?? 0;
+  const rightStart = optionalNumber(right?.t_start) ?? optionalNumber(right?.ts) ?? 0;
+  if (leftStart !== rightStart) {
+    return leftStart - rightStart;
+  }
+  return (optionalNumber(left?.ts) ?? 0) - (optionalNumber(right?.ts) ?? 0);
+}
+
+function normalizeDevicesResult(result) {
+  return {
+    loopback: Array.isArray(result?.loopback) ? result.loopback : [],
+    input: Array.isArray(result?.input) ? result.input : [],
+    errors: Array.isArray(result?.errors) ? result.errors : []
+  };
+}
+
+function readCachedDevices() {
+  try {
+    const raw = window.localStorage?.getItem(DEVICE_CACHE_KEY);
+    return normalizeDevicesResult(raw ? JSON.parse(raw) : null);
+  } catch {
+    return normalizeDevicesResult(null);
+  }
+}
+
+function writeCachedDevices(devices) {
+  try {
+    window.localStorage?.setItem(DEVICE_CACHE_KEY, JSON.stringify(normalizeDevicesResult(devices)));
+  } catch {
+    // Device cache is only a startup convenience.
+  }
+}
+
+function upsertSessionSource(state, source) {
+  if (!state?.session || !source?.name) {
+    return state;
+  }
+  const sources = state.session.sources || [];
+  const index = sources.findIndex((item) => item.name === source.name);
+  const nextSources =
+    index >= 0
+      ? sources.map((item, itemIndex) => (itemIndex === index ? { ...item, ...source } : item))
+      : [...sources, source];
+  return {
+    ...state,
+    session: {
+      ...state.session,
+      sources: nextSources
+    }
+  };
+}
+
+function removeSessionSource(state, source) {
+  if (!state?.session) {
+    return state;
+  }
+  const sourceName = String(source?.name || source || "");
+  if (!sourceName) {
+    return state;
+  }
+  return {
+    ...state,
+    session: {
+      ...state.session,
+      sources: (state.session.sources || []).filter((item) => item.name !== sourceName)
     }
   };
 }
