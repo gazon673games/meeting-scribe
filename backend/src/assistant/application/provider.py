@@ -7,6 +7,8 @@ from typing import Any, List, Protocol
 
 
 ASSISTANT_PROVIDER_CODEX = "codex"
+ASSISTANT_PROVIDER_OLLAMA = "ollama"
+ASSISTANT_PROVIDER_OPENAI_LOCAL = "openai_local"
 
 
 @dataclass(frozen=True)
@@ -16,6 +18,8 @@ class AssistantExecutionSettings:
     proxy: str
     timeout_s: int
     project_root: Path | None = None
+    profile: Any | None = None
+    profiles: list[Any] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

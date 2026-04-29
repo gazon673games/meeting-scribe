@@ -74,6 +74,36 @@
         "codex_profile": "",
         "answer_prompt": "Command ANSWER: provide a detailed candidate response and brief fallback option.",
         "extra_args": []
+      },
+      {
+        "id": "local_ollama",
+        "label": "Local Ollama",
+        "provider": "ollama",
+        "prompt": "Give concise, practical interview support based on session context.",
+        "model": "llama3.2",
+        "reasoning_effort": "",
+        "codex_profile": "",
+        "base_url": "http://127.0.0.1:11434",
+        "api_key": "",
+        "temperature": "",
+        "max_tokens": 0,
+        "answer_prompt": "Command ANSWER: provide a short candidate response, key points, and one clarification question.",
+        "extra_args": []
+      },
+      {
+        "id": "local_openai",
+        "label": "Local OpenAI API",
+        "provider": "openai_local",
+        "prompt": "Give concise, practical interview support based on session context.",
+        "model": "local-model",
+        "reasoning_effort": "",
+        "codex_profile": "",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "api_key": "",
+        "temperature": "",
+        "max_tokens": 0,
+        "answer_prompt": "Command ANSWER: provide a short candidate response, key points, and one clarification question.",
+        "extra_args": []
       }
     ]
   },

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional
 
 from application.assistant_supervisor import AssistantFallbackSupervisor
 from application.assistant_use_case import AssistantRequestInput, AssistantRequestUseCase
@@ -26,6 +26,7 @@ class AssistantRuntimeOptions:
     path_hints: list[str]
     proxy: str
     default_timeout_s: int
+    profiles: list[Any] | None = None
 
 
 class AssistantApplicationService:
@@ -88,6 +89,8 @@ class AssistantApplicationService:
                             attempt.timeout_s if attempt.timeout_s is not None else options.default_timeout_s
                         ),
                         project_root=Path(options.project_root),
+                        profile=command.profile,
+                        profiles=list(options.profiles or []),
                     ),
                 )
             )
@@ -126,6 +129,7 @@ class AssistantApplicationService:
                 proxy=str(options.proxy or ""),
                 timeout_s=int(options.default_timeout_s),
                 project_root=Path(options.project_root),
+                profiles=list(options.profiles or []),
             )
         )
 
@@ -144,11 +148,18 @@ class AssistantApplicationService:
                 proxy=str(options.proxy or ""),
                 timeout_s=int(options.default_timeout_s),
                 project_root=Path(options.project_root),
+                profiles=list(options.profiles or []),
             ),
             device_auth=bool(device_auth),
         )
 
-    def ping_provider(self, provider_id: str, *, options: AssistantRuntimeOptions) -> AssistantProviderPingResult:
+    def ping_provider(
+        self,
+        provider_id: str,
+        *,
+        options: AssistantRuntimeOptions,
+        profile: Any | None = None,
+    ) -> AssistantProviderPingResult:
         return self._use_case.ping_provider(
             provider_id,
             AssistantExecutionSettings(
@@ -157,5 +168,7 @@ class AssistantApplicationService:
                 proxy=str(options.proxy or ""),
                 timeout_s=int(options.default_timeout_s),
                 project_root=Path(options.project_root),
+                profile=profile,
+                profiles=list(options.profiles or []),
             ),
         )

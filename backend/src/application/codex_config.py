@@ -16,6 +16,10 @@ class CodexProfile:
     model: str = ""
     reasoning_effort: str = ""
     codex_profile: str = ""
+    base_url: str = ""
+    api_key: str = ""
+    temperature: float | None = None
+    max_tokens: int = 0
     answer_prompt: str = ""
     extra_args: List[str] = None  # type: ignore[assignment]
 
@@ -74,6 +78,10 @@ def codex_profile_to_dict(profile: CodexProfile) -> Dict[str, Any]:
         "model": str(profile.model),
         "reasoning_effort": str(profile.reasoning_effort),
         "codex_profile": str(profile.codex_profile),
+        "base_url": str(profile.base_url),
+        "api_key": str(profile.api_key),
+        "temperature": profile.temperature if profile.temperature is not None else "",
+        "max_tokens": int(profile.max_tokens or 0),
         "answer_prompt": str(profile.answer_prompt),
         "extra_args": [str(x) for x in list(profile.extra_args or []) if str(x).strip()],
     }
@@ -97,6 +105,16 @@ def parse_codex_profiles(raw_profiles: Any) -> List[CodexProfile]:
                 or ""
             ).strip()
             codex_profile = str(item.get("codex_profile") or "").strip()
+            base_url = str(
+                item.get("base_url")
+                or item.get("baseUrl")
+                or item.get("endpoint")
+                or item.get("url")
+                or ""
+            ).strip()
+            api_key = str(item.get("api_key") or item.get("apiKey") or "").strip()
+            temperature = _optional_float(item.get("temperature"), lo=0.0, hi=2.0)
+            max_tokens = _safe_int(item.get("max_tokens", item.get("maxTokens", 0)), default=0, lo=0, hi=200000)
             answer_prompt = str(item.get("answer_prompt") or "").strip()
             extra_args = parse_codex_list(item.get("extra_args", []))
             out.append(
@@ -108,6 +126,10 @@ def parse_codex_profiles(raw_profiles: Any) -> List[CodexProfile]:
                     model=model,
                     reasoning_effort=reasoning_effort,
                     codex_profile=codex_profile,
+                    base_url=base_url,
+                    api_key=api_key,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
                     answer_prompt=answer_prompt,
                     extra_args=extra_args,
                 )
@@ -184,3 +206,13 @@ def _safe_int(raw: Any, *, default: int, lo: int, hi: int) -> int:
     except Exception:
         value = int(default)
     return max(int(lo), min(int(hi), int(value)))
+
+
+def _optional_float(raw: Any, *, lo: float, hi: float) -> float | None:
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        value = float(str(raw).strip().replace(",", "."))
+    except Exception:
+        return None
+    return max(float(lo), min(float(hi), value))

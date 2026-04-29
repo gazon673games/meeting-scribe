@@ -9,7 +9,7 @@ import { Field } from "../../shared/ui/Field";
 import { InnerCollapsible } from "../../shared/ui/InnerCollapsible";
 import { AdvancedAsrSettings } from "./AdvancedAsrSettings";
 import { AppearanceSettings } from "./AppearanceSettings";
-import { AssistantProxySettings } from "./AssistantProxySettings";
+import { AssistantSettings } from "./AssistantSettings";
 import { DiarizationSettings } from "./DiarizationSettings";
 import { HardwareSummary } from "./HardwareSummary";
 import { ProxySettings } from "./ProxySettings";
@@ -598,7 +598,7 @@ export function SettingsDialogButton({
               />
               <HardwareSummary hardware={hardware} />
               <ProxySettings draft={draft} onChange={onChange} />
-              <AssistantProxySettings draft={draft} onChange={onChange} />
+              <AssistantSettings draft={draft} onChange={onChange} />
               <AdvancedAsrSettings
                 computeOptions={computeOptions}
                 deviceOptions={deviceOptions}

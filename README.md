@@ -44,6 +44,16 @@ npm run dev
 
 Runtime files are stored in `.local/`. Model and cache files are stored in `models/`.
 
+## Assistant Providers
+
+Assistant profiles can use Codex CLI or local LLM runtimes:
+
+- `codex` - Codex CLI with the configured command and optional proxy.
+- `ollama` - Ollama HTTP API, default `http://127.0.0.1:11434`.
+- `openai_local` - OpenAI-compatible local API, default `http://127.0.0.1:1234/v1` for tools such as LM Studio or llama.cpp server.
+
+Each profile can set its own model, base URL, temperature, and max token limit. Local providers use Python stdlib HTTP calls, so no extra Python package is required.
+
 Useful development commands:
 
 ```powershell

@@ -33,6 +33,7 @@ from infrastructure.audio_runtime import DefaultAudioRuntimeFactory
 from infrastructure.audio_source_factory import DefaultAudioSourceFactory
 from infrastructure.codex_cli import CodexCliRunner
 from infrastructure.device_catalog import SoundDeviceCatalog
+from infrastructure.local_llm import OllamaLocalLlmRunner, OpenAICompatibleLocalLlmRunner
 from infrastructure.offline_asr import FasterWhisperOfflineAsrRunner
 from infrastructure.wav_recording import WavWriterFactory
 from interface.assistant_controller import AssistantController
@@ -71,7 +72,10 @@ def create_backend() -> ElectronBackend:
         transcript_store=FileTranscriptStore(project_root),
     )
     assistant_service = AssistantApplicationService(
-        AssistantRequestUseCase([CodexCliRunner()], FileTranscriptContextReader())
+        AssistantRequestUseCase(
+            [CodexCliRunner(), OllamaLocalLlmRunner(), OpenAICompatibleLocalLlmRunner()],
+            FileTranscriptContextReader(),
+        )
     )
     assistant_controller = AssistantController(
         project_root=project_root,
