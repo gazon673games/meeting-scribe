@@ -29,6 +29,7 @@ class PythonBackend {
     this.activeDownloads = 0;
     this.activeModelDownloads = 0;
     this.activeSpeakerIdDownloads = 0;
+    this.activeLlmDownloads = 0;
   }
 
   attachWindow(window) {
@@ -79,6 +80,7 @@ class PythonBackend {
       this.activeDownloads = 0;
       this.activeModelDownloads = 0;
       this.activeSpeakerIdDownloads = 0;
+      this.activeLlmDownloads = 0;
       const message = `Python backend exited (${code ?? "null"}, ${signal ?? "null"})`;
       for (const { reject } of this.pending.values()) {
         reject(new Error(message));
@@ -154,11 +156,15 @@ class PythonBackend {
       }
       if (message.event.type === "model_download_updated") {
         this.activeModelDownloads = toNumber(message.event.activeDownloads);
-        this.activeDownloads = this.activeModelDownloads + this.activeSpeakerIdDownloads;
+        this.activeDownloads = this.activeModelDownloads + this.activeSpeakerIdDownloads + this.activeLlmDownloads;
       }
       if (message.event.type === "diarization_model_download_updated") {
         this.activeSpeakerIdDownloads = toNumber(message.event.activeDownloads);
-        this.activeDownloads = this.activeModelDownloads + this.activeSpeakerIdDownloads;
+        this.activeDownloads = this.activeModelDownloads + this.activeSpeakerIdDownloads + this.activeLlmDownloads;
+      }
+      if (message.event.type === "llm_model_download_updated") {
+        this.activeLlmDownloads = toNumber(message.event.activeDownloads);
+        this.activeDownloads = this.activeModelDownloads + this.activeSpeakerIdDownloads + this.activeLlmDownloads;
       }
       this.sendEvent(message.event);
       return;
