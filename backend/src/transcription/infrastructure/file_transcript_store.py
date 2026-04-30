@@ -6,6 +6,8 @@ from typing import Any, Dict, Optional
 
 from application.local_paths import project_human_logs_dir, project_logs_dir
 
+_FLUSH_INTERVAL_S = 1.0
+
 
 class FileTranscriptStore:
     def __init__(self, project_root: Path) -> None:
@@ -18,6 +20,10 @@ class FileTranscriptStore:
         self._srt_index: int = 0
         self._srt_pending: Optional[Dict[str, Any]] = None
         self._srt_base_ts: Optional[float] = None
+        self._human_dirty = False
+        self._human_last_flush = 0.0
+        self._srt_dirty = False
+        self._srt_last_flush = 0.0
 
     @property
     def current_human_log_path(self) -> Optional[Path]:
@@ -45,6 +51,8 @@ class FileTranscriptStore:
             self._human_log_fh = self._human_log_path.open("a", encoding="utf-8")
             self._human_log_fh.write(f"# Meeting Scribe chat log: {ts}\n")
             self._human_log_fh.flush()
+            self._human_dirty = False
+            self._human_last_flush = time.monotonic()
             return self._human_log_path
         except Exception:
             self._human_log_fh = None
@@ -60,13 +68,15 @@ class FileTranscriptStore:
             pass
         self._human_log_fh = None
         self._human_log_path = None
+        self._human_dirty = False
 
     def write_human_line(self, line: str) -> None:
         if self._human_log_fh is None:
             return
         try:
             self._human_log_fh.write(str(line) + "\n")
-            self._human_log_fh.flush()
+            self._human_dirty = True
+            self._flush_human_if_due()
         except Exception:
             pass
 
@@ -104,7 +114,8 @@ class FileTranscriptStore:
                     f"{_srt_timestamp(prev['relative_ts'])} --> {_srt_timestamp(end_ts)}\n"
                     f"{prev['label']}: {prev['text']}\n\n"
                 )
-                self._realtime_transcript_fh.flush()
+                self._srt_dirty = True
+                self._flush_realtime_if_due()
             self._srt_pending = {"relative_ts": relative_ts, "label": label, "text": str(text)}
         except Exception:
             pass
@@ -121,7 +132,8 @@ class FileTranscriptStore:
                 f"{_srt_timestamp(prev['relative_ts'])} --> {_srt_timestamp(end_ts)}\n"
                 f"{prev['label']}: {prev['text']}\n\n"
             )
-            self._realtime_transcript_fh.flush()
+            self._srt_dirty = True
+            self._flush_realtime_if_due(force=True)
         except Exception:
             pass
         self._srt_pending = None
@@ -139,9 +151,37 @@ class FileTranscriptStore:
             self._srt_index = 0
             self._srt_pending = None
             self._srt_base_ts = None
+            self._srt_dirty = False
+            self._srt_last_flush = time.monotonic()
         except Exception:
             self._realtime_transcript_fh = None
             self._realtime_transcript_path = None
+
+    def _flush_human_if_due(self, *, force: bool = False) -> None:
+        if self._human_log_fh is None or not self._human_dirty:
+            return
+        now = time.monotonic()
+        if not force and now - self._human_last_flush < _FLUSH_INTERVAL_S:
+            return
+        try:
+            self._human_log_fh.flush()
+            self._human_dirty = False
+            self._human_last_flush = now
+        except Exception:
+            pass
+
+    def _flush_realtime_if_due(self, *, force: bool = False) -> None:
+        if self._realtime_transcript_fh is None or not self._srt_dirty:
+            return
+        now = time.monotonic()
+        if not force and now - self._srt_last_flush < _FLUSH_INTERVAL_S:
+            return
+        try:
+            self._realtime_transcript_fh.flush()
+            self._srt_dirty = False
+            self._srt_last_flush = now
+        except Exception:
+            pass
 
 
 def _srt_timestamp(seconds: float) -> str:
