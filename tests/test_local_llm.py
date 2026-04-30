@@ -175,7 +175,7 @@ class LocalLlmProviderTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
         command = popen.call_args.args[0]
-        self.assertIn(str(model), command)
+        self.assertIn(model.resolve(), [Path(part).resolve() for part in command if str(part).endswith(".gguf")])
         self.assertIn("1234", command)
         self.assertIn("Qwen2.5-Coder-7B-Instruct-Q4_K_M", command)
 
