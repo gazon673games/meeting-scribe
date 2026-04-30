@@ -180,6 +180,11 @@ class EnergyVAD:
     def _extract_features(self, x: np.ndarray) -> Tuple[float, float, float]:
         self._frame_index += 1
         rms = self._rms(x)
+        if rms < self._thr * min(_NEAR_ENERGY_RATIO, self._features.near_thr_ratio):
+            self._last_rms = rms
+            self._last_band_ratio = 0.0
+            self._last_voiced = 0.0
+            return rms, 0.0, 0.0
         band_ratio = self._band_ratio(x)
         voiced = self._compute_voiced_throttled(x, rms)
         self._last_rms = rms
