@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import time
+from collections import deque
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Deque, Dict, List, Optional
 
 import numpy as np
 
@@ -47,7 +48,8 @@ class DiarizationRuntime:
 
         self._diarizers: Dict[str, OnlineDiarizerPort] = {}
         self._pyannote: Optional[PyannoteDiarizerPort] = None
-        self._ring16: Dict[str, np.ndarray] = {}
+        self._ring16: Dict[str, Deque[np.ndarray]] = {}
+        self._ring_samples: Dict[str, int] = {}
         self._ring_t0: Dict[str, float] = {}
         self._last_run_ts: Dict[str, float] = {}
         self._timeline: Dict[str, List[DiarSegment]] = {}
@@ -70,7 +72,8 @@ class DiarizationRuntime:
             )
 
         if self.backend == "pyannote" and name not in self._ring16:
-            self._ring16[name] = np.zeros((0,), dtype=np.float32)
+            self._ring16[name] = deque()
+            self._ring_samples[name] = 0
             self._ring_t0[name] = 0.0
             self._last_run_ts[name] = 0.0
             self._timeline[name] = []
@@ -85,16 +88,28 @@ class DiarizationRuntime:
         if x16.size == 0:
             return
 
-        ring = self._ring16.get(stream, np.zeros((0,), dtype=np.float32))
-        ring = np.concatenate([ring, x16]) if ring.size else x16
-
         max_len = int(max(1.0, self.chunk_s) * 16000)
-        if ring.size > max_len:
-            cut = ring.size - max_len
-            ring = ring[cut:]
+        chunks = self._ring16.get(stream)
+        if chunks is None:
+            chunks = deque()
+            self._ring16[stream] = chunks
+            self._ring_samples[stream] = 0
 
-        self._ring16[stream] = ring
-        self._ring_t0[stream] = float(t1) - (ring.size / 16000.0)
+        chunks.append(x16)
+        samples = int(self._ring_samples.get(stream, 0)) + int(x16.size)
+        while samples > max_len and chunks:
+            cut = samples - max_len
+            head = chunks[0]
+            if cut >= head.size:
+                samples -= int(head.size)
+                chunks.popleft()
+                continue
+            chunks[0] = head[int(cut):]
+            samples -= int(cut)
+            break
+
+        self._ring_samples[stream] = samples
+        self._ring_t0[stream] = float(t1) - (samples / 16000.0)
 
     def init_backend(self, log_event: LogEvent) -> None:
         if not self.enabled:
@@ -191,8 +206,11 @@ class DiarizationRuntime:
         if (now - last) < max(0.5, self.step_s):
             return
 
-        ring = self._ring16.get(stream)
-        if ring is None or ring.size < int(6.0 * 16000):
+        if int(self._ring_samples.get(stream, 0)) < int(6.0 * 16000):
+            return
+
+        ring = self._ring_array(stream)
+        if ring.size < int(6.0 * 16000):
             return
 
         t0 = float(self._ring_t0.get(stream, 0.0))
@@ -202,6 +220,14 @@ class DiarizationRuntime:
         except Exception as e:
             log_event({"type": "error", "where": "diar_run", "error": str(e), "ts": time.time()})
             self.enabled = False
+
+    def _ring_array(self, stream: str) -> np.ndarray:
+        chunks = self._ring16.get(stream)
+        if not chunks:
+            return np.zeros((0,), dtype=np.float32)
+        if len(chunks) == 1:
+            return chunks[0].astype(np.float32, copy=False)
+        return np.concatenate(list(chunks)).astype(np.float32, copy=False)
 
 
 class DefaultDiarizationRuntimeFactory:
