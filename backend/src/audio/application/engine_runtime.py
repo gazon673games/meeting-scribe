@@ -16,6 +16,7 @@ class EngineRuntimeState:
     tap_mode: TapMode = "both"
     tap_sources_filter: Optional[Set[str]] = None
     tap_drop_threshold: float = 0.85
+    output_enabled: bool = False
     tick_index: int = 0
     master_rms: float = 0.0
     master_last_ts: float = 0.0
@@ -29,6 +30,11 @@ class EngineRuntimeState:
     def set_tap_queue(self, tap_queue: Optional["queue.Queue[dict]"]) -> None:
         self.tap_q = tap_queue
         self.dropped_tap_blocks = 0
+
+    def set_output_enabled(self, enabled: bool) -> None:
+        self.output_enabled = bool(enabled)
+        if not self.output_enabled:
+            self.dropped_out_blocks = 0
 
     def apply_tap_config(self, config: TapConfig) -> None:
         self.tap_mode = config.mode

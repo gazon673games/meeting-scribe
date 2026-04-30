@@ -222,6 +222,8 @@ class HeadlessSessionController:
             if asr_enabled:
                 self._drain_tap_queue()
             self._apply_tap_config()
+            wav_requested = _wav_requested(params)
+            self._set_engine_output_enabled(wav_requested)
 
             try:
                 self.engine.start()
@@ -233,6 +235,8 @@ class HeadlessSessionController:
                 raise
 
             wav_error = self._start_wav_if_requested(params)
+            if wav_error:
+                self._set_engine_output_enabled(False)
             asr_error = ""
             if asr_enabled:
                 asr_error = self._start_asr_locked(params)
@@ -263,6 +267,7 @@ class HeadlessSessionController:
             self._session_state.begin_stop(run_offline_pass=bool(stop_params.get("runOfflinePass", False)))
             if self.writer.is_recording():
                 self.writer.stop_recording()
+            self._set_engine_output_enabled(False)
             self._stop_asr_locked(stop_params)
             try:
                 if self.engine.is_running():
@@ -337,8 +342,7 @@ class HeadlessSessionController:
                 self._close_transcript_files_locked()
 
     def _start_wav_if_requested(self, params: Dict[str, Any]) -> str:
-        wav_enabled = bool(params.get("wavEnabled", params.get("wav_enabled", False)))
-        if not wav_enabled:
+        if not _wav_requested(params):
             return ""
         if not self.wav_recorder_factory.available():
             return "WAV recording is unavailable because soundfile is not installed."
@@ -349,6 +353,14 @@ class HeadlessSessionController:
         except Exception as exc:
             return f"WAV recording could not start: {type(exc).__name__}: {exc}"
         return ""
+
+    def _set_engine_output_enabled(self, enabled: bool) -> None:
+        set_output_enabled = getattr(self.engine, "set_output_enabled", None)
+        if callable(set_output_enabled):
+            try:
+                set_output_enabled(bool(enabled))
+            except Exception:
+                pass
 
     def _configure_transcript_files_locked(self, params: Dict[str, Any]) -> None:
         self._realtime_transcript_enabled = bool(
@@ -842,6 +854,10 @@ def _drops_record(meters: Dict[str, Any], writer: WavRecorder) -> Dict[str, Any]
         "drainedBlocks": int(drained()),
         "writtenBlocks": int(written()),
     }
+
+
+def _wav_requested(params: Dict[str, Any]) -> bool:
+    return bool(params.get("wavEnabled", params.get("wav_enabled", False)))
 
 
 def _asr_settings_from_params(

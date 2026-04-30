@@ -18,6 +18,9 @@ class AudioRuntimePort(Protocol):
     def set_tap_queue(self, tap_queue: Optional[Any]) -> None:
         ...
 
+    def set_output_enabled(self, enabled: bool) -> None:
+        ...
+
     def set_tap_config(
         self,
         *,

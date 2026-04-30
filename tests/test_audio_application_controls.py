@@ -90,6 +90,7 @@ class AudioApplicationControlsTests(unittest.TestCase):
                 items=[("fake", state)],
                 master_filters=[],
                 tap_q=None,
+                output_enabled=True,
             )
 
         def record_master(master_rms: float, ts_mono: float) -> None:

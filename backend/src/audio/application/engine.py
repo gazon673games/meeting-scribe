@@ -72,6 +72,10 @@ class AudioEngine:
         with self._lock:
             self._runtime.set_tap_queue(tap_queue)
 
+    def set_output_enabled(self, enabled: bool) -> None:
+        with self._lock:
+            self._runtime.set_output_enabled(enabled)
+
     def set_tap_config(
         self,
         *,
@@ -206,6 +210,7 @@ class AudioEngine:
                 tap_mode=self._runtime.tap_mode,
                 tap_sources_filter=set(self._runtime.tap_sources_filter) if self._runtime.tap_sources_filter else None,
                 tap_drop_threshold=self._runtime.tap_drop_threshold,
+                output_enabled=self._runtime.output_enabled,
             )
 
     def _record_master_metrics(self, master_rms: float, ts_mono: float) -> None:
