@@ -11,6 +11,10 @@ from assistant.application.provider import AssistantExecutionSettings
 from infrastructure.codex_cli import CodexCliRunner
 
 
+def _canonical_path(value: object) -> Path:
+    return Path(value).resolve()
+
+
 class _Resolver:
     def resolve(self, settings):  # noqa: ANN001
         return ["codex"], "test"
@@ -69,8 +73,8 @@ class CodexCliRunnerTests(unittest.TestCase):
             self.assertIn("Not logged in", status.message)
             call = run.call_args
             self.assertEqual(call.args[0], ["codex", "login", "status"])
-            self.assertEqual(Path(call.kwargs["env"]["CODEX_HOME"]), root / ".local" / "codex_home")
-            self.assertEqual(Path(call.kwargs["cwd"]), root)
+            self.assertEqual(_canonical_path(call.kwargs["env"]["CODEX_HOME"]), _canonical_path(root / ".local" / "codex_home"))
+            self.assertEqual(_canonical_path(call.kwargs["cwd"]), _canonical_path(root))
 
     def test_status_reports_logged_in_without_model_request(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
@@ -105,8 +109,8 @@ class CodexCliRunnerTests(unittest.TestCase):
             self.assertTrue(result.started)
             self.assertIn("login", cmd)
             self.assertNotIn("exec", cmd)
-            self.assertEqual(Path(popen.call_args.kwargs["env"]["CODEX_HOME"]), root / ".local" / "codex_home")
-            self.assertEqual(Path(popen.call_args.kwargs["cwd"]), root)
+            self.assertEqual(_canonical_path(popen.call_args.kwargs["env"]["CODEX_HOME"]), _canonical_path(root / ".local" / "codex_home"))
+            self.assertEqual(_canonical_path(popen.call_args.kwargs["cwd"]), _canonical_path(root))
 
     def test_ping_reports_api_reachable_without_codex_exec(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
