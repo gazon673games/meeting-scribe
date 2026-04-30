@@ -35,19 +35,43 @@ export function AudioInputs({
   const [processCatalog, setProcessCatalog] = React.useState(null);
   const [processLoading, setProcessLoading] = React.useState(false);
   const [processError, setProcessError] = React.useState("");
+  const processCatalogCacheRef = React.useRef({ ts: 0, value: null });
+  const processCatalogRequestRef = React.useRef(null);
   const processGroups = React.useMemo(() => normalizeProcessGroups(processCatalog), [processCatalog]);
 
-  const loadProcessCatalog = React.useCallback(() => {
+  const loadProcessCatalog = React.useCallback((options = {}) => {
     if (!useProcessDropdown) {
-      return;
+      return Promise.resolve(null);
+    }
+    const force = Boolean(options?.force);
+    const cached = processCatalogCacheRef.current;
+    if (!force && cached.value && Date.now() - cached.ts < 3000) {
+      setProcessCatalog(cached.value);
+      return Promise.resolve(cached.value);
+    }
+    if (processCatalogRequestRef.current) {
+      return processCatalogRequestRef.current;
     }
     setProcessLoading(true);
     setProcessError("");
-    meetingScribeClient
+    const request = meetingScribeClient
       .request("list_process_sessions")
-      .then((result) => setProcessCatalog(result || { groups: [], sessions: [] }))
-      .catch((error) => setProcessError(String(error?.message || error)))
-      .finally(() => setProcessLoading(false));
+      .then((result) => {
+        const next = result || { groups: [], sessions: [] };
+        processCatalogCacheRef.current = { ts: Date.now(), value: next };
+        setProcessCatalog(next);
+        return next;
+      })
+      .catch((error) => {
+        setProcessError(String(error?.message || error));
+        return null;
+      })
+      .finally(() => {
+        processCatalogRequestRef.current = null;
+        setProcessLoading(false);
+      });
+    processCatalogRequestRef.current = request;
+    return request;
   }, [useProcessDropdown]);
 
   React.useEffect(() => {
@@ -55,6 +79,8 @@ export function AudioInputs({
       setProcessCatalog(null);
       setProcessLoading(false);
       setProcessError("");
+      processCatalogCacheRef.current = { ts: 0, value: null };
+      processCatalogRequestRef.current = null;
     }
   }, [useProcessDropdown]);
 
