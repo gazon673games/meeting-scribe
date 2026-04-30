@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import copy
 import importlib.util
 import os
 import platform
@@ -34,8 +35,13 @@ class ElectronBackend:
     _device_tokens: Dict[str, DeviceToken] = field(default_factory=dict)
     _hardware_cache: Dict[str, Any] | None = field(default=None, init=False, repr=False)
     _hardware_cache_ts: float = field(default=0.0, init=False, repr=False)
+    _gpu_cache: List[Dict[str, Any]] = field(default_factory=list, init=False, repr=False)
+    _gpu_cache_ts: float = field(default=0.0, init=False, repr=False)
     _resource_cpu_time_s: float = field(default=0.0, init=False, repr=False)
     _resource_wall_time_s: float = field(default=0.0, init=False, repr=False)
+    _resource_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
+    _catalog_cache: Dict[Tuple[Any, ...], Tuple[float, Dict[str, Any]]] = field(default_factory=dict, init=False, repr=False)
+    _catalog_cache_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
     _device_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
     _downloads: Dict[str, Any] = field(default_factory=dict, init=False, repr=False)
     _download_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
@@ -125,26 +131,35 @@ class ElectronBackend:
             },
         }
 
+    def get_runtime_state(self) -> Dict[str, Any]:
+        return {
+            "protocolVersion": self.protocol_version,
+            "session": self._session_snapshot(),
+        }
+
     def get_config(self) -> Dict[str, Any]:
         return self._read_config()
 
-    def get_resource_usage(self) -> Dict[str, Any]:
-        now = time.monotonic()
-        cpu_time_s = time.process_time()
-        cpu_pct = 0.0
-        if self._resource_wall_time_s > 0.0:
-            wall_delta = max(1e-6, now - self._resource_wall_time_s)
-            cpu_delta = max(0.0, cpu_time_s - self._resource_cpu_time_s)
-            cpu_pct = min(100.0, (cpu_delta / wall_delta / max(1, os.cpu_count() or 1)) * 100.0)
-        self._resource_wall_time_s = now
-        self._resource_cpu_time_s = cpu_time_s
-        return {
-            "pid": os.getpid(),
-            "cpuPct": cpu_pct,
-            "memoryBytes": _current_process_memory_bytes(),
-            "system": _memory_snapshot(),
-            "gpus": _nvidia_gpu_snapshot(),
-        }
+    def get_resource_usage(self, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        params = params if isinstance(params, dict) else {}
+        include_gpu = bool(params.get("includeGpu", params.get("include_gpu", True)))
+        with self._resource_lock:
+            now = time.monotonic()
+            cpu_time_s = time.process_time()
+            cpu_pct = 0.0
+            if self._resource_wall_time_s > 0.0:
+                wall_delta = max(1e-6, now - self._resource_wall_time_s)
+                cpu_delta = max(0.0, cpu_time_s - self._resource_cpu_time_s)
+                cpu_pct = min(100.0, (cpu_delta / wall_delta / max(1, os.cpu_count() or 1)) * 100.0)
+            self._resource_wall_time_s = now
+            self._resource_cpu_time_s = cpu_time_s
+            return {
+                "pid": os.getpid(),
+                "cpuPct": cpu_pct,
+                "memoryBytes": _current_process_memory_bytes(),
+                "system": _memory_snapshot(),
+                "gpus": self._gpu_snapshot(max_age_s=5.0) if include_gpu else [],
+            }
 
     def list_process_sessions(self) -> Dict[str, Any]:
         from infrastructure.process_session_catalog import list_process_session_groups, is_per_process_audio_supported
@@ -208,6 +223,12 @@ class ElectronBackend:
         config = self._read_config()
         models_dir = self._models_dir_from_params(params, config)
         downloads = self._download_snapshot()
+        current_model = str((config.get("ui", {}) if isinstance(config.get("ui"), dict) else {}).get("model", "")).strip()
+        cache_key = ("asr", str(models_dir), current_model)
+        if self._active_download_count(downloads) <= 0:
+            cached = self._catalog_cache_get(cache_key)
+            if cached is not None:
+                return cached
         models = []
         recommended_refs = {normalize_model_reference(name) for name in ASR_MODEL_NAMES}
         for name in ASR_MODEL_NAMES:
@@ -230,7 +251,6 @@ class ElectronBackend:
                 continue
             models.append({**record, **self._download_fields(str(record.get("name") or ""), downloads)})
 
-        current_model = str((config.get("ui", {}) if isinstance(config.get("ui"), dict) else {}).get("model", "")).strip()
         known_refs = {normalize_model_reference(str(model.get("name") or "")) for model in models}
         if current_model and normalize_model_reference(current_model) not in known_refs:
             cached = is_model_cached(current_model, models_dir=models_dir)
@@ -269,7 +289,10 @@ class ElectronBackend:
             })
             known_refs.add(normalized)
 
-        return {"models": models, "modelsDir": str(models_dir), "activeDownloads": self._active_download_count(downloads)}
+        result = {"models": models, "modelsDir": str(models_dir), "activeDownloads": self._active_download_count(downloads)}
+        if result["activeDownloads"] <= 0:
+            self._catalog_cache_put(cache_key, result)
+        return result
 
     def download_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from application.model_download import download_model_async, normalize_model_reference
@@ -349,6 +372,7 @@ class ElectronBackend:
         if self._model_is_selected_or_running(name):
             raise RuntimeError("Cannot delete the model that is selected or currently used by ASR")
         delete_local_model(name, models_dir=self._models_dir_from_params(params))
+        self._catalog_cache_clear()
         return {"deleted": True, "name": name}
 
     def model_metadata(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -362,11 +386,21 @@ class ElectronBackend:
     def list_diarization_models(self, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
         from application.diarization_model_download import list_diarization_models
 
-        return list_diarization_models(
+        models_dir = self._models_dir_from_params(params)
+        downloads = self._diarization_download_snapshot()
+        cache_key = ("diar", str(models_dir))
+        if self._active_download_count(downloads) <= 0:
+            cached = self._catalog_cache_get(cache_key)
+            if cached is not None:
+                return cached
+        result = list_diarization_models(
             project_root=self.project_root,
-            models_dir=self._models_dir_from_params(params),
-            downloads=self._diarization_download_snapshot(),
+            models_dir=models_dir,
+            downloads=downloads,
         )
+        if self._active_download_count(downloads) <= 0:
+            self._catalog_cache_put(cache_key, result)
+        return result
 
     def download_diarization_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from application.diarization_model_download import download_diarization_model_async
@@ -449,16 +483,27 @@ class ElectronBackend:
             path=path,
             models_dir=self._models_dir_from_params(params),
         )
+        self._catalog_cache_clear()
         return {"deleted": True, "path": path}
 
     def list_llm_models(self, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
         from application.llm_model_download import list_llm_models
 
-        return list_llm_models(
+        models_dir = self._llm_models_dir_from_params(params)
+        downloads = self._llm_download_snapshot()
+        cache_key = ("llm", str(models_dir))
+        if self._active_download_count(downloads) <= 0:
+            cached = self._catalog_cache_get(cache_key)
+            if cached is not None:
+                return cached
+        result = list_llm_models(
             project_root=self.project_root,
-            models_dir=self._llm_models_dir_from_params(params),
-            downloads=self._llm_download_snapshot(),
+            models_dir=models_dir,
+            downloads=downloads,
         )
+        if self._active_download_count(downloads) <= 0:
+            self._catalog_cache_put(cache_key, result)
+        return result
 
     def download_llm_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from application.llm_model_download import download_llm_model_async, parse_llm_source
@@ -539,6 +584,7 @@ class ElectronBackend:
         if not path:
             raise ValueError("delete_llm_model requires params.path")
         delete_llm_model(project_root=self.project_root, path=path, models_dir=self._llm_models_dir_from_params(params))
+        self._catalog_cache_clear()
         return {"deleted": True, "path": path}
 
     def save_config(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -552,6 +598,7 @@ class ElectronBackend:
             configure_project_local_io(self.project_root, models_dir=self._models_dir(config))
         except Exception:
             pass
+        self._catalog_cache_clear()
         return {"saved": True, "config": self._read_config()}
 
     def list_devices(self) -> Dict[str, Any]:
@@ -650,10 +697,12 @@ class ElectronBackend:
             return self.ping(params)
         if method == "get_state":
             return self.get_state()
+        if method == "get_runtime_state":
+            return self.get_runtime_state()
         if method == "get_config":
             return self.get_config()
         if method == "get_resource_usage":
-            return self.get_resource_usage()
+            return self.get_resource_usage(params)
         if method == "save_config":
             return self.save_config(params)
         if method == "list_devices":
@@ -755,10 +804,31 @@ class ElectronBackend:
             "downloadUsesProxy": bool(dl.get("proxy", False)),
         }
 
+    def _catalog_cache_get(self, key: Tuple[Any, ...], *, max_age_s: float = 10.0) -> Optional[Dict[str, Any]]:
+        now = time.monotonic()
+        with self._catalog_cache_lock:
+            cached = self._catalog_cache.get(tuple(key))
+            if cached is None:
+                return None
+            ts, value = cached
+            if now - float(ts) > float(max_age_s):
+                self._catalog_cache.pop(tuple(key), None)
+                return None
+            return copy.deepcopy(value)
+
+    def _catalog_cache_put(self, key: Tuple[Any, ...], value: Dict[str, Any]) -> None:
+        with self._catalog_cache_lock:
+            self._catalog_cache[tuple(key)] = (time.monotonic(), copy.deepcopy(value))
+
+    def _catalog_cache_clear(self) -> None:
+        with self._catalog_cache_lock:
+            self._catalog_cache.clear()
+
     def _set_download_state(self, name: str, record: Dict[str, Any]) -> None:
         with self._download_lock:
             self._downloads[str(name)] = dict(record)
             active_downloads = self._active_download_count(self._downloads)
+        self._catalog_cache_clear()
         self._emit(
             "model_download_updated",
             {
@@ -772,6 +842,7 @@ class ElectronBackend:
         with self._diarization_download_lock:
             self._diarization_downloads[str(name)] = dict(record)
             active_downloads = self._active_download_count(self._diarization_downloads)
+        self._catalog_cache_clear()
         self._emit(
             "diarization_model_download_updated",
             {
@@ -785,6 +856,7 @@ class ElectronBackend:
         with self._llm_download_lock:
             self._llm_downloads[str(name)] = dict(record)
             active_downloads = self._active_download_count(self._llm_downloads)
+        self._catalog_cache_clear()
         self._emit(
             "llm_model_download_updated",
             {
@@ -950,11 +1022,21 @@ class ElectronBackend:
             "memory": {
                 "totalBytes": _physical_memory_bytes(),
             },
-            "gpus": _nvidia_gpu_snapshot(),
+            "gpus": self._gpu_snapshot(max_age_s=10.0),
         }
         self._hardware_cache = snapshot
         self._hardware_cache_ts = now
         return dict(snapshot)
+
+    def _gpu_snapshot(self, *, max_age_s: float) -> List[Dict[str, Any]]:
+        with self._resource_lock:
+            now = time.monotonic()
+            if self._gpu_cache_ts > 0.0 and now - self._gpu_cache_ts < max(0.0, float(max_age_s)):
+                return [dict(gpu) for gpu in self._gpu_cache]
+            gpus = _nvidia_gpu_snapshot()
+            self._gpu_cache = [dict(gpu) for gpu in gpus]
+            self._gpu_cache_ts = now
+            return [dict(gpu) for gpu in self._gpu_cache]
 
     def _session_snapshot(self) -> Dict[str, Any]:
         if self.session_controller is None:

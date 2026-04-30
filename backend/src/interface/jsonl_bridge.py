@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import os
 import sys
 import threading
 import time
@@ -11,6 +12,7 @@ from typing import Any, Callable, Dict, TextIO
 
 
 BackendHandler = Callable[[str, Dict[str, Any] | None], Any]
+_DEFAULT_MAX_WORKERS = 6
 
 
 @dataclass
@@ -23,7 +25,8 @@ class JsonLineBridge:
 
     def serve_forever(self) -> None:
         self.emit_event("backend_ready", {"ts": time.time()})
-        with concurrent.futures.ThreadPoolExecutor(max_workers=16, thread_name_prefix="bridge") as executor:
+        max_workers = _bridge_max_workers()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="bridge") as executor:
             for line in self.stdin:
                 line = line.strip()
                 if not line:
@@ -75,3 +78,11 @@ def _request_id_from_line(line: str) -> Any:
     except Exception:
         return None
     return request.get("id") if isinstance(request, dict) else None
+
+
+def _bridge_max_workers() -> int:
+    try:
+        raw = int(str(os.environ.get("MEETING_SCRIBE_BRIDGE_WORKERS", "")).strip() or _DEFAULT_MAX_WORKERS)
+    except Exception:
+        raw = _DEFAULT_MAX_WORKERS
+    return max(2, min(16, raw))
