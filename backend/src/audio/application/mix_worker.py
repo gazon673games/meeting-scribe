@@ -28,6 +28,7 @@ class MixLoopSnapshot:
     tap_mode: TapMode = "both"
     tap_sources_filter: Optional[Set[str]] = None
     tap_drop_threshold: float = 0.85
+    output_enabled: bool = False
 
 
 class AudioMixWorker:
@@ -72,10 +73,11 @@ class AudioMixWorker:
             mixed, sources_out, ts_mono = self._render_mix(snapshot)
             self._record_master_metrics(rms(mixed), ts_mono)
 
-            try:
-                self._out_q.put_nowait(mixed)
-            except queue.Full:
-                self._record_output_drop()
+            if snapshot.output_enabled:
+                try:
+                    self._out_q.put_nowait(mixed)
+                except queue.Full:
+                    self._record_output_drop()
 
             if snapshot.tap_q is not None:
                 sent = try_emit_tap_packet(
