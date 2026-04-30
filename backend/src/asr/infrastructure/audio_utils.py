@@ -54,6 +54,12 @@ def resample_linear(x: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
     if n <= 1:
         return x.astype(np.float32, copy=False)
 
+    if src_rate == 48000 and dst_rate == 16000:
+        m = int(round(n / 3.0))
+        if m <= 0:
+            return np.zeros((0,), dtype=np.float32)
+        return x[: m * 3 : 3].astype(np.float32, copy=True)
+
     dur = n / float(src_rate)
     m = int(round(dur * dst_rate))
     if m <= 0:
