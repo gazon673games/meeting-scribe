@@ -256,6 +256,7 @@ class PythonBackend {
 
 const backend = new PythonBackend({ root: appRoot, backendRoot, runtimeRoot });
 let gpuUsageCache = { ts: 0, gpus: [] };
+const GPU_USAGE_CACHE_MS = 5000;
 let mainWindow = null;
 let debugWindow = null;
 
@@ -306,7 +307,7 @@ function electronResourceUsage() {
 
 function nvidiaGpuUsage() {
   const now = Date.now();
-  if (now - gpuUsageCache.ts < 2000) {
+  if (now - gpuUsageCache.ts < GPU_USAGE_CACHE_MS) {
     return Promise.resolve(gpuUsageCache.gpus);
   }
   return new Promise((resolve) => {
@@ -366,7 +367,7 @@ async function getResourceUsage() {
   const electron = electronResourceUsage();
   let backendUsage = { pid: backend.process?.pid || 0, cpuPct: 0, memoryBytes: 0 };
   try {
-    backendUsage = (await backend.request("get_resource_usage", {})) || backendUsage;
+    backendUsage = (await backend.request("get_resource_usage", { includeGpu: false })) || backendUsage;
   } catch (error) {
     backendUsage = { ...backendUsage, error: String(error?.message || error) };
   }

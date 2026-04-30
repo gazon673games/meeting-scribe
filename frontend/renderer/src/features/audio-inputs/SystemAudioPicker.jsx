@@ -28,9 +28,9 @@ export function SystemAudioPicker({
   const activeError = externalError || error;
   const groups = React.useMemo(() => normalizeProcessGroups(activeCatalog), [activeCatalog]);
 
-  const load = React.useCallback(() => {
+  const load = React.useCallback((options = {}) => {
     if (onRefresh) {
-      onRefresh();
+      onRefresh(options);
       return;
     }
     setLoading(true);
@@ -155,7 +155,7 @@ export function SystemAudioPicker({
           <section className="source-dropdown-section">
             <div className="process-tree-toolbar">
               <span className="source-dropdown-title">Applications</span>
-              <button className="icon-button" disabled={activeLoading} title="Refresh app audio sources" type="button" onClick={load}>
+              <button className="icon-button" disabled={activeLoading} title="Refresh app audio sources" type="button" onClick={() => load({ force: true })}>
                 <RefreshCw size={12} className={activeLoading ? "spin" : ""} />
               </button>
             </div>

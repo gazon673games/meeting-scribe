@@ -46,8 +46,12 @@ export function useMeetingScribeApp() {
     }
   }, []);
 
-  const refresh = React.useCallback(async () => {
-    setLoading(true);
+  const refresh = React.useCallback(async (options = {}) => {
+    const includeDevices = options?.includeDevices !== false;
+    const showLoading = options?.showLoading !== false;
+    if (showLoading) {
+      setLoading(true);
+    }
     setError("");
     try {
       const [statusResult, stateResult, configResult] = await Promise.all([
@@ -58,11 +62,15 @@ export function useMeetingScribeApp() {
       setBackendStatus(statusResult);
       setState((current) => mergeBackendStateSnapshot(current, stateResult));
       setConfig(configResult);
-      refreshDevices();
+      if (includeDevices) {
+        refreshDevices();
+      }
     } catch (requestError) {
       setError(`${requestError.name || "Error"}: ${requestError.message || requestError}`);
     } finally {
-      setLoading(false);
+      if (showLoading) {
+        setLoading(false);
+      }
     }
   }, [refreshDevices]);
 
@@ -106,7 +114,7 @@ export function useMeetingScribeApp() {
         setState((current) => upsertSessionSource(current, event.source));
       }
       if (REFRESHING_EVENTS.includes(event.type)) {
-        refresh();
+        refresh({ includeDevices: false, showLoading: false });
       }
     });
   }, [refresh]);
@@ -134,12 +142,14 @@ export function useMeetingScribeApp() {
     }
     const handle = window.setInterval(() => {
       meetingScribeClient
-        .request("get_state")
+        .request("get_runtime_state")
         .then((result) => setState((current) => mergeBackendStateSnapshot(current, result)))
         .catch((requestError) => setError(`${requestError.name || "Error"}: ${requestError.message || requestError}`));
     }, 600);
     return () => window.clearInterval(handle);
   }, [state?.session?.running]);
+
+  const fastResourcePolling = Boolean(state?.session?.running || state?.session?.offlinePass?.running);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -158,12 +168,12 @@ export function useMeetingScribeApp() {
         });
     };
     loadResourceUsage();
-    const handle = window.setInterval(loadResourceUsage, 2000);
+    const handle = window.setInterval(loadResourceUsage, fastResourcePolling ? 2000 : 5000);
     return () => {
       cancelled = true;
       window.clearInterval(handle);
     };
-  }, []);
+  }, [fastResourcePolling]);
 
   const options = state?.options || FALLBACK_OPTIONS;
   const summary = state?.configSummary || {};
@@ -504,14 +514,21 @@ function applyAsrMetrics(state, event) {
 }
 
 function mergeBackendStateSnapshot(current, next) {
-  if (!next || !current?.session || !next?.session) {
-    return next || current;
+  if (!next) {
+    return current;
   }
-  if (!current.session.running || !next.session.running) {
+  if (!current) {
     return next;
   }
+  const merged = { ...current, ...next };
+  if (!current?.session || !next?.session) {
+    return merged;
+  }
+  if (!current.session.running || !next.session.running) {
+    return merged;
+  }
   return {
-    ...next,
+    ...merged,
     session: {
       ...next.session,
       transcript: mergeTranscriptLines(current.session.transcript || [], next.session.transcript || [])

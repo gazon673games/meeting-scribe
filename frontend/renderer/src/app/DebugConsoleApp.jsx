@@ -44,7 +44,7 @@ export function DebugConsoleApp() {
         .catch(() => {});
     };
     refreshRuntime();
-    const handle = window.setInterval(refreshRuntime, 1000);
+    const handle = window.setInterval(refreshRuntime, 2000);
     return () => {
       cancelled = true;
       window.clearInterval(handle);
@@ -104,7 +104,7 @@ function LogRow({ event }) {
     <div className={`debug-log-row ${tone}`}>
       <time>{formatTime(event.ts)}</time>
       <strong>{event.type || "event"}</strong>
-      <span title={JSON.stringify(event)}>{eventSummary(event)}</span>
+      <span title={eventTitle(event)}>{eventSummary(event)}</span>
     </div>
   );
 }
@@ -112,6 +112,7 @@ function LogRow({ event }) {
 function mergeEventLists(primary, secondary) {
   const merged = [];
   const seen = new Set();
+  const shouldSort = (primary || []).length > 1;
   for (const event of [...(primary || []), ...(secondary || [])]) {
     const key = eventKey(event, merged.length);
     if (seen.has(key)) {
@@ -119,17 +120,21 @@ function mergeEventLists(primary, secondary) {
     }
     seen.add(key);
     merged.push(event);
+    if (merged.length >= MAX_EVENTS) {
+      break;
+    }
   }
-  return merged
-    .sort((left, right) => Number(right?.ts || 0) - Number(left?.ts || 0))
-    .slice(0, MAX_EVENTS);
+  return shouldSort ? merged.sort((left, right) => Number(right?.ts || 0) - Number(left?.ts || 0)) : merged;
 }
 
 function eventKey(event, fallbackIndex) {
   const ts = Number(event?.ts || 0).toFixed(6);
   const type = String(event?.type || "");
-  const payload = JSON.stringify(event || {});
-  return `${ts}:${type}:${payload || fallbackIndex}`;
+  const id = event?.id || event?.line?.id || "";
+  const stream = event?.stream || event?.line?.stream || "";
+  const span = `${event?.t_start ?? event?.line?.t_start ?? ""}:${event?.t_end ?? event?.line?.t_end ?? ""}`;
+  const text = String(event?.text || event?.line?.text || event?.message || event?.error || "").slice(0, 80);
+  return `${ts}:${type}:${id}:${stream}:${span}:${text || fallbackIndex}`;
 }
 
 function buildProcessRows({ backendStatus, events, resourceUsage }) {
@@ -240,7 +245,30 @@ function eventSummary(event) {
   if (event.type === "backend_stderr") {
     return event.text || "";
   }
-  return JSON.stringify(event);
+  return compactEventText(event);
+}
+
+function eventTitle(event) {
+  return compactEventText(event, 300);
+}
+
+function compactEventText(event, maxLength = 180) {
+  if (!event || typeof event !== "object") {
+    return "";
+  }
+  const parts = [];
+  for (const key of ["type", "where", "stream", "speaker", "model", "message", "error", "text"]) {
+    const value = event[key];
+    if (value === undefined || value === null || value === "") {
+      continue;
+    }
+    parts.push(`${key}=${String(value).replace(/\s+/g, " ").slice(0, 120)}`);
+  }
+  const text = parts.join(" ");
+  if (text) {
+    return text.length > maxLength ? `${text.slice(0, maxLength - 1)}...` : text;
+  }
+  return String(event.type || "event");
 }
 
 function diarDebugDetail(event) {
