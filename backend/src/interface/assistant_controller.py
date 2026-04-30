@@ -48,6 +48,9 @@ class AssistantController:
     _last_response: Dict[str, Any] = field(default_factory=dict)
     _last_error: str = ""
     _last_request: Dict[str, Any] = field(default_factory=dict)
+    _provider_cache_key: tuple = field(default_factory=tuple, init=False, repr=False)
+    _provider_cache_ts: float = field(default=0.0, init=False, repr=False)
+    _provider_cache_records: list[Dict[str, Any]] = field(default_factory=list, init=False, repr=False)
 
     def set_event_sink(self, event_sink) -> None:  # noqa: ANN001
         with self._lock:
@@ -301,12 +304,23 @@ class AssistantController:
         return self._selected_profile(settings)
 
     def _provider_records(self, settings: CodexSettings) -> list[Dict[str, Any]]:
+        cache_key = _provider_cache_key(settings)
+        now = time.monotonic()
+        with self._lock:
+            if (
+                self._provider_cache_key == cache_key
+                and self._provider_cache_records
+                and now - self._provider_cache_ts < 5.0
+            ):
+                return [dict(record) for record in self._provider_cache_records]
+
         status_fn = getattr(self.assistant_service, "provider_statuses", None)
         if callable(status_fn):
             try:
-                return [status.as_dict() for status in status_fn(options=self._runtime_options(settings))]
+                records = [status.as_dict() for status in status_fn(options=self._runtime_options(settings))]
+                return self._cache_provider_records(cache_key, records)
             except Exception as exc:
-                return [
+                return self._cache_provider_records(cache_key, [
                     {
                         "id": ASSISTANT_PROVIDER_CODEX,
                         "label": "Codex CLI",
@@ -317,8 +331,8 @@ class AssistantController:
                         "suggestion": "",
                         "models": [],
                     }
-                ]
-        return [
+                ])
+        return self._cache_provider_records(cache_key, [
             {
                 "id": ASSISTANT_PROVIDER_CODEX,
                 "label": "Codex CLI",
@@ -329,7 +343,14 @@ class AssistantController:
                 "suggestion": "",
                 "models": [],
             }
-        ]
+        ])
+
+    def _cache_provider_records(self, cache_key: tuple, records: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+        with self._lock:
+            self._provider_cache_key = cache_key
+            self._provider_cache_ts = time.monotonic()
+            self._provider_cache_records = [dict(record) for record in records]
+            return [dict(record) for record in self._provider_cache_records]
 
     def _select_profile(self, settings: CodexSettings, profile_id: str) -> CodexProfile:
         if not settings.profiles:
@@ -450,6 +471,25 @@ def _provider_for_profile(providers: list[Dict[str, Any]], profile: CodexProfile
         "message": f"Assistant provider '{wanted}' is not configured.",
         "errorCode": "provider_unavailable",
     }
+
+
+def _provider_cache_key(settings: CodexSettings) -> tuple:
+    return (
+        bool(settings.enabled),
+        str(settings.proxy or ""),
+        tuple(settings.command_tokens or []),
+        tuple(settings.path_hints or []),
+        tuple(
+            (
+                str(profile.id),
+                str(profile.provider_id),
+                str(profile.model),
+                str(profile.base_url),
+                str(profile.codex_profile),
+            )
+            for profile in list(settings.profiles or [])
+        ),
+    )
 
 
 def _optional_int(raw: object) -> Optional[int]:

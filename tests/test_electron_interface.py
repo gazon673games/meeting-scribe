@@ -50,6 +50,7 @@ class _FakeEngine:
         self.sources: list[_FakeSource] = []
         self.running = False
         self.tap_queue = None
+        self.output_enabled = False
         self.enabled: dict[str, bool] = {}
         self.delays: dict[str, float] = {}
 
@@ -58,6 +59,9 @@ class _FakeEngine:
 
     def set_tap_queue(self, tap_queue) -> None:  # noqa: ANN001
         self.tap_queue = tap_queue
+
+    def set_output_enabled(self, enabled: bool) -> None:
+        self.output_enabled = bool(enabled)
 
     def set_tap_config(self, **kwargs) -> None:  # noqa: ANN003
         self.tap_config = kwargs
@@ -249,6 +253,7 @@ class ElectronInterfaceTests(unittest.TestCase):
             backend.handle("list_devices")
             source = backend.handle("add_source", {"deviceId": "input:0"})
             started = backend.handle("start_session", {})
+            self.assertTrue(runtime_factory.engine.output_enabled)
             live_source = backend.handle("add_source", {"deviceId": "loopback:0"})
             stopped = backend.handle("stop_session", {})
 
@@ -258,7 +263,25 @@ class ElectronInterfaceTests(unittest.TestCase):
             self.assertTrue(runtime_factory.engine.running is False)
             self.assertFalse(stopped["running"])
             self.assertTrue(started["wavRecording"])
+            self.assertFalse(runtime_factory.engine.output_enabled)
             self.assertFalse(wav_factory.writer.recording)
+
+    def test_runtime_state_is_lightweight_and_resource_usage_can_skip_gpu(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            repository = JsonConfigRepository(root / "config.json")
+            repository.write({"ui": {"asr_enabled": False, "wav_enabled": False}})
+            backend = ElectronBackend(root, repository, _DeviceCatalog())
+
+            runtime_state = backend.handle("get_runtime_state")
+            self.assertIn("session", runtime_state)
+            self.assertNotIn("assistant", runtime_state)
+            self.assertNotIn("hardware", runtime_state)
+
+            with patch("interface.backend._nvidia_gpu_snapshot") as gpu_snapshot:
+                usage = backend.handle("get_resource_usage", {"includeGpu": False})
+                self.assertEqual(usage["gpus"], [])
+                gpu_snapshot.assert_not_called()
 
     def test_backend_lists_grouped_process_sessions_and_adds_process_source(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
