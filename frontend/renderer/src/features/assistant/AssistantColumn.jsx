@@ -1,5 +1,5 @@
 import React from "react";
-import { ChevronDown, ChevronRight, Play, Radio, Square } from "lucide-react";
+import { Play, Radio, Square } from "lucide-react";
 
 import { PipelinePanel } from "../../shared/ui/pipeline/PipelinePanel";
 import { AssistantProfileSelect } from "./AssistantProfileSelect";
@@ -7,6 +7,13 @@ import { AssistantPromptBox } from "./AssistantPromptBox";
 import { AssistantQuickActions } from "./AssistantQuickActions";
 import { AssistantResponse } from "./AssistantResponse";
 import { AssistantStats } from "./AssistantStats";
+
+const ACTION_LABELS = {
+  answer: "Answer Latest",
+  summary: "Summarize",
+  action_items: "Action Items",
+  risk_check: "Risk Check",
+};
 
 export function AssistantColumn({
   assistant,
@@ -24,46 +31,55 @@ export function AssistantColumn({
   onStopLocalModel
 }) {
   const [text, setText] = React.useState("");
-  const [optionsOpen, setOptionsOpen] = React.useState(false);
-  const [profileId, setProfileId] = React.useState(assistant.selectedProfileId || profiles?.[0]?.id || "");
+  const [profileId, setProfileId] = React.useState(assistant.selectedProfileId || "");
+  const [chatMessages, setChatMessages] = React.useState([]);
+  const lastResponseRef = React.useRef(null);
 
   React.useEffect(() => {
-    setProfileId((current) => current || assistant.selectedProfileId || profiles?.[0]?.id || "");
-  }, [assistant.selectedProfileId, profiles]);
+    setProfileId((current) => current || assistant.selectedProfileId || "");
+  }, [assistant.selectedProfileId]);
 
-  // Stop previous local model server when switching profiles
-  const prevProfileRef = React.useRef(profileId);
   React.useEffect(() => {
-    const prev = prevProfileRef.current;
-    prevProfileRef.current = profileId;
-    if (prev && prev !== profileId) {
-      const prevProfile = profiles.find((p) => p.id === prev);
-      const prevProvider = prevProfile?.provider || prevProfile?.providerId || "codex";
-      if (prevProvider !== "codex") {
-        onStopLocalModel?.(prev);
-      }
-    }
-  }, [profileId, profiles, onStopLocalModel]);
+    const r = assistant.lastResponse;
+    if (!r || !r.ts) return;
+    if (r.ts === lastResponseRef.current) return;
+    if (!r.text && r.ok !== false) return;
+    lastResponseRef.current = r.ts;
+    setChatMessages((prev) => [...prev, { id: Date.now(), role: "assistant", ...r }]);
+  }, [assistant.lastResponse]);
 
-  const selectedProfile = profiles.find((profile) => profile.id === profileId) || profiles[0] || {};
+  const handleProfileChange = (id) => {
+    setProfileId(id);
+  };
+
+  const selectedProfile = profiles.find((profile) => profile.id === profileId) || {};
   const response = assistant.lastResponse || {};
-  const actionsDisabled = disabled || !contextReady;
+  const noProfile = !profileId;
+  const actionsDisabled = disabled || !contextReady || noProfile;
   const selectedProviderId = selectedProfile.providerId || selectedProfile.provider || assistant.providerId || "codex";
   const isCodexProfile = (selectedProfile.provider || selectedProfile.providerId || "codex") === "codex";
   const llmStatus = !isCodexProfile ? (localLlmStatus?.[profileId] || null) : null;
   const llmRunning = llmStatus?.state === "running";
   const llmStarting = llmStatus?.state === "starting";
 
+  const handleInvoke = (params) => {
+    const label = params.requestText || ACTION_LABELS[params.action] || "";
+    if (label) {
+      setChatMessages((prev) => [...prev, { id: Date.now(), role: "user", text: label, sourceLabel: params.sourceLabel || "you" }]);
+    }
+    onInvoke(params);
+  };
+
   const invokeCustom = (requestText, sourceLabel = "you") => {
-    if (!contextReady) return;
+    setChatMessages((prev) => [...prev, { id: Date.now(), role: "user", text: requestText, sourceLabel }]);
     onInvoke({ requestText, profileId, sourceLabel });
   };
 
   return (
     <PipelinePanel title="AI Assistant" active={assistant.busy} className="assistant-column" headerControls={layoutControls} headerProps={headerProps} showIndicator>
-      <AssistantProfileSelect disabled={disabled} profileId={profileId} profiles={profiles} onProfileChange={setProfileId} />
+      <AssistantProfileSelect disabled={disabled} profileId={profileId} profiles={profiles} onProfileChange={handleProfileChange} />
 
-      {!isCodexProfile ? (
+      {!isCodexProfile && profileId ? (
         <div className="local-model-bar">
           {!llmRunning && !llmStarting ? (
             <button
@@ -90,47 +106,32 @@ export function AssistantColumn({
         </div>
       ) : null}
 
-      <AssistantQuickActions disabled={actionsDisabled} profileId={profileId} onInvoke={onInvoke} />
+      {isCodexProfile && profileId ? (
+        <div className="local-model-bar">
+          <button
+            className="assistant-ping-btn"
+            disabled={disabled || assistantPing?.busy}
+            type="button"
+            onClick={() => onPing?.(selectedProviderId, profileId)}
+          >
+            <Radio size={13} />
+            Ping
+          </button>
+          <PingStatus ping={assistantPing} />
+        </div>
+      ) : null}
+
+      <AssistantQuickActions disabled={actionsDisabled} profileId={profileId} onInvoke={handleInvoke} />
       <AssistantResponse
         assistant={assistant}
         busy={assistant.busy}
-        response={response}
+        messages={chatMessages}
         onAuthorize={() => onAuthorize?.(selectedProviderId)}
       />
-      <div className="assistant-options">
-        <button className="assistant-options-toggle" type="button" onClick={() => setOptionsOpen((v) => !v)}>
-          {optionsOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-          Profile Options
-        </button>
-        {optionsOpen && (
-          <div className="assistant-options-body">
-            <div className="assistant-options-meta">
-              {selectedProfile.model ? <span className="profile-meta-model">{selectedProfile.model}</span> : null}
-              <span className={`profile-mode-badge ${selectedProfile.offline ? "offline" : "online"}`}>
-                {selectedProfile.offline ? "offline" : "online"}
-              </span>
-            </div>
-            {isCodexProfile ? (
-              <div className="assistant-options-row">
-                <button
-                  className="assistant-ping-btn"
-                  disabled={disabled || assistantPing?.busy}
-                  type="button"
-                  onClick={() => onPing?.(selectedProviderId, profileId)}
-                >
-                  <Radio size={13} />
-                  Ping
-                </button>
-                <PingStatus ping={assistantPing} />
-              </div>
-            ) : null}
-          </div>
-        )}
-      </div>
       <AssistantStats assistant={assistant} response={response} selectedProfile={selectedProfile} />
       <AssistantPromptBox
         disabled={disabled}
-        submitDisabled={actionsDisabled}
+        submitDisabled={disabled || noProfile}
         text={text}
         onTextChange={setText}
         onSubmit={() => {
@@ -140,13 +141,6 @@ export function AssistantColumn({
       />
     </PipelinePanel>
   );
-}
-
-function LocalLlmBadge({ state }) {
-  if (state === "running") return <span className="llm-badge llm-badge-running">ok</span>;
-  if (state === "starting") return <span className="llm-badge llm-badge-starting">...</span>;
-  if (state === "error") return <span className="llm-badge llm-badge-error">!</span>;
-  return null;
 }
 
 function LocalLlmStatusText({ status }) {

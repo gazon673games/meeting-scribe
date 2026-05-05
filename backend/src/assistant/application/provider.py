@@ -9,6 +9,7 @@ from typing import Any, List, Protocol
 ASSISTANT_PROVIDER_CODEX = "codex"
 ASSISTANT_PROVIDER_OLLAMA = "ollama"
 ASSISTANT_PROVIDER_OPENAI_LOCAL = "openai_local"
+ASSISTANT_PROVIDER_LOCAL = "local"
 
 
 @dataclass(frozen=True)

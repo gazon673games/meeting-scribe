@@ -46,7 +46,8 @@ export const ASSISTANT_REASONING_OPTIONS = ["low", "medium", "high", "xhigh"];
 export const ASSISTANT_PROVIDER_OPTIONS = [
   { id: "codex", label: "Codex CLI", defaultBaseUrl: "" },
   { id: "ollama", label: "Ollama", defaultBaseUrl: "http://127.0.0.1:11434" },
-  { id: "openai_local", label: "Local OpenAI", defaultBaseUrl: "http://127.0.0.1:1234/v1" }
+  { id: "openai_local", label: "Local OpenAI", defaultBaseUrl: "http://127.0.0.1:1234/v1" },
+  { id: "local", label: "Local GGUF (llama.cpp)", defaultBaseUrl: "" }
 ];
 export const DIARIZATION_BACKENDS = ["online", "sherpa_onnx", "nemo", "pyannote"];
 export const DIARIZATION_PROVIDERS = ["cpu", "cuda"];
@@ -103,6 +104,7 @@ export function makeSettingsDraft(config) {
     diarSherpaEmbeddingModelPath: String(asr.diar_sherpa_embedding_model_path || ""),
     diarSherpaProvider: normalizeDiarizationProvider(asr.diar_sherpa_provider),
     diarSherpaNumThreads: normalizeInteger(asr.diar_sherpa_num_threads, 1, 1, 32),
+    streamingEnabled: boolWithDefault(asr.streaming_enabled, false),
     perProcessAudio: boolWithDefault(ui.per_process_audio, false),
     assistantProxyEnabled: assistantProxy.enabled,
     assistantProxyScheme: proxy.scheme,
@@ -148,6 +150,7 @@ export function applySettingsToConfig(config, draft) {
       diar_sherpa_embedding_model_path: String(draft.diarSherpaEmbeddingModelPath || "").trim(),
       diar_sherpa_provider: normalizeDiarizationProvider(draft.diarSherpaProvider),
       diar_sherpa_num_threads: normalizeInteger(draft.diarSherpaNumThreads, 1, 1, 32),
+      streaming_enabled: Boolean(draft.streamingEnabled),
       ...Object.fromEntries(ASR_FIELDS.map((field) => [field.key, normalizeNumber(draft.asr[field.key], field)]))
     },
     models: {
@@ -175,6 +178,7 @@ export function draftToStartParams(draft) {
     realtimeTranscriptToFile: config.ui.rt_transcript_to_file,
     language: config.ui.lang,
     asrMode: draft.asrMode,
+    streamingEnabled: Boolean(draft.streamingEnabled),
     profile: config.ui.profile,
     model: config.ui.model,
     outputFile: config.ui.output_file,
@@ -228,11 +232,13 @@ export function normalizeAssistantProfiles(value) {
         extra_args: Array.isArray(item.extra_args || item.extraArgs)
           ? (item.extra_args || item.extraArgs).map((arg) => String(arg)).filter(Boolean)
           : [],
-        offline: Boolean(item.offline)
+        offline: Boolean(item.offline),
+        gpu_layers: item.gpu_layers !== undefined ? normalizeInteger(item.gpu_layers, 0, 0, 999) : undefined,
+        context_size: item.context_size !== undefined ? normalizeInteger(item.context_size, 4096, 64, 131072) : undefined
       };
     })
     .filter((profile) => profile.id);
-  return profiles.length ? profiles : DEFAULT_ASSISTANT_PROFILES.map((profile) => ({ ...profile }));
+  return profiles;
 }
 
 function selectedAssistantProfileId(draft) {

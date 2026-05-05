@@ -49,7 +49,6 @@ export function AssistantSettings({ draft, onChange }) {
   };
 
   const removeProfile = (index) => {
-    if (profiles.length <= 1) return;
     const removed = profiles[index];
     const next = profiles.filter((_, i) => i !== index);
     const fallback = next[Math.max(0, Math.min(index, next.length - 1))]?.id || "";
@@ -77,6 +76,7 @@ export function AssistantSettings({ draft, onChange }) {
   }, []);
 
   const cachedLocalModels = llmModels.filter((m) => m.cached).map((m) => String(m.modelAlias || m.name || "")).filter(Boolean);
+  const cachedGgufModels = llmModels.filter((m) => m.cached && m.path).map((m) => ({ label: String(m.label || m.name || m.path), path: String(m.path) }));
 
   return (
     <CollapsibleSection title="Assistant" defaultOpen={false}>
@@ -114,7 +114,10 @@ export function AssistantSettings({ draft, onChange }) {
                     >
                       <span className="assistant-profile-list-main">
                         <b>{profile.label || profile.id}</b>
-                        <small>{isCodex ? "Codex CLI" : runtimeLabel(profile.provider)}</small>
+                        <small>
+                          {isCodex ? "Codex CLI" : runtimeLabel(profile.provider)}
+                          {!isCodex && profile.model ? ` · ${modelBasename(profile.model)}` : ""}
+                        </small>
                       </span>
                       <span className={`profile-mode-badge ${isCodex ? "online" : "offline"}`}>
                         {isCodex ? "online" : "local"}
@@ -122,7 +125,6 @@ export function AssistantSettings({ draft, onChange }) {
                     </button>
                     <button
                       className="model-row-btn danger"
-                      disabled={profiles.length <= 1}
                       title="Delete"
                       type="button"
                       onClick={() => removeProfile(index)}
@@ -138,9 +140,9 @@ export function AssistantSettings({ draft, onChange }) {
                 <Plus size={13} />
                 Codex
               </button>
-              <button className="model-download-button" type="button" onClick={() => addProfile("openai_local")}>
+              <button className="model-download-button" type="button" onClick={() => addProfile("local")}>
                 <Plus size={13} />
-                Local
+                GGUF
               </button>
               <button className="model-download-button" type="button" onClick={() => addProfile("ollama")}>
                 <Plus size={13} />
@@ -152,30 +154,39 @@ export function AssistantSettings({ draft, onChange }) {
           {selectedProfile ? (
             <ProfileDetails
               assistantEnabled={assistantEnabled}
+              cachedGgufModels={cachedGgufModels}
               cachedLocalModels={cachedLocalModels}
               ping={pingStates[selectedProfile.id]}
               profile={selectedProfile}
-              profilesCount={profiles.length}
               onDelete={() => removeProfile(selectedIndex)}
               onPing={() => pingProfile(selectedProfile)}
               onUpdate={updateSelected}
             />
-          ) : null}
+          ) : (
+            <div className="assistant-profile-detail assistant-profile-empty">
+              <p>No profiles configured.</p>
+              <p>Add a profile using the buttons on the left.</p>
+            </div>
+          )}
         </div>
       </div>
     </CollapsibleSection>
   );
 }
 
-function ProfileDetails({ assistantEnabled, cachedLocalModels, ping, profile, profilesCount, onDelete, onPing, onUpdate }) {
+function ProfileDetails({ assistantEnabled, cachedGgufModels, cachedLocalModels, ping, profile, onDelete, onPing, onUpdate }) {
   const provider = normalizeProvider(profile.provider);
   const isCodex = provider === "codex";
+  const isLocalGguf = provider === "local";
   const [customModel, setCustomModel] = React.useState(false);
 
   const modelValue = profile.model || "";
-  const showModelDropdown = !isCodex && cachedLocalModels.length > 0;
+  const showOllamaDropdown = provider === "ollama" && cachedLocalModels.length > 0;
+  const showGgufDropdown = isLocalGguf && (cachedGgufModels?.length > 0);
+  const showModelDropdown = showOllamaDropdown;
   const modelInList = showModelDropdown && cachedLocalModels.includes(modelValue);
-  const useCustomInput = customModel || (!modelInList && modelValue !== "");
+  const ggufInList = showGgufDropdown && (cachedGgufModels || []).some((m) => m.path === modelValue);
+  const useCustomInput = customModel || (!modelInList && !ggufInList && modelValue !== "");
 
   return (
     <div className="assistant-profile-detail">
@@ -198,7 +209,6 @@ function ProfileDetails({ assistantEnabled, cachedLocalModels, ping, profile, pr
           ) : null}
           <button
             className="model-row-btn danger"
-            disabled={profilesCount <= 1}
             title="Delete profile"
             type="button"
             onClick={onDelete}
@@ -251,7 +261,24 @@ function ProfileDetails({ assistantEnabled, cachedLocalModels, ping, profile, pr
         ) : (
           <>
             <Field label="Model">
-              {showModelDropdown && !useCustomInput ? (
+              {showGgufDropdown && !useCustomInput ? (
+                <select
+                  value={ggufInList ? modelValue : ""}
+                  onChange={(e) => {
+                    if (e.target.value === "__custom__") {
+                      setCustomModel(true);
+                    } else {
+                      onUpdate({ model: e.target.value });
+                    }
+                  }}
+                >
+                  <option value="">— select —</option>
+                  {(cachedGgufModels || []).map((m) => (
+                    <option key={m.path} value={m.path}>{m.label}</option>
+                  ))}
+                  <option value="__custom__">Custom path…</option>
+                </select>
+              ) : showModelDropdown && !useCustomInput ? (
                 <select
                   value={modelInList ? modelValue : ""}
                   onChange={(e) => {
@@ -272,10 +299,11 @@ function ProfileDetails({ assistantEnabled, cachedLocalModels, ping, profile, pr
                 <div className="model-custom-input-row">
                   <input
                     spellCheck={false}
+                    placeholder={isLocalGguf ? "path/to/model.gguf" : ""}
                     value={modelValue}
                     onChange={(e) => onUpdate({ model: e.target.value })}
                   />
-                  {showModelDropdown ? (
+                  {(showGgufDropdown || showModelDropdown) ? (
                     <button
                       className="model-row-btn"
                       title="Pick from list"
@@ -293,35 +321,61 @@ function ProfileDetails({ assistantEnabled, cachedLocalModels, ping, profile, pr
                 value={provider}
                 onChange={(e) => onUpdate(runtimePatch(profile, e.target.value))}
               >
-                <option value="openai_local">llama.cpp / LM Studio</option>
+                <option value="local">Local GGUF (llama.cpp)</option>
+                <option value="openai_local">OpenAI-compatible server</option>
                 <option value="ollama">Ollama</option>
               </select>
             </Field>
-            <Field label="Temperature">
-              <input
-                inputMode="decimal"
-                placeholder="0.7"
-                value={profile.temperature ?? ""}
-                onChange={(e) => onUpdate({ temperature: e.target.value })}
-              />
-            </Field>
-            <Field label="Max Tokens">
-              <input
-                inputMode="numeric"
-                pattern="[0-9]*"
-                placeholder="2048"
-                value={profile.max_tokens || ""}
-                onChange={(e) => onUpdate({ max_tokens: e.target.value.replace(/\D/g, "") })}
-              />
-            </Field>
-            <Field label="Base URL">
-              <input
-                spellCheck={false}
-                placeholder={defaultBaseUrl(provider)}
-                value={profile.base_url || ""}
-                onChange={(e) => onUpdate({ base_url: e.target.value })}
-              />
-            </Field>
+            {isLocalGguf ? (
+              <>
+                <Field label="GPU Layers">
+                  <input
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    placeholder="0 = CPU, 28+ = GPU"
+                    value={profile.gpu_layers ?? ""}
+                    onChange={(e) => onUpdate({ gpu_layers: e.target.value.replace(/\D/g, "") })}
+                  />
+                </Field>
+                <Field label="Context Size">
+                  <input
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    placeholder="4096"
+                    value={profile.context_size || ""}
+                    onChange={(e) => onUpdate({ context_size: e.target.value.replace(/\D/g, "") })}
+                  />
+                </Field>
+              </>
+            ) : (
+              <>
+                <Field label="Temperature">
+                  <input
+                    inputMode="decimal"
+                    placeholder="0.7"
+                    value={profile.temperature ?? ""}
+                    onChange={(e) => onUpdate({ temperature: e.target.value })}
+                  />
+                </Field>
+                <Field label="Max Tokens">
+                  <input
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    placeholder="2048"
+                    value={profile.max_tokens || ""}
+                    onChange={(e) => onUpdate({ max_tokens: e.target.value.replace(/\D/g, "") })}
+                  />
+                </Field>
+                <Field label="Base URL">
+                  <input
+                    spellCheck={false}
+                    placeholder={defaultBaseUrl(provider)}
+                    value={profile.base_url || ""}
+                    onChange={(e) => onUpdate({ base_url: e.target.value })}
+                  />
+                </Field>
+              </>
+            )}
           </>
         )}
       </div>
@@ -349,9 +403,10 @@ function PingStatus({ ping }) {
 
 function newProfile(id, provider) {
   const p = normalizeProvider(provider);
+  const labelMap = { codex: "Codex", local: "Local GGUF", ollama: "Ollama", openai_local: "Local Model" };
   return {
     id,
-    label: p === "codex" ? "Codex" : p === "ollama" ? "Ollama" : "Local Model",
+    label: labelMap[p] || "Profile",
     provider: p,
     prompt: "Give concise, practical support based on the session context.",
     model: "",
@@ -363,7 +418,9 @@ function newProfile(id, provider) {
     max_tokens: 0,
     answer_prompt: "",
     extra_args: [],
-    offline: p !== "codex"
+    offline: p !== "codex",
+    gpu_layers: p === "local" ? 0 : undefined,
+    context_size: p === "local" ? 4096 : undefined,
   };
 }
 
@@ -372,7 +429,12 @@ function runtimePatch(profile, provider) {
   const prev = normalizeProvider(profile.provider);
   const currentUrl = String(profile.base_url || "");
   const baseUrl = currentUrl && currentUrl !== defaultBaseUrl(prev) ? currentUrl : defaultBaseUrl(p);
-  return { provider: p, base_url: baseUrl, offline: p !== "codex" };
+  const patch = { provider: p, base_url: baseUrl, offline: p !== "codex" };
+  if (p === "local") {
+    patch.gpu_layers = profile.gpu_layers ?? 0;
+    patch.context_size = profile.context_size ?? 4096;
+  }
+  return patch;
 }
 
 function uniqueProfileId(profiles, provider) {
@@ -391,10 +453,18 @@ function normalizeProvider(provider) {
 
 function runtimeLabel(provider) {
   if (provider === "ollama") return "Ollama";
-  if (provider === "openai_local") return "Local Model";
-  return "Local Model";
+  if (provider === "openai_local") return "OpenAI-compatible";
+  if (provider === "local") return "Local GGUF";
+  return "Local";
 }
 
 function defaultBaseUrl(provider) {
   return ASSISTANT_PROVIDER_OPTIONS.find((o) => o.id === provider)?.defaultBaseUrl || "";
+}
+
+function modelBasename(model) {
+  const s = String(model || "");
+  const slash = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
+  const name = slash >= 0 ? s.slice(slash + 1) : s;
+  return name.replace(/\.gguf$/i, "");
 }

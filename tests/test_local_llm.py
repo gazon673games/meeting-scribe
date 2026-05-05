@@ -139,7 +139,7 @@ class LocalLlmProviderTests(unittest.TestCase):
         self.assertEqual(body["messages"][0]["content"], "question")
         self.assertEqual(opener.request.get_header("Authorization"), "Bearer secret")
 
-    def test_openai_ping_starts_llama_server_for_local_gguf(self) -> None:
+    def test_openai_ping_only_checks_configured_endpoint(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             server = root / ".local" / "llama_cpp" / "b1" / "llama-server.exe"
@@ -163,21 +163,15 @@ class LocalLlmProviderTests(unittest.TestCase):
             with (
                 patch(
                     "infrastructure.local_llm._request_json",
-                    side_effect=[
-                        LocalLlmError("local_llm_unavailable", "refused"),
-                        {},
-                    ],
+                    side_effect=LocalLlmError("local_llm_unavailable", "refused"),
                 ),
                 patch("infrastructure.local_llm.subprocess.Popen", return_value=process) as popen,
-                patch("infrastructure.local_llm.time.sleep", return_value=None),
             ):
                 result = OpenAICompatibleLocalLlmRunner().ping(_settings(root, profile))
 
-        self.assertTrue(result.ok)
-        command = popen.call_args.args[0]
-        self.assertIn(model.resolve(), [Path(part).resolve() for part in command if str(part).endswith(".gguf")])
-        self.assertIn("1234", command)
-        self.assertIn("Qwen2.5-Coder-7B-Instruct-Q4_K_M", command)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error_code, "local_llm_unavailable")
+        popen.assert_not_called()
 
 
 if __name__ == "__main__":

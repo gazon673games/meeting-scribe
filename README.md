@@ -51,8 +51,9 @@ Assistant profiles can use Codex CLI or local LLM runtimes:
 - `codex` - Codex CLI with the configured command and optional proxy.
 - `ollama` - Ollama HTTP API, default `http://127.0.0.1:11434`.
 - `openai_local` - OpenAI-compatible local API, default `http://127.0.0.1:1234/v1` for tools such as LM Studio or llama.cpp server.
+- `local` - in-process GGUF model runner via `llama-cpp-python`.
 
-Each profile can set its own model, base URL, temperature, and max token limit. Local providers use Python stdlib HTTP calls, so no extra Python package is required.
+Each profile can set its own model and runtime options. HTTP-based local providers use Python stdlib calls; the in-process GGUF provider requires `llama-cpp-python`.
 
 Useful development commands:
 

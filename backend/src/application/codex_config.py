@@ -22,6 +22,8 @@ class CodexProfile:
     max_tokens: int = 0
     answer_prompt: str = ""
     extra_args: List[str] = None  # type: ignore[assignment]
+    gpu_layers: int = 0
+    context_size: int = 4096
 
     def __post_init__(self) -> None:
         if self.extra_args is None:
@@ -84,59 +86,45 @@ def codex_profile_to_dict(profile: CodexProfile) -> Dict[str, Any]:
         "max_tokens": int(profile.max_tokens or 0),
         "answer_prompt": str(profile.answer_prompt),
         "extra_args": [str(x) for x in list(profile.extra_args or []) if str(x).strip()],
+        "gpu_layers": int(profile.gpu_layers or 0),
+        "context_size": int(profile.context_size or 4096),
     }
 
 
 def parse_codex_profiles(raw_profiles: Any) -> List[CodexProfile]:
-    out: List[CodexProfile] = []
-    if isinstance(raw_profiles, list):
-        for i, item in enumerate(raw_profiles):
-            if not isinstance(item, dict):
-                continue
-            pid = str(item.get("id") or f"profile_{i+1}").strip() or f"profile_{i+1}"
-            label = str(item.get("label") or pid).strip() or pid
-            prompt = str(item.get("prompt") or "").strip()
-            provider_id = str(item.get("provider_id") or item.get("provider") or "codex").strip() or "codex"
-            model = str(item.get("model") or "").strip()
-            reasoning_effort = str(
-                item.get("reasoning_effort")
-                or item.get("reasoning")
-                or item.get("reasoning_level")
-                or ""
-            ).strip()
-            codex_profile = str(item.get("codex_profile") or "").strip()
-            base_url = str(
-                item.get("base_url")
-                or item.get("baseUrl")
-                or item.get("endpoint")
-                or item.get("url")
-                or ""
-            ).strip()
-            api_key = str(item.get("api_key") or item.get("apiKey") or "").strip()
-            temperature = _optional_float(item.get("temperature"), lo=0.0, hi=2.0)
-            max_tokens = _safe_int(item.get("max_tokens", item.get("maxTokens", 0)), default=0, lo=0, hi=200000)
-            answer_prompt = str(item.get("answer_prompt") or "").strip()
-            extra_args = parse_codex_list(item.get("extra_args", []))
-            out.append(
-                CodexProfile(
-                    id=pid,
-                    label=label,
-                    prompt=prompt,
-                    provider_id=provider_id,
-                    model=model,
-                    reasoning_effort=reasoning_effort,
-                    codex_profile=codex_profile,
-                    base_url=base_url,
-                    api_key=api_key,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    answer_prompt=answer_prompt,
-                    extra_args=extra_args,
-                )
-            )
-    if not out:
-        out = default_codex_profiles()
-    return out
+    if not isinstance(raw_profiles, list):
+        return default_codex_profiles()
+    profiles = [
+        _parse_one_profile(i, item)
+        for i, item in enumerate(raw_profiles)
+        if isinstance(item, dict)
+    ]
+    return profiles or default_codex_profiles()
+
+
+def _parse_one_profile(index: int, item: Dict[str, Any]) -> CodexProfile:
+    pid = _s(item.get("id")) or f"profile_{index + 1}"
+    return CodexProfile(
+        id=pid,
+        label=_s(item.get("label")) or pid,
+        prompt=_s(item.get("prompt")),
+        provider_id=_s(item.get("provider_id") or item.get("provider")) or "codex",
+        model=_s(item.get("model")),
+        reasoning_effort=_s(item.get("reasoning_effort") or item.get("reasoning") or item.get("reasoning_level")),
+        codex_profile=_s(item.get("codex_profile")),
+        base_url=_s(item.get("base_url") or item.get("baseUrl") or item.get("endpoint") or item.get("url")),
+        api_key=_s(item.get("api_key") or item.get("apiKey")),
+        temperature=_optional_float(item.get("temperature"), lo=0.0, hi=2.0),
+        max_tokens=_safe_int(item.get("max_tokens", item.get("maxTokens", 0)), default=0, lo=0, hi=200000),
+        answer_prompt=_s(item.get("answer_prompt")),
+        extra_args=parse_codex_list(item.get("extra_args", [])),
+        gpu_layers=_safe_int(item.get("gpu_layers", item.get("gpuLayers", 0)), default=0, lo=0, hi=9999),
+        context_size=_safe_int(item.get("context_size", item.get("contextSize", 4096)), default=4096, lo=64, hi=131072),
+    )
+
+
+def _s(val: Any) -> str:
+    return str(val or "").strip()
 
 
 def parse_codex_command_tokens(raw_command: Any) -> List[str]:

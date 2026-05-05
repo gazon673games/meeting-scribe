@@ -118,10 +118,10 @@ class OpenAICompatibleLocalLlmRunner:
         profile = _profile_for_provider(settings, self.provider_id)
         base_url = _base_url(profile, OPENAI_LOCAL_DEFAULT_URL)
         try:
-            message = _ensure_openai_local_runtime(profile, settings, base_url)
+            _request_json("GET", f"{base_url}/models", timeout_s=_status_timeout(settings))
         except LocalLlmError as exc:
             return _ping_error(self.provider_id, self.provider_label, exc)
-        return _ping_ok(self.provider_id, self.provider_label, message)
+        return _ping_ok(self.provider_id, self.provider_label, f"OpenAI-compatible endpoint is reachable at {base_url}.")
 
     def run(self, request: AssistantProviderRequest) -> AssistantProviderResult:
         started = time.time()
@@ -235,6 +235,40 @@ def stop_local_llm(profile: Any) -> dict:
     return {"stopped": True, "profileId": profile_id, "killed": killed}
 
 
+def _start_server_if_needed(key: str, server: Path, model_path: Path, model: str, host: str, port: int) -> None:
+    with _SERVER_LOCK:
+        for k in [k for k, p in list(_SERVER_PROCESSES.items()) if p.poll() is not None]:
+            del _SERVER_PROCESSES[k]
+        process = _SERVER_PROCESSES.get(key)
+        if process is None or process.poll() is not None:
+            _SERVER_PROCESSES[key] = _start_llama_server(server, model_path, model, host, port)
+
+
+def _poll_until_server_ready(base_url: str, settings: AssistantExecutionSettings, key: str) -> str:
+    deadline = time.time() + min(45, max(10, int(getattr(settings, "timeout_s", 30) or 30)))
+    last_error: LocalLlmError | None = None
+    while time.time() < deadline:
+        try:
+            _request_json("GET", f"{base_url}/models", timeout_s=1)
+            return f"Started local llama.cpp server at {base_url}."
+        except LocalLlmError as exc:
+            last_error = exc
+            with _SERVER_LOCK:
+                process = _SERVER_PROCESSES.get(key)
+            if process is not None and process.poll() is not None:
+                raise LocalLlmError(
+                    code="local_llm_server_exited",
+                    message=f"llama-server exited with code {process.returncode}",
+                    suggestion="Check the model file, GPU memory, and llama.cpp runtime files.",
+                ) from exc
+            time.sleep(0.5)
+    raise LocalLlmError(
+        code="local_llm_start_timeout",
+        message=f"llama-server did not become ready at {base_url}",
+        suggestion=(last_error.suggestion if last_error else "Check the local LLM server logs."),
+    )
+
+
 def _ensure_openai_local_runtime(profile: Any, settings: AssistantExecutionSettings, base_url: str) -> str:
     try:
         _request_json("GET", f"{base_url}/models", timeout_s=_status_timeout(settings))
@@ -257,35 +291,8 @@ def _ensure_openai_local_runtime(profile: Any, settings: AssistantExecutionSetti
     model_path = _find_gguf_model(Path(settings.project_root or "."), model)
     server = _find_llama_server(Path(settings.project_root or "."))
     key = f"{host}:{port}:{model_path}"
-
-    with _SERVER_LOCK:
-        process = _SERVER_PROCESSES.get(key)
-        if process is None or process.poll() is not None:
-            _SERVER_PROCESSES[key] = _start_llama_server(server, model_path, model, host, port)
-
-    deadline = time.time() + min(45, max(10, int(getattr(settings, "timeout_s", 30) or 30)))
-    last_error: LocalLlmError | None = None
-    while time.time() < deadline:
-        try:
-            _request_json("GET", f"{base_url}/models", timeout_s=1)
-            return f"Started local llama.cpp server at {base_url}."
-        except LocalLlmError as exc:
-            last_error = exc
-            with _SERVER_LOCK:
-                process = _SERVER_PROCESSES.get(key)
-            if process is not None and process.poll() is not None:
-                raise LocalLlmError(
-                    code="local_llm_server_exited",
-                    message=f"llama-server exited with code {process.returncode}",
-                    suggestion="Check the model file, GPU memory, and llama.cpp runtime files.",
-                ) from exc
-            time.sleep(0.5)
-
-    raise LocalLlmError(
-        code="local_llm_start_timeout",
-        message=f"llama-server did not become ready at {base_url}",
-        suggestion=(last_error.suggestion if last_error else "Check the local LLM server logs."),
-    )
+    _start_server_if_needed(key, server, model_path, model, host, port)
+    return _poll_until_server_ready(base_url, settings, key)
 
 
 def _start_llama_server(server: Path, model_path: Path, alias: str, host: str, port: int) -> subprocess.Popen:
@@ -337,6 +344,15 @@ def _find_llama_server(project_root: Path) -> Path:
     )
 
 
+def _find_direct_gguf_path(text: str, project_root: Path) -> Path | None:
+    direct = Path(text).expanduser()
+    candidates = [direct] if direct.is_absolute() else [direct, project_root / direct]
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file() and candidate.suffix.lower() == ".gguf":
+            return candidate.resolve()
+    return None
+
+
 def _find_gguf_model(project_root: Path, model: str) -> Path:
     text = str(model or "").strip()
     if not text:
@@ -346,13 +362,9 @@ def _find_gguf_model(project_root: Path, model: str) -> Path:
             suggestion="Select a GGUF model in Settings > Models > Language Models.",
         )
 
-    direct = Path(text).expanduser()
-    direct_candidates = [direct]
-    if not direct.is_absolute():
-        direct_candidates.append(project_root / direct)
-    for candidate in direct_candidates:
-        if candidate.exists() and candidate.is_file() and candidate.suffix.lower() == ".gguf":
-            return candidate.resolve()
+    direct = _find_direct_gguf_path(text, project_root)
+    if direct is not None:
+        return direct
 
     wanted = Path(text).stem if text.lower().endswith(".gguf") else text
     models_root = project_root / "models" / "llm"
@@ -371,24 +383,10 @@ def _find_gguf_model(project_root: Path, model: str) -> Path:
     )
 
 
-def _request_json(
-    method: str,
-    url: str,
-    *,
-    payload: dict[str, Any] | None = None,
-    headers: dict[str, str] | None = None,
-    timeout_s: int,
-) -> dict[str, Any]:
-    data = json.dumps(payload).encode("utf-8") if payload is not None else None
-    request_headers = {"Accept": "application/json", **dict(headers or {})}
-    if data is not None:
-        request_headers["Content-Type"] = "application/json"
-
-    request = urllib.request.Request(url, data=data, headers=request_headers, method=method)
+def _http_open(request: urllib.request.Request, timeout_s: int) -> Any:
     try:
-        response = urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
-            request,
-            timeout=max(1, int(timeout_s or 1)),
+        return urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
+            request, timeout=max(1, int(timeout_s or 1))
         )
     except urllib.error.HTTPError as exc:
         status = int(exc.code or 0)
@@ -407,6 +405,24 @@ def _request_json(
             suggestion="Start the local LLM server and check the profile base URL.",
         ) from exc
 
+
+def _request_json(
+    method: str,
+    url: str,
+    *,
+    payload: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout_s: int,
+) -> dict[str, Any]:
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request_headers = {"Accept": "application/json", **dict(headers or {})}
+    if data is not None:
+        request_headers["Content-Type"] = "application/json"
+
+    response = _http_open(
+        urllib.request.Request(url, data=data, headers=request_headers, method=method),
+        timeout_s,
+    )
     try:
         raw = response.read().decode("utf-8", errors="replace")
     finally:
