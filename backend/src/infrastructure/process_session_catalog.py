@@ -252,41 +252,7 @@ def _list_windows_session_groups() -> List[Dict[str, Any]]:
             if failed(hr) or not collection:
                 return []
 
-            count = ctypes.c_uint(0)
-            hr = _wincall(collection, 3, ctypes.HRESULT, [ctypes.POINTER(ctypes.c_uint)], ctypes.byref(count))
-            if failed(hr):
-                return []
-
-            groups: List[Dict[str, Any]] = []
-            for index in range(int(count.value)):
-                device = ctypes.c_void_p()
-                hr = _wincall(
-                    collection,
-                    4,
-                    ctypes.HRESULT,
-                    [ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)],
-                    index,
-                    ctypes.byref(device),
-                )
-                if failed(hr) or not device:
-                    continue
-                try:
-                    fallback = f"Output {index + 1}"
-                    endpoint_label = device_label(device, fallback)
-                    endpoint_id = device_id(device) or f"endpoint:{index}"
-                    sessions = sessions_for_device(device, endpoint_id, endpoint_label)
-                    if sessions:
-                        groups.append(
-                            {
-                                "id": endpoint_id,
-                                "label": endpoint_label,
-                                "sessions": sessions,
-                            }
-                        )
-                finally:
-                    _com_release(device)
-
-            return sorted(groups, key=lambda group: str(group.get("label", "")).lower())
+            return _enumerate_windows_device_groups(collection, sessions_for_device, device_id, device_label)
         finally:
             if collection:
                 _com_release(collection)
@@ -308,6 +274,32 @@ def _process_label(pid: int) -> str:
         return psutil.Process(int(pid)).name().removesuffix(".exe")
     except Exception:
         return f"PID {int(pid)}"
+
+
+def _enumerate_windows_device_groups(collection: Any, sessions_fn: Any, device_id_fn: Any, device_label_fn: Any) -> list:
+    import ctypes
+
+    count = ctypes.c_uint(0)
+    hr = _wincall(collection, 3, ctypes.HRESULT, [ctypes.POINTER(ctypes.c_uint)], ctypes.byref(count))
+    if int(hr) < 0:
+        return []
+
+    groups = []
+    for index in range(int(count.value)):
+        device = ctypes.c_void_p()
+        hr = _wincall(collection, 4, ctypes.HRESULT, [ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)], index, ctypes.byref(device))
+        if int(hr) < 0 or not device:
+            continue
+        try:
+            fallback = f"Output {index + 1}"
+            endpoint_label = device_label_fn(device, fallback)
+            endpoint_id = device_id_fn(device) or f"endpoint:{index}"
+            sessions = sessions_fn(device, endpoint_id, endpoint_label)
+            if sessions:
+                groups.append({"id": endpoint_id, "label": endpoint_label, "sessions": sessions})
+        finally:
+            _com_release(device)
+    return sorted(groups, key=lambda group: str(group.get("label", "")).lower())
 
 
 def _wincall(obj: Any, idx: int, restype: Any, argtypes: list, *args: Any) -> Any:

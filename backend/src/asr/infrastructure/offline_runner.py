@@ -21,6 +21,36 @@ class OfflineProfile:
     # faster-whisper defaults are fine; keep knobs minimal
 
 
+def _collect_transcript_segments(model, wav_path: Path, profile: OfflineProfile, out_jsonl: Optional[Path]) -> list:
+    import json
+
+    segments, _ = model.transcribe(
+        str(wav_path),
+        language=profile.language,
+        beam_size=int(profile.beam_size),
+        initial_prompt=profile.initial_prompt,
+        vad_filter=bool(profile.vad_filter),
+        condition_on_previous_text=bool(profile.condition_on_previous_text),
+    )
+    txt_parts: list = []
+    fj = out_jsonl.open("a", encoding="utf-8") if out_jsonl is not None else None
+    try:
+        for seg in segments:
+            s_text = (seg.text or "").strip()
+            if not s_text:
+                continue
+            txt_parts.append(s_text)
+            if fj is not None:
+                fj.write(json.dumps({"type": "offline_segment", "t0": float(seg.start), "t1": float(seg.end), "text": s_text, "ts": time.time()}, ensure_ascii=False) + "\n")
+    finally:
+        if fj is not None:
+            try:
+                fj.close()
+            except Exception:
+                pass
+    return txt_parts
+
+
 class OfflineRunner:
     """
     Offline pass over a saved WAV for higher quality transcript.
@@ -67,51 +97,17 @@ class OfflineRunner:
         )
 
         t0 = time.time()
-        segments, info = model.transcribe(
-            str(wav_path),
-            language=profile.language,  # None => auto
-            beam_size=int(profile.beam_size),
-            initial_prompt=profile.initial_prompt,
-            vad_filter=bool(profile.vad_filter),
-            condition_on_previous_text=bool(profile.condition_on_previous_text),
-        )
-
-        # write outputs
-        txt_parts = []
-        fj = None
-        if out_jsonl is not None:
-            fj = out_jsonl.open("a", encoding="utf-8")
-
         try:
-            for seg in segments:
-                s_text = (seg.text or "").strip()
-                if not s_text:
-                    continue
-                txt_parts.append(s_text)
-
-                if fj is not None:
-                    rec = {
-                        "type": "offline_segment",
-                        "t0": float(seg.start),
-                        "t1": float(seg.end),
-                        "text": s_text,
-                        "ts": time.time(),
-                    }
-                    import json
-
-                    fj.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            txt_parts = _collect_transcript_segments(model, wav_path, profile, out_jsonl)
         finally:
-            if fj is not None:
-                try:
-                    fj.close()
-                except Exception:
-                    pass
+            try:
+                model.model.unload_model()
+            except Exception:
+                pass
+            del model
 
         full_text = "\n".join(txt_parts).strip()
         out_txt.write_text(full_text + ("\n" if full_text else ""), encoding="utf-8")
-
-        dt = time.time() - t0
-        # return path to main transcript
         return out_txt
 
 

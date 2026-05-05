@@ -14,6 +14,7 @@ from asr.infrastructure.audio_data import MonoAudio16kBuffer
 from asr.infrastructure.audio_utils import resample_linear, stereo_to_mono
 from asr.infrastructure.gain import PreGainAGC
 from asr.infrastructure.vad import EnergyVAD
+from diarization.application.diarization import DiarizationPort
 
 LogEvent = Callable[[dict], None]
 SegmentationParams = Callable[[], Tuple[float, float, float]]
@@ -34,7 +35,7 @@ class AudioSegmenter:
         *,
         config: SegmenterConfig,
         segment_queue: "queue.Queue[Segment]",
-        diarization,
+        diarization: DiarizationPort,
         metrics: ASRMetrics,
         log_event: LogEvent,
         segmentation_params: SegmentationParams,

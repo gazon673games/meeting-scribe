@@ -3,6 +3,22 @@ from __future__ import annotations
 import numpy as np
 
 
+def _make_decim3_kernel() -> np.ndarray:
+    # Windowed-sinc lowpass FIR for 3x decimation (48 kHz → 16 kHz).
+    # Cutoff 7500 Hz, 31 taps, Hann window.  Computed once at import time.
+    n = 31
+    fc = 7500.0 / 24000.0  # normalised to input Nyquist (48 000 / 2)
+    half = (n - 1) / 2.0
+    t = np.arange(n, dtype=np.float64) - half
+    h = 2.0 * fc * np.sinc(2.0 * fc * t)
+    h = h * np.hanning(n)
+    h = (h / h.sum()).astype(np.float32)
+    return h
+
+
+_DECIM3_KERNEL: np.ndarray = _make_decim3_kernel()
+
+
 def stereo_to_mono(x: np.ndarray) -> np.ndarray:
     """
     More robust stereo->mono.
@@ -58,7 +74,10 @@ def resample_linear(x: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
         m = int(round(n / 3.0))
         if m <= 0:
             return np.zeros((0,), dtype=np.float32)
-        return x[: m * 3 : 3].astype(np.float32, copy=True)
+        # Anti-aliasing FIR before decimation prevents aliasing of 8–24 kHz
+        # content (sibilants, fricatives) into the 0–8 kHz band Whisper sees.
+        filtered = np.convolve(x, _DECIM3_KERNEL, mode='same')
+        return filtered[: m * 3 : 3].astype(np.float32, copy=True)
 
     dur = n / float(src_rate)
     m = int(round(dur * dst_rate))

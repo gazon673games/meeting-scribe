@@ -6,15 +6,8 @@ LOOPBACK_SOURCE_TYPE = "System audio (WASAPI loopback)"
 MIC_SOURCE_TYPE = "Microphone (input device)"
 
 
-def list_loopback_devices() -> List[Tuple[str, object]]:
+def _collect_loopback_candidates(mics: list) -> List[Tuple[str, object]]:
     out: List[Tuple[str, object]] = []
-    try:
-        import soundcard as sc
-
-        mics = sc.all_microphones(include_loopback=True)
-    except Exception:
-        mics = []
-
     for mic in mics:
         if not bool(getattr(mic, "isloopback", False)):
             continue
@@ -22,7 +15,6 @@ def list_loopback_devices() -> List[Tuple[str, object]]:
         if name:
             token = getattr(mic, "id", None)
             out.append((name, token if token is not None else name))
-
     if not out:
         for mic in mics:
             name = str(getattr(mic, "name", "")).strip()
@@ -30,6 +22,17 @@ def list_loopback_devices() -> List[Tuple[str, object]]:
                 continue
             token = getattr(mic, "id", None)
             out.append((name, token if token is not None else name))
+    return out
+
+
+def list_loopback_devices() -> List[Tuple[str, object]]:
+    try:
+        import soundcard as sc
+        mics = sc.all_microphones(include_loopback=True)
+    except Exception:
+        mics = []
+
+    out = _collect_loopback_candidates(mics)
 
     try:
         speaker = sc.default_speaker()
@@ -39,7 +42,7 @@ def list_loopback_devices() -> List[Tuple[str, object]]:
     except Exception:
         pass
 
-    seen = set()
+    seen: set = set()
     uniq: List[Tuple[str, object]] = []
     for label, token in out:
         key = f"{str(token)}::{label.lower()}"
