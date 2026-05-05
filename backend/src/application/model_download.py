@@ -42,6 +42,12 @@ def normalize_model_reference(raw: str) -> str:
     return _BUILTIN_MODEL_REPOS.get(text, text.replace("\\", "/"))
 
 
+def _is_valid_repo_segment(part: str) -> bool:
+    if part in {".", ".."} or part.startswith(("-", ".")) or part.endswith(("-", ".")):
+        return False
+    return ".." not in part and bool(_HF_REPO_SEGMENT_RE.match(part))
+
+
 def is_valid_huggingface_repo_id(value: str) -> bool:
     text = str(value or "").strip()
     if not text or "://" in text or "\\" in text or ":" in text:
@@ -49,12 +55,7 @@ def is_valid_huggingface_repo_id(value: str) -> bool:
     parts = text.split("/")
     if len(parts) != 2 or any(not part for part in parts):
         return False
-    for part in parts:
-        if part in {".", ".."} or part.startswith(("-", ".")) or part.endswith(("-", ".")):
-            return False
-        if ".." in part or not _HF_REPO_SEGMENT_RE.match(part):
-            return False
-    return True
+    return all(_is_valid_repo_segment(part) for part in parts)
 
 
 def model_cache_dir(models_dir: str | Path | None = None) -> Path:
@@ -400,6 +401,16 @@ def _weight_file_records(path: Path) -> list[dict]:
     return records
 
 
+def _coerce_summary_value(value: object) -> tuple[bool, object]:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return True, value
+    if isinstance(value, list):
+        return True, value[:12]
+    if isinstance(value, dict):
+        return True, {str(k): value[k] for k in list(value.keys())[:12]}
+    return False, None
+
+
 def _read_json_summary(path: Path, keys: list[str]) -> dict:
     try:
         if not path.exists() or path.stat().st_size > 5_000_000:
@@ -412,14 +423,30 @@ def _read_json_summary(path: Path, keys: list[str]) -> dict:
     summary: dict = {}
     for key in keys:
         if key in data:
-            value = data[key]
-            if isinstance(value, (str, int, float, bool)) or value is None:
-                summary[key] = value
-            elif isinstance(value, list):
-                summary[key] = value[:12]
-            elif isinstance(value, dict):
-                summary[key] = {str(k): value[k] for k in list(value.keys())[:12]}
+            ok, coerced = _coerce_summary_value(data[key])
+            if ok:
+                summary[key] = coerced
     return summary
+
+
+_README_KEYS = {"license", "language", "pipeline_tag", "library_name", "tags", "base_model"}
+
+
+def _parse_readme_frontmatter(lines: list[str]) -> dict:
+    metadata: dict = {}
+    if not lines or lines[0].strip() != "---":
+        return metadata
+    for line in lines[1:80]:
+        stripped = line.strip()
+        if stripped == "---":
+            break
+        if ":" not in stripped or stripped.startswith("-"):
+            continue
+        key, value = stripped.split(":", 1)
+        key = key.strip()
+        if key in _README_KEYS:
+            metadata[key] = value.strip().strip("'\"")
+    return metadata
 
 
 def _read_model_card_metadata(path: Path) -> dict:
@@ -430,26 +457,12 @@ def _read_model_card_metadata(path: Path) -> dict:
         text = readme.read_text(encoding="utf-8", errors="replace")
     except Exception:
         return {}
-    first_heading = ""
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("#"):
-            first_heading = stripped.lstrip("#").strip()
-            break
-
-    metadata: dict = {}
     lines = text.splitlines()
-    if lines and lines[0].strip() == "---":
-        for line in lines[1:80]:
-            stripped = line.strip()
-            if stripped == "---":
-                break
-            if ":" not in stripped or stripped.startswith("-"):
-                continue
-            key, value = stripped.split(":", 1)
-            key = key.strip()
-            if key in {"license", "language", "pipeline_tag", "library_name", "tags", "base_model"}:
-                metadata[key] = value.strip().strip("'\"")
+    first_heading = next(
+        (ln.strip().lstrip("#").strip() for ln in lines if ln.strip().startswith("#")),
+        "",
+    )
+    metadata = _parse_readme_frontmatter(lines)
     if first_heading:
         metadata["title"] = first_heading
     return metadata

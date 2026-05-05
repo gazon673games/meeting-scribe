@@ -1,11 +1,11 @@
 import React from "react";
-import { Check, ChevronDown, ChevronUp, Download, RefreshCw, Trash2 } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 
 import { buildProxyUrl } from "../../entities/settings/model";
 import { meetingScribeClient } from "../../shared/api/meetingScribeClient";
 import { CollapsibleSection } from "../../shared/ui/CollapsibleSection";
 import { InnerCollapsible } from "../../shared/ui/InnerCollapsible";
-import { formatBytes } from "../../shared/lib/format";
+import { DiarModelRow } from "./DiarModelRow";
 
 export function SpeakerIdModelsSection({ draft, onChange, open }) {
   const [models, setModels] = React.useState(null);
@@ -139,96 +139,20 @@ export function SpeakerIdModelsSection({ draft, onChange, open }) {
         <div className="models-list">
           {models.map((model) => {
             const selected = String(draft.diarSherpaEmbeddingModelPath || "") === String(model.path || "");
-            const isDownloading = model.downloading || downloadingNames.has(model.name);
-            const ready = Boolean(model.cached || model.compatible);
-            const expanded = expandedNames.has(model.name);
-            const statusLabel = selected
-              ? "selected"
-              : ready
-                ? model.bytes
-                  ? formatBytes(model.bytes)
-                  : "ready"
-                : isDownloading
-                  ? downloadStatusLabel(model)
-                  : model.downloadError
-                    ? "error"
-                    : "downloadable";
-            const statusClass = selected || ready ? "model-status-cached" : isDownloading ? "model-status-downloading" : model.downloadError ? "model-status-error" : "model-status-missing";
             return (
-              <div key={model.name} className={`model-row-shell${expanded ? " expanded" : ""}`}>
-                <div className="model-row">
-                  <span className="model-row-name" title={model.path || model.url || model.name}>{model.label || model.name}</span>
-                  <span className={`model-row-status ${statusClass}`} title={model.downloadError || model.downloadMessage || statusLabel}>
-                    {statusLabel}
-                  </span>
-
-                  <button
-                    className="model-row-btn"
-                    title={expanded ? "Hide info" : "Show info"}
-                    type="button"
-                    onClick={() => handleToggleExpand(model.name)}
-                  >
-                    {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                  </button>
-
-                  {ready ? (
-                    <button
-                      className="model-row-btn"
-                      disabled={selected}
-                      title={selected ? "Already selected" : `Use ${model.label || model.name}`}
-                      type="button"
-                      onClick={() => handleUse(model)}
-                    >
-                      <Check size={12} />
-                    </button>
-                  ) : (
-                    <button
-                      className="model-row-btn"
-                      disabled={isDownloading || model.downloadable === false}
-                      title={isDownloading ? "Downloading..." : `Download ${model.label || model.name}`}
-                      type="button"
-                      onClick={() => !isDownloading && model.downloadable !== false && handleDownload(model)}
-                    >
-                      <Download size={12} />
-                    </button>
-                  )}
-
-                  {model.deletable ? (
-                    <button
-                      className="model-row-btn danger"
-                      disabled={selected || isDownloading}
-                      title={selected ? "Selected model cannot be deleted" : `Delete ${model.label || model.name}`}
-                      type="button"
-                      onClick={() => handleDelete(model)}
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  ) : (
-                    <div className="model-row-btn-gap" />
-                  )}
-                </div>
-
-                {expanded ? (
-                  <div className="model-metadata-panel">
-                    <dl className="model-metadata-grid">
-                      {[
-                        ["Name", model.name],
-                        ["Label", model.label || "-"],
-                        ["Backend", model.backend || "-"],
-                        ["Provider", model.provider || "-"],
-                        ["Size", model.bytes ? formatBytes(model.bytes) : "-"],
-                        ["Path", model.path || "-"],
-                        ["Status", statusLabel]
-                      ].map(([label, value]) => (
-                        <React.Fragment key={label}>
-                          <dt>{label}</dt>
-                          <dd title={String(value)}>{String(value)}</dd>
-                        </React.Fragment>
-                      ))}
-                    </dl>
-                  </div>
-                ) : null}
-              </div>
+              <DiarModelRow
+                key={model.name}
+                model={model}
+                selected={selected}
+                isDownloading={model.downloading || downloadingNames.has(model.name)}
+                expanded={expandedNames.has(model.name)}
+                deletable={Boolean(model.deletable)}
+                showStatus
+                onUse={handleUse}
+                onDownload={handleDownload}
+                onDelete={handleDelete}
+                onToggleExpand={handleToggleExpand}
+              />
             );
           })}
         </div>
