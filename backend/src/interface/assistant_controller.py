@@ -64,14 +64,7 @@ class AssistantController:
         with self._lock:
             return {
                 "enabled": bool(settings.enabled),
-                "providerAvailable": bool(selected_provider.get("available", False)) if selected_provider else False,
-                "providerId": str(selected_provider.get("id", "")) if selected_provider else "",
-                "providerMessage": str(selected_provider.get("message", "")) if selected_provider else "",
-                "providerErrorCode": str(selected_provider.get("errorCode", "")) if selected_provider else "",
-                "providerSuggestion": str(selected_provider.get("suggestion", "")) if selected_provider else "",
-                "providerAuthRequired": bool(selected_provider.get("authRequired", False)) if selected_provider else False,
-                "providerLoginSupported": bool(selected_provider.get("loginSupported", False)) if selected_provider else False,
-                "providerLocalHome": str(selected_provider.get("localHome", "")) if selected_provider else "",
+                **_provider_snapshot_fields(selected_provider),
                 "busy": bool(self._job_state.is_busy),
                 "fallback": bool(self._job_state.is_fallback),
                 "selectedProfileId": selected.id if selected is not None else "",
@@ -89,9 +82,7 @@ class AssistantController:
         profile = self._select_profile(settings, str(params.get("profileId", params.get("profile_id", "")) or ""))
         request_text, source_label, limits = self._request_plan(params, settings)
         context_text = self._context_text(params, settings)
-        context_label = "current transcript" if context_text is not None else "latest human log"
-        if context_text is not None and not context_text.strip():
-            raise RuntimeError("Assistant context is empty. Start transcription and wait for transcript text before asking.")
+        context_label = "current transcript" if context_text else "no transcript"
 
         command = InvokeAssistantCommand(
             profile=profile,
@@ -184,9 +175,14 @@ class AssistantController:
                 "retryable": True,
             }
         self._emit("assistant_ping_result", payload)
+        # Refresh provider cache so snapshot reflects updated status
+        try:
+            settings = self._settings()
+            self._refresh_provider_records(settings)
+        except Exception:
+            pass
 
     def start_local_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        from infrastructure.local_llm import start_local_llm_async
         settings = self._settings()
         profile = self._profile_from_params(params, settings)
         if profile is None:
@@ -198,14 +194,26 @@ class AssistantController:
             body.pop("type", None)
             self._emit(event_type, body)
 
+        provider_id = str(getattr(profile, "provider_id", "") or getattr(profile, "provider", "") or "").lower()
+        if provider_id == "local":
+            from infrastructure.llama_cpp_runner import load_model_async
+            return load_model_async(profile, self.project_root, _emit)
+
+        from infrastructure.local_llm import start_local_llm_async
         return start_local_llm_async(profile, self.project_root, _emit)
 
     def stop_local_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        from infrastructure.local_llm import stop_local_llm
         settings = self._settings()
         profile = self._profile_from_params(params, settings)
         if profile is None:
             raise ValueError("Profile not found")
+
+        provider_id = str(getattr(profile, "provider_id", "") or getattr(profile, "provider", "") or "").lower()
+        if provider_id == "local":
+            from infrastructure.llama_cpp_runner import unload_model
+            return unload_model(profile)
+
+        from infrastructure.local_llm import stop_local_llm
         return stop_local_llm(profile)
 
     def _run_worker(self, command: InvokeAssistantCommand, settings: CodexSettings) -> None:
@@ -304,16 +312,18 @@ class AssistantController:
         return self._selected_profile(settings)
 
     def _provider_records(self, settings: CodexSettings) -> list[Dict[str, Any]]:
+        # Return cached status only — never probe providers automatically.
+        # Status is refreshed only via explicit user actions (ping, invoke).
         cache_key = _provider_cache_key(settings)
         now = time.monotonic()
         with self._lock:
-            if (
-                self._provider_cache_key == cache_key
-                and self._provider_cache_records
-                and now - self._provider_cache_ts < 5.0
-            ):
-                return [dict(record) for record in self._provider_cache_records]
+            if self._provider_cache_key == cache_key and self._provider_cache_records:
+                if now - self._provider_cache_ts < 30.0:
+                    return [dict(record) for record in self._provider_cache_records]
+        return []
 
+    def _refresh_provider_records(self, settings: CodexSettings) -> list[Dict[str, Any]]:
+        cache_key = _provider_cache_key(settings)
         status_fn = getattr(self.assistant_service, "provider_statuses", None)
         if callable(status_fn):
             try:
@@ -459,18 +469,33 @@ def _profile_record(profile: CodexProfile) -> Dict[str, Any]:
     }
 
 
-def _provider_for_profile(providers: list[Dict[str, Any]], profile: CodexProfile | None) -> Dict[str, Any]:
+def _provider_snapshot_fields(provider: Dict[str, Any] | None) -> Dict[str, Any]:
+    if provider is None:
+        return {
+            "providerAvailable": False, "providerId": "", "providerMessage": "",
+            "providerErrorCode": "", "providerSuggestion": "", "providerAuthRequired": False,
+            "providerLoginSupported": False, "providerLocalHome": "",
+        }
+    return {
+        "providerAvailable": bool(provider.get("available", False)),
+        "providerId": str(provider.get("id", "")),
+        "providerMessage": str(provider.get("message", "")),
+        "providerErrorCode": str(provider.get("errorCode", "")),
+        "providerSuggestion": str(provider.get("suggestion", "")),
+        "providerAuthRequired": bool(provider.get("authRequired", False)),
+        "providerLoginSupported": bool(provider.get("loginSupported", False)),
+        "providerLocalHome": str(provider.get("localHome", "")),
+    }
+
+
+def _provider_for_profile(providers: list[Dict[str, Any]], profile: CodexProfile | None) -> Dict[str, Any] | None:
+    if not providers:
+        return None
     wanted = str(getattr(profile, "provider_id", "") or ASSISTANT_PROVIDER_CODEX).strip().lower()
     for provider in providers:
         if str(provider.get("id", "")).strip().lower() == wanted:
             return provider
-    return {
-        "id": wanted,
-        "label": wanted,
-        "available": False,
-        "message": f"Assistant provider '{wanted}' is not configured.",
-        "errorCode": "provider_unavailable",
-    }
+    return None
 
 
 def _provider_cache_key(settings: CodexSettings) -> tuple:
