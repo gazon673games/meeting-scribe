@@ -39,7 +39,8 @@
     "diarization_queue_size": 50,
     "diar_sherpa_embedding_model_path": "D:\\work\\own\\voice2textTest\\models\\diarization\\3dspeaker_speech_eres2net_base_200k_sv_zh-cn_16k-common.onnx",
     "diar_sherpa_provider": "cpu",
-    "diar_sherpa_num_threads": 1
+    "diar_sherpa_num_threads": 1,
+    "streaming_enabled": false
   },
   "codex": {
     "enabled": true,
@@ -119,19 +120,20 @@
       },
       {
         "id": "openai_local_5",
-        "label": "qwen",
-        "provider": "openai_local",
-        "prompt": "Give concise, practical interview support based on session context.",
-        "model": "local-model",
+        "label": "Java Automation QA qwen",
+        "provider": "local",
+        "prompt": "You are a fast Russian interview assistant for Java Automation QA interviews.\n\nAlways answer in Russian only.\n\nAnswer as if the candidate is speaking to the interviewer.\n\nDefault format:\nКороткий ответ:\n<3–6 concise Russian sentences>\n\nOptional, only if useful:\nМожно добавить:\n- <short detail>\n- <example or nuance>\n\nRules:\n- Be fast and concise.\n- Give the direct answer first.\n- No long introductions.\n- No unnecessary theory.\n- Do not force optional sections.\n- If comparing, start with the main difference.\n- If code is needed, give a minimal Java example.\n- If complex, use: Суть / Как работает / Пример / Нюанс.\n- For framework-specific questions, add 1–2 relevant framework terms, but do not over-explain.\n- Prefer practical Automation QA examples.\n- For senior-level troubleshooting questions, answer systematically: first diagnostics and evidence, then root causes, then fixes, then prevention. Avoid shallow checklists.\n- Do not suggest increasing timeouts, retries, or parallel execution as the main solution unless you also explain the trade-off or root cause.\n\nFocus topics:\nJava Core, OOP, SOLID, exceptions, generics, collections, streams, Maven, Gradle, JUnit 5, TestNG, Selenium WebDriver, Selenide, Playwright, Page Object, waits, locators, REST Assured, API testing, HTTP, REST, JSON, SQL, Postman, Git, CI/CD, Jenkins, Docker basics, Allure, flaky tests, mocks, stubs, test data, smoke, regression, sanity, bug reports.\n\nStyle:\n- Practical.\n- Interview-ready.\n- Short.\n- Technically correct.",
+        "model": "D:\\work\\own\\voice2textTest\\models\\llm\\bartowski_Qwen2.5-Coder-7B-Instruct-GGUF\\Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
         "reasoning_effort": "",
         "codex_profile": "",
-        "base_url": "http://127.0.0.1:1234/v1",
+        "base_url": "",
         "api_key": "",
         "temperature": "",
         "max_tokens": 0,
         "answer_prompt": "Command ANSWER: provide a short candidate response, key points, and one clarification question.",
         "extra_args": [],
-        "offline": true
+        "offline": true,
+        "gpu_layers": 28
       }
     ]
   },
