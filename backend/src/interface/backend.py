@@ -25,6 +25,11 @@ from settings.application.config_repository import ConfigRepository
 DeviceToken = Tuple[str, object, str]
 
 
+def _ui_model(config: Dict[str, Any]) -> str:
+    ui = config.get("ui", {}) if isinstance(config.get("ui"), dict) else {}
+    return str(ui.get("model", "") or "").strip()
+
+
 @dataclass
 class ElectronBackend:
     project_root: Path
@@ -213,86 +218,92 @@ class ElectronBackend:
             return {"sessions": sessions, "groups": groups, "supported": supported}
 
     def list_models(self, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
-        from application.model_download import (
-            is_model_cached,
-            is_builtin_model,
-            normalize_model_reference,
-            scan_local_models,
-        )
         from application.model_policy import ASR_MODEL_NAMES
+
         config = self._read_config()
         models_dir = self._models_dir_from_params(params, config)
         downloads = self._download_snapshot()
-        current_model = str((config.get("ui", {}) if isinstance(config.get("ui"), dict) else {}).get("model", "")).strip()
+        current_model = _ui_model(config)
         cache_key = ("asr", str(models_dir), current_model)
-        if self._active_download_count(downloads) <= 0:
-            cached = self._catalog_cache_get(cache_key)
-            if cached is not None:
-                return cached
-        models = []
-        recommended_refs = {normalize_model_reference(name) for name in ASR_MODEL_NAMES}
-        for name in ASR_MODEL_NAMES:
-            cached = is_model_cached(name, models_dir=models_dir)
-            models.append({
-                "name": name,
-                "label": name,
-                "cached": cached,
-                "compatible": cached,
-                "status": "compatible" if cached else "recommended",
-                "source": "recommended",
-                "builtin": is_builtin_model(name),
-                "recommended": True,
-                "downloadable": True,
-                "deletable": False,
-                **self._download_fields(name, downloads),
-            })
-        for record in scan_local_models(models_dir):
-            if str(record.get("name") or "") in recommended_refs:
-                continue
-            models.append({**record, **self._download_fields(str(record.get("name") or ""), downloads)})
 
-        known_refs = {normalize_model_reference(str(model.get("name") or "")) for model in models}
-        if current_model and normalize_model_reference(current_model) not in known_refs:
-            cached = is_model_cached(current_model, models_dir=models_dir)
-            models.append({
-                "name": current_model,
-                "label": current_model,
-                "cached": cached,
-                "compatible": cached,
-                "status": "compatible" if cached else "unknown_remote",
-                "source": "custom",
-                "builtin": False,
-                "recommended": False,
-                "downloadable": True,
-                "deletable": False,
-                **self._download_fields(current_model, downloads),
-            })
+        if not self._active_download_count(downloads):
+            hit = self._catalog_cache_get(cache_key)
+            if hit is not None:
+                return hit
 
-        known_refs = {normalize_model_reference(str(model.get("name") or "")) for model in models}
-        for name, dl in downloads.items():
-            normalized = normalize_model_reference(name)
-            if not normalized or normalized in known_refs:
-                continue
-            cached = is_model_cached(name, models_dir=models_dir)
-            models.append({
-                "name": name,
-                "label": name,
-                "cached": cached,
-                "compatible": cached,
-                "status": "compatible" if cached else "unknown_remote",
-                "source": "custom",
-                "builtin": False,
-                "recommended": False,
-                "downloadable": True,
-                "deletable": False,
-                **self._download_fields(name, downloads),
-            })
-            known_refs.add(normalized)
-
+        models = self._build_model_list(ASR_MODEL_NAMES, models_dir, downloads, current_model)
         result = {"models": models, "modelsDir": str(models_dir), "activeDownloads": self._active_download_count(downloads)}
-        if result["activeDownloads"] <= 0:
+        if not result["activeDownloads"]:
             self._catalog_cache_put(cache_key, result)
         return result
+
+    def _build_model_list(
+        self,
+        recommended_names: List[str],
+        models_dir: Any,
+        downloads: Dict,
+        current_model: str,
+    ) -> List[Dict[str, Any]]:
+        from application.model_download import normalize_model_reference, scan_local_models
+
+        recommended_refs = {normalize_model_reference(n) for n in recommended_names}
+        models: List[Dict[str, Any]] = [
+            self._recommended_model_record(n, models_dir, downloads)
+            for n in recommended_names
+        ]
+        models += self._local_model_records(models_dir, downloads, recommended_refs)
+        self._add_unlisted_models(models, downloads, current_model, models_dir)
+        return models
+
+    def _local_model_records(self, models_dir: Any, downloads: Dict, skip_refs: set) -> List[Dict[str, Any]]:
+        from application.model_download import normalize_model_reference, scan_local_models
+        result = []
+        for rec in scan_local_models(models_dir):
+            name = str(rec.get("name") or "")
+            if normalize_model_reference(name) not in skip_refs:
+                result.append({**rec, **self._download_fields(name, downloads)})
+        return result
+
+    def _add_unlisted_models(self, models: List, downloads: Dict, current_model: str, models_dir: Any) -> None:
+        from application.model_download import normalize_model_reference
+        known = {normalize_model_reference(str(m.get("name") or "")) for m in models}
+        if current_model:
+            known = self._add_if_missing(models, known, current_model, models_dir, downloads)
+        for name in downloads:
+            known = self._add_if_missing(models, known, name, models_dir, downloads)
+
+    def _add_if_missing(self, models: List, known: set, name: str, models_dir: Any, downloads: Dict) -> set:
+        from application.model_download import normalize_model_reference
+        ref = normalize_model_reference(name)
+        if ref and ref not in known:
+            models.append(self._custom_model_record(name, models_dir, downloads))
+            known.add(ref)
+        return known
+
+    def _recommended_model_record(self, name: str, models_dir: Any, downloads: Dict) -> Dict[str, Any]:
+        from application.model_download import is_model_cached, is_builtin_model
+        cached = is_model_cached(name, models_dir=models_dir)
+        return {
+            "name": name, "label": name,
+            "cached": cached, "compatible": cached,
+            "status": "compatible" if cached else "recommended",
+            "source": "recommended",
+            "builtin": is_builtin_model(name),
+            "recommended": True, "downloadable": True, "deletable": False,
+            **self._download_fields(name, downloads),
+        }
+
+    def _custom_model_record(self, name: str, models_dir: Any, downloads: Dict) -> Dict[str, Any]:
+        from application.model_download import is_model_cached
+        cached = is_model_cached(name, models_dir=models_dir)
+        return {
+            "name": name, "label": name,
+            "cached": cached, "compatible": cached,
+            "status": "compatible" if cached else "unknown_remote",
+            "source": "custom",
+            "builtin": False, "recommended": False, "downloadable": True, "deletable": False,
+            **self._download_fields(name, downloads),
+        }
 
     def download_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from application.model_download import download_model_async, normalize_model_reference
@@ -650,10 +661,47 @@ class ElectronBackend:
         )
 
     def start_session(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from application.model_download import is_model_cached
         merged = self._start_params_from_config()
         merged.update(params)
         merged = self._resolve_diarization_start_params(merged)
-        return self._require_session_controller().start_session(merged)
+        controller = self._require_session_controller()
+        if bool(merged.get("asrEnabled", False)):
+            model_name = str(merged.get("model", "") or "").strip()
+            if model_name:
+                config = self._read_config()
+                models_dir = self._models_dir(config)
+                if not is_model_cached(model_name, models_dir=models_dir):
+                    return self._download_then_start(controller, model_name, merged, models_dir, config)
+        return controller.start_session(merged)
+
+    def _download_then_start(
+        self,
+        controller: Any,
+        model_name: str,
+        params: Dict[str, Any],
+        models_dir: Any,
+        config: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        from application.model_download import download_model_async
+        models_cfg = config.get("models", {}) if isinstance(config.get("models"), dict) else {}
+        proxy = str(models_cfg.get("proxy") or "") if models_cfg.get("use_proxy") else ""
+
+        controller.begin_model_download(model_name)
+
+        def on_progress(info: dict) -> None:
+            controller.update_model_download_progress(info)
+
+        def on_done(error: Optional[str]) -> None:
+            controller.finish_model_download(error=error or "")
+            if not error:
+                try:
+                    controller.start_session(params)
+                except Exception:
+                    pass
+
+        download_model_async(model_name, on_progress, on_done, models_dir=models_dir, proxy=proxy)
+        return controller.snapshot()
 
     def stop_session(self, params: Dict[str, Any]) -> Dict[str, Any]:
         merged = self._start_params_from_config()
@@ -691,69 +739,28 @@ class ElectronBackend:
             raise RuntimeError("Assistant controller is not configured")
         return self.assistant_controller.stop_local_model(params)
 
+    _NO_PARAMS: frozenset = frozenset({
+        "get_state", "get_runtime_state", "get_config",
+        "list_devices", "clear_transcript", "list_process_sessions",
+    })
+    _METHODS: frozenset = frozenset({
+        "ping", "get_state", "get_runtime_state", "get_config",
+        "get_resource_usage", "save_config", "list_devices",
+        "add_source", "remove_source", "set_source_enabled", "set_source_delay",
+        "start_session", "stop_session", "clear_transcript",
+        "invoke_assistant", "start_assistant_login", "ping_assistant_provider",
+        "list_models", "download_model", "delete_model", "model_metadata",
+        "list_diarization_models", "download_diarization_model", "delete_diarization_model",
+        "list_llm_models", "download_llm_model", "delete_llm_model",
+        "start_local_llm", "stop_local_llm", "list_process_sessions",
+    })
+
     def handle(self, method: str, params: Dict[str, Any] | None = None) -> Any:
+        if method not in self._METHODS:
+            raise KeyError(f"Unknown backend method: {method}")
         params = dict(params or {})
-        if method == "ping":
-            return self.ping(params)
-        if method == "get_state":
-            return self.get_state()
-        if method == "get_runtime_state":
-            return self.get_runtime_state()
-        if method == "get_config":
-            return self.get_config()
-        if method == "get_resource_usage":
-            return self.get_resource_usage(params)
-        if method == "save_config":
-            return self.save_config(params)
-        if method == "list_devices":
-            return self.list_devices()
-        if method == "add_source":
-            return self.add_source(params)
-        if method == "remove_source":
-            return self.remove_source(params)
-        if method == "set_source_enabled":
-            return self.set_source_enabled(params)
-        if method == "set_source_delay":
-            return self.set_source_delay(params)
-        if method == "start_session":
-            return self.start_session(params)
-        if method == "stop_session":
-            return self.stop_session(params)
-        if method == "clear_transcript":
-            return self.clear_transcript()
-        if method == "invoke_assistant":
-            return self.invoke_assistant(params)
-        if method == "start_assistant_login":
-            return self.start_assistant_login(params)
-        if method == "ping_assistant_provider":
-            return self.ping_assistant_provider(params)
-        if method == "list_models":
-            return self.list_models(params)
-        if method == "download_model":
-            return self.download_model(params)
-        if method == "delete_model":
-            return self.delete_model(params)
-        if method == "model_metadata":
-            return self.model_metadata(params)
-        if method == "list_diarization_models":
-            return self.list_diarization_models(params)
-        if method == "download_diarization_model":
-            return self.download_diarization_model(params)
-        if method == "delete_diarization_model":
-            return self.delete_diarization_model(params)
-        if method == "list_llm_models":
-            return self.list_llm_models(params)
-        if method == "download_llm_model":
-            return self.download_llm_model(params)
-        if method == "delete_llm_model":
-            return self.delete_llm_model(params)
-        if method == "start_local_llm":
-            return self.start_local_llm(params)
-        if method == "stop_local_llm":
-            return self.stop_local_llm(params)
-        if method == "list_process_sessions":
-            return self.list_process_sessions()
-        raise KeyError(f"Unknown backend method: {method}")
+        fn = getattr(self, method)
+        return fn() if method in self._NO_PARAMS else fn(params)
 
     def _read_config(self) -> Dict[str, Any]:
         try:
@@ -935,19 +942,11 @@ class ElectronBackend:
         return bool(session.get("running") and current and str(Path(current).expanduser().resolve()) == wanted)
 
     def _asr_model_options(self, config: Dict[str, Any]) -> List[str]:
-        try:
-            from application.model_download import scan_local_models
-
-            local = [
-                str(model.get("name") or "")
-                for model in scan_local_models(self._models_dir(config))
-                if model.get("compatible") and str(model.get("name") or "").strip()
-            ]
-        except Exception:
-            local = []
-        current = str((config.get("ui", {}) if isinstance(config.get("ui"), dict) else {}).get("model", "") or "").strip()
-        out: List[str] = []
+        local = _scan_compatible_asr_models(self._models_dir(config))
+        ui = config.get("ui", {}) if isinstance(config.get("ui"), dict) else {}
+        current = str(ui.get("model", "") or "").strip()
         seen: set[str] = set()
+        out: List[str] = []
         for name in [*ASR_MODEL_NAMES, *local, current]:
             text = str(name or "").strip()
             if text and text not in seen:
@@ -1272,6 +1271,18 @@ def _nvidia_gpu_snapshot() -> List[Dict[str, Any]]:
             }
         )
     return gpus
+
+
+def _scan_compatible_asr_models(models_dir: Any) -> List[str]:
+    try:
+        from application.model_download import scan_local_models
+        return [
+            str(m.get("name") or "")
+            for m in scan_local_models(models_dir)
+            if m.get("compatible") and str(m.get("name") or "").strip()
+        ]
+    except Exception:
+        return []
 
 
 def _int_or_zero(raw: object) -> int:

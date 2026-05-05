@@ -1,17 +1,19 @@
 import React from "react";
-import { Check, ChevronDown, ChevronUp, Download, Network, RefreshCw, Save, Settings, Trash2, X } from "lucide-react";
+import { Download, Network, RefreshCw, Save, Settings, X } from "lucide-react";
 
 import { FALLBACK_OPTIONS, buildProxyUrl, normalizeAssistantProfiles, uniqueOptions } from "../../entities/settings/model";
 import { meetingScribeClient } from "../../shared/api/meetingScribeClient";
-import { formatBytes } from "../../shared/lib/format";
 import { CollapsibleSection } from "../../shared/ui/CollapsibleSection";
 import { Field } from "../../shared/ui/Field";
 import { InnerCollapsible } from "../../shared/ui/InnerCollapsible";
 import { AdvancedAsrSettings } from "./AdvancedAsrSettings";
 import { AppearanceSettings } from "./AppearanceSettings";
+import { AsrModelRow } from "./AsrModelRow";
 import { AssistantSettings } from "./AssistantSettings";
+import { DiarModelRow } from "./DiarModelRow";
 import { DiarizationSettings } from "./DiarizationSettings";
 import { HardwareSummary } from "./HardwareSummary";
+import { LlmModelRow } from "./LlmModelRow";
 import { ProxySettings } from "./ProxySettings";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -25,118 +27,8 @@ function joinDir(base, sub) {
   return `${b}/${s}`;
 }
 
-function asrStatusLabel(model, isDownloading) {
-  if (model.cached) return model.compatible === false ? "incompatible" : "ready";
-  if (isDownloading) return downloadStatusLabel(model);
-  if (model.downloadError) return "error";
-  if (model.status === "inaccessible") return "inaccessible";
-  if (model.status === "unsupported_transformers_format") return "unsupported format";
-  if (model.status === "missing_files") return `missing ${model.missing?.join(", ") || "files"}`;
-  return model.source === "recommended" ? "downloadable" : "not ready";
-}
-
-function asrStatusClass(model, compatible, isDownloading) {
-  if (model.cached) return compatible ? "model-status-cached" : "model-status-error";
-  if (isDownloading) return "model-status-downloading";
-  if (model.downloadError) return "model-status-error";
-  if (model.status === "missing_files" || model.status === "unsupported_transformers_format" || model.status === "inaccessible") return "model-status-error";
-  return "model-status-missing";
-}
-
-function downloadStatusLabel(model) {
-  const dl = Number(model.downloadedBytes || 0);
-  const sp = Number(model.speedBps || 0);
-  if (dl > 0 || sp > 0) {
-    const dlStr = dl > 0 ? formatBytes(dl) : "0 B";
-    return sp > 0 ? `${dlStr} – ${formatBytes(sp)}/s` : dlStr;
-  }
-  return model.downloadMessage || "downloading...";
-}
-
-function diarDownloadLabel(model) {
-  const dl = Number(model.downloadedBytes || 0);
-  const tot = Number(model.totalBytes || 0);
-  const sp = Number(model.speedBps || 0);
-  const dlStr = dl > 0 ? formatBytes(dl) : "0 B";
-  const totStr = tot > 0 ? ` / ${formatBytes(tot)}` : "";
-  const spStr = sp > 0 ? ` – ${formatBytes(sp)}/s` : "";
-  return `${dlStr}${totStr}${spStr}`;
-}
-
-function llmStatusLabel(model, linked, isDownloading) {
-  if (isDownloading) return diarDownloadLabel(model);
-  if (model.downloadError) return "error";
-  if (linked) return "linked";
-  return model.bytes ? formatBytes(model.bytes) : "ready";
-}
-
 function isLocalAssistantProfile(profile) {
   return profile && profile.provider === "openai_local";
-}
-
-// ─── metadata panel ─────────────────────────────────────────────────────────
-
-function ModelMetadataPanel({ error, loading, metadata }) {
-  const rows = metadata ? metadataRows(metadata) : [];
-  return (
-    <div className="model-metadata-panel">
-      {loading ? <div className="models-loading">Loading metadata...</div> : null}
-      {error ? <div className="models-error">{error}</div> : null}
-      {!loading && metadata ? (
-        <>
-          <dl className="model-metadata-grid">
-            {rows.map(([label, value]) => (
-              <React.Fragment key={label}>
-                <dt>{label}</dt>
-                <dd title={String(value)}>{String(value)}</dd>
-              </React.Fragment>
-            ))}
-          </dl>
-          <div className="model-metadata-blocks">
-            <MetadataObject title="Config" value={metadata.config} />
-            <MetadataObject title="Preprocessor" value={metadata.preprocessor} />
-            <MetadataObject title="Tokenizer" value={metadata.tokenizer} />
-            <MetadataObject title="Model Card" value={metadata.readme} />
-          </div>
-        </>
-      ) : null}
-    </div>
-  );
-}
-
-function metadataRows(m) {
-  return [
-    ["Name", m.name || "-"],
-    ["Normalized", m.normalizedName || "-"],
-    ["Source", m.source || "-"],
-    ["Status", m.status || "-"],
-    ["Format", m.format || "-"],
-    ["Compatible", m.compatible ? "yes" : "no"],
-    ["Builtin", m.builtin ? "yes" : "no"],
-    ["Size", formatBytes(m.totalBytes)],
-    ["Repo", m.repoId || "-"],
-    ["Missing", m.missing?.length ? m.missing.join(", ") : "-"],
-    ["Files", m.presentFiles?.length ? m.presentFiles.join(", ") : "-"],
-    ["Weights", weightFilesLabel(m.weightFiles)],
-    ["Warnings", m.warnings?.length ? m.warnings.join(", ") : "-"],
-    ["Cache", m.cachePath || "-"],
-    ["Resolved", m.resolvedPath || "-"],
-  ];
-}
-
-function weightFilesLabel(files) {
-  if (!Array.isArray(files) || files.length === 0) return "-";
-  return files.map((f) => `${f.name} (${formatBytes(f.bytes)})`).join(", ");
-}
-
-function MetadataObject({ title, value }) {
-  if (!value || Object.keys(value).length === 0) return null;
-  return (
-    <section className="model-metadata-object">
-      <h4>{title}</h4>
-      <pre>{JSON.stringify(value, null, 2)}</pre>
-    </section>
-  );
 }
 
 // ─── combined models section ─────────────────────────────────────────────────
@@ -469,54 +361,21 @@ function ModelsSection({ draft, onChange, open }) {
           <div className="models-loading">Loading…</div>
         ) : (
           <div className="models-list">
-            {asrModels.map((model) => {
-              const isDownloading = model.downloading || asrDownloading.has(model.name);
-              const compatible = Boolean(model.compatible || model.cached);
-              const isExternal = !model.builtin && model.source !== "recommended";
-              const statusLabel = asrStatusLabel(model, isDownloading);
-              const statusClass = asrStatusClass(model, compatible, isDownloading);
-              const metaEntry = asrMetadata[model.name];
-              const expanded = Boolean(metaEntry);
-              return (
-                <div key={model.name} className={`model-row-shell${expanded ? " expanded" : ""}`}>
-                  <div className="model-row">
-                    <span className="model-row-name" title={model.path || model.name}>{model.label || model.name}</span>
-                    <span className={`model-row-status ${statusClass}`} title={model.downloadError || model.downloadMessage || model.warnings?.join(", ") || statusLabel}>
-                      {statusLabel}
-                    </span>
-
-                    <button className="model-row-btn" title={expanded ? "Hide metadata" : "Show metadata"} type="button" onClick={() => handleAsrToggleMeta(model)}>
-                      {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                    </button>
-
-                    {compatible ? (
-                      <button className="model-row-btn" disabled={draft.model === model.name} title={draft.model === model.name ? "Already selected" : `Use ${model.name}`} type="button" onClick={() => onChange({ model: model.name })}>
-                        <Check size={12} />
-                      </button>
-                    ) : (
-                      <button className="model-row-btn" disabled={isDownloading || model.downloadable === false} title={isDownloading ? "Downloading…" : `Download ${model.name}`} type="button" onClick={() => !isDownloading && model.downloadable !== false && handleAsrDownload(model.name)}>
-                        <Download size={12} />
-                      </button>
-                    )}
-
-                    {(model.deletable || model.cached) ? (
-                      <button className="model-row-btn danger" disabled={draft.model === model.name || isDownloading} title={draft.model === model.name ? "Selected model cannot be deleted" : `Delete ${model.name}`} type="button" onClick={() => handleAsrDelete(model.name)}>
-                        <Trash2 size={12} />
-                      </button>
-                    ) : (
-                      <div className="model-row-btn-gap" />
-                    )}
-
-                    {isExternal ? (
-                      <button className="model-row-btn danger" disabled={draft.model === model.name} title="Remove from list" type="button" onClick={() => handleAsrRemoveEntry(model.name)}>
-                        <X size={12} />
-                      </button>
-                    ) : null}
-                  </div>
-                  {expanded ? <ModelMetadataPanel loading={metaEntry.loading} metadata={metaEntry.metadata} error={metaEntry.error} /> : null}
-                </div>
-              );
-            })}
+            {asrModels.map((model) => (
+              <AsrModelRow
+                key={model.name}
+                model={model}
+                isDownloading={model.downloading || asrDownloading.has(model.name)}
+                isSelected={draft.model === model.name}
+                isExternal={!model.builtin && model.source !== "recommended"}
+                metaEntry={asrMetadata[model.name] || null}
+                onDownload={handleAsrDownload}
+                onDelete={handleAsrDelete}
+                onRemoveEntry={handleAsrRemoveEntry}
+                onToggleMeta={handleAsrToggleMeta}
+                onChange={onChange}
+              />
+            ))}
           </div>
         )}
       </InnerCollapsible>
@@ -559,51 +418,19 @@ function ModelsSection({ draft, onChange, open }) {
           <div className="models-list">
             {diarModels.map((model) => {
               const selected = String(draft.diarSherpaEmbeddingModelPath || "") === String(model.path || "");
-              const isDownloading = model.downloading || diarDownloading.has(model.name);
-              const ready = Boolean(model.cached || model.compatible);
-              const expanded = diarExpanded.has(model.name);
-              const statusLabel = selected ? "selected" : ready ? (model.bytes ? formatBytes(model.bytes) : "ready") : isDownloading ? diarDownloadLabel(model) : model.downloadError ? "error" : "downloadable";
-              const statusClass = (selected || ready) ? "model-status-cached" : isDownloading ? "model-status-downloading" : model.downloadError ? "model-status-error" : "model-status-missing";
               return (
-                <div key={model.name} className={`model-row-shell${expanded ? " expanded" : ""}`}>
-                  <div className="model-row">
-                    <span className="model-row-name" title={model.path || model.url || model.name}>{model.label || model.name}</span>
-                    <span className={`model-row-status ${statusClass}`} title={model.downloadError || model.downloadMessage || statusLabel}>
-                      {statusLabel}
-                    </span>
-
-                    <button className="model-row-btn" title={expanded ? "Hide info" : "Show info"} type="button" onClick={() => handleDiarToggleExpand(model.name)}>
-                      {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                    </button>
-
-                    {ready ? (
-                      <button className="model-row-btn" disabled={selected} title={selected ? "Already selected" : `Use ${model.label || model.name}`} type="button" onClick={() => handleDiarUse(model)}>
-                        <Check size={12} />
-                      </button>
-                    ) : (
-                      <button className="model-row-btn" disabled={isDownloading || model.downloadable === false} title={isDownloading ? "Downloading…" : `Download ${model.label || model.name}`} type="button" onClick={() => !isDownloading && model.downloadable !== false && handleDiarDownload(model)}>
-                        <Download size={12} />
-                      </button>
-                    )}
-
-                    {(model.deletable || model.cached) ? (
-                      <button className="model-row-btn danger" disabled={selected || isDownloading} title={selected ? "Selected model cannot be deleted" : `Delete ${model.label || model.name}`} type="button" onClick={() => handleDiarDelete(model)}>
-                        <Trash2 size={12} />
-                      </button>
-                    ) : (
-                      <div className="model-row-btn-gap" />
-                    )}
-                  </div>
-                  {expanded ? (
-                    <div className="model-metadata-panel">
-                      <dl className="model-metadata-grid">
-                        {[["Name", model.name], ["Label", model.label || "-"], ["Backend", model.backend || "-"], ["Provider", model.provider || "-"], ["Size", model.bytes ? formatBytes(model.bytes) : "-"], ["Path", model.path || "-"]].map(([l, v]) => (
-                          <React.Fragment key={l}><dt>{l}</dt><dd title={String(v)}>{String(v)}</dd></React.Fragment>
-                        ))}
-                      </dl>
-                    </div>
-                  ) : null}
-                </div>
+                <DiarModelRow
+                  key={model.name}
+                  model={model}
+                  selected={selected}
+                  isDownloading={model.downloading || diarDownloading.has(model.name)}
+                  expanded={diarExpanded.has(model.name)}
+                  deletable={Boolean(model.deletable || model.cached)}
+                  onUse={handleDiarUse}
+                  onDownload={handleDiarDownload}
+                  onDelete={handleDiarDelete}
+                  onToggleExpand={handleDiarToggleExpand}
+                />
               );
             })}
           </div>
@@ -650,25 +477,16 @@ function ModelsSection({ draft, onChange, open }) {
           <div className="models-list">
             {llmModels.map((model) => {
               const alias = String(model.modelAlias || model.name || "");
-              const linked = linkedLlmAliases.has(alias);
-              const isDownloading = model.downloading || llmDownloading.has(model.name);
-              const statusLabel = llmStatusLabel(model, linked, isDownloading);
-              const statusClass = model.cached ? "model-status-cached" : isDownloading ? "model-status-downloading" : model.downloadError ? "model-status-error" : "model-status-missing";
               return (
-                <div key={model.path || model.name} className="model-row-shell">
-                  <div className="model-row">
-                    <span className="model-row-name" title={model.path || model.name}>{model.label || model.name}</span>
-                    <span className={`model-row-status ${statusClass}`} title={model.downloadError || model.downloadMessage || statusLabel}>
-                      {statusLabel}
-                    </span>
-                    <button className="model-row-btn" disabled={isDownloading || !alias} title={`Use ${alias} in selected assistant profile`} type="button" onClick={() => handleLlmUse(model)}>
-                      <Check size={12} />
-                    </button>
-                    <button className="model-row-btn danger" disabled={linked || isDownloading || !model.path} title={linked ? "Model is used by an assistant profile" : `Delete ${model.label || model.name}`} type="button" onClick={() => handleLlmDelete(model)}>
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                </div>
+                <LlmModelRow
+                  key={model.path || model.name}
+                  model={model}
+                  alias={alias}
+                  linked={linkedLlmAliases.has(alias)}
+                  isDownloading={model.downloading || llmDownloading.has(model.name)}
+                  onUse={handleLlmUse}
+                  onDelete={handleLlmDelete}
+                />
               );
             })}
           </div>

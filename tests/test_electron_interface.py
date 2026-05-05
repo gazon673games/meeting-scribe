@@ -435,7 +435,8 @@ class ElectronInterfaceTests(unittest.TestCase):
             backend.handle("list_devices")
             backend.handle("add_source", {"deviceId": "input:0"})
             state = backend.handle("get_state")
-            backend.handle("start_session", {})
+            with patch("application.model_download.is_model_cached", return_value=True):
+                backend.handle("start_session", {})
             backend.handle("stop_session", {"runOfflinePass": False})
 
             self.assertTrue(state["configSummary"]["diarizationEnabled"])
@@ -479,7 +480,10 @@ class ElectronInterfaceTests(unittest.TestCase):
 
             backend.handle("list_devices")
             backend.handle("add_source", {"deviceId": "input:0"})
-            with patch("interface.backend._module_available", return_value=False):
+            with (
+                patch("interface.backend._module_available", return_value=False),
+                patch("application.model_download.is_model_cached", return_value=True),
+            ):
                 backend.handle("start_session", {})
             backend.handle("stop_session", {"runOfflinePass": False})
 
@@ -619,7 +623,7 @@ class ElectronInterfaceTests(unittest.TestCase):
             self.assertTrue(any(kind == "assistant_result" for kind, _ in events))
             self.assertIn("question", assistant.snapshot()["lastResponse"]["text"])
 
-    def test_assistant_controller_rejects_empty_transcript_context(self) -> None:
+    def test_assistant_controller_allows_empty_transcript_for_direct_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             repository = JsonConfigRepository(root / "config.json")
@@ -647,11 +651,15 @@ class ElectronInterfaceTests(unittest.TestCase):
                 event_sink=lambda typ, payload: events.append((typ, payload)),
             )
 
-            with self.assertRaisesRegex(RuntimeError, "context is empty"):
-                assistant.invoke({"requestText": "reply"})
+            snapshot = assistant.invoke({"requestText": "reply"})
+            for _ in range(20):
+                if any(kind == "assistant_result" for kind, _ in events):
+                    break
+                time.sleep(0.02)
 
-            self.assertFalse(events)
-            self.assertFalse(assistant.snapshot()["busy"])
+            self.assertIn("profiles", snapshot)
+            self.assertTrue(any(kind == "assistant_result" for kind, _ in events))
+            self.assertEqual(assistant.snapshot()["lastRequest"]["contextLabel"], "no transcript")
 
     def test_assistant_controller_emits_local_model_status_events(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
