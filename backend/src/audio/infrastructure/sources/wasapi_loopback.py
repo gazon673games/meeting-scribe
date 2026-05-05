@@ -39,6 +39,34 @@ from audio.domain.formats import AudioFormat
 from audio.infrastructure.sources.base import BaseSource
 
 
+def _pick_default_loopback(search_space):
+    sp = sc.default_speaker()
+    sp_id = getattr(sp, "id", None)
+    for m in search_space:
+        if getattr(m, "id", None) == sp_id:
+            return m
+    return sc.get_microphone(sp.name, include_loopback=True)
+
+
+def _find_device_in_search_space(search_space, dev):
+    dev_name = str(dev).strip().lower()
+    for m in search_space:
+        if getattr(m, "id", None) == dev:
+            return m
+    for m in search_space:
+        n = str(getattr(m, "name", "")).strip()
+        if n and n.lower() == dev_name:
+            return m
+    for m in search_space:
+        n = str(getattr(m, "name", "")).strip()
+        if n and dev_name and dev_name in n.lower():
+            return m
+    try:
+        return sc.get_microphone(dev, include_loopback=True)
+    except Exception:
+        return sc.get_microphone(str(dev), include_loopback=True)
+
+
 class WasapiLoopbackSource(BaseSource):
     """WASAPI loopback source implemented via soundcard."""
 
@@ -85,39 +113,11 @@ class WasapiLoopbackSource(BaseSource):
         candidates = list(sc.all_microphones(include_loopback=True))
         loopbacks = [m for m in candidates if bool(getattr(m, "isloopback", False))]
         search_space = loopbacks if loopbacks else candidates
-
         if not search_space:
             raise RuntimeError("No capture devices were found")
-
         if self._device is None:
-            sp = sc.default_speaker()
-            sp_id = getattr(sp, "id", None)
-            for m in search_space:
-                if getattr(m, "id", None) == sp_id:
-                    return m
-            return sc.get_microphone(sp.name, include_loopback=True)
-
-        dev = self._device
-        dev_name = str(dev).strip().lower()
-
-        for m in search_space:
-            if getattr(m, "id", None) == dev:
-                return m
-
-        for m in search_space:
-            n = str(getattr(m, "name", "")).strip()
-            if n and n.lower() == dev_name:
-                return m
-
-        for m in search_space:
-            n = str(getattr(m, "name", "")).strip()
-            if n and dev_name and dev_name in n.lower():
-                return m
-
-        try:
-            return sc.get_microphone(dev, include_loopback=True)
-        except Exception:
-            return sc.get_microphone(str(dev), include_loopback=True)
+            return _pick_default_loopback(search_space)
+        return _find_device_in_search_space(search_space, self._device)
 
     def _run(self) -> None:
         try:

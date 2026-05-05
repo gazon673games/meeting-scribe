@@ -238,7 +238,13 @@ class EnergyVAD:
         max_lag = min(int(self.sample_rate / _PITCH_MIN_HZ), xf.size - 1)
         if max_lag <= min_lag + 2:
             return 0.0
-        best = max(float(np.dot(xf[:-lag], xf[lag:]) / denom) for lag in range(min_lag, max_lag))
+        # FFT-based autocorrelation: O(N log N) vs O(N × lags) Python loop.
+        # Zero-pad to next power-of-2 ≥ 2N−1 to avoid circular wrap-around.
+        n = xf.size
+        fft_n = 1 << (2 * n - 1).bit_length()
+        F = np.fft.rfft(xf, n=fft_n)
+        acf = np.fft.irfft(F * F.conj(), n=fft_n)[:n]
+        best = float(np.max(acf[min_lag:max_lag])) / denom
         return float(max(0.0, min(1.0, best)))
 
     # ── noise adaptation ────────────────────────────────────────────────────

@@ -28,5 +28,7 @@ class StreamDedupFilter:
         prev = self._last.get(stream, "")
         trimmed, removed = trim_overlap(prev, text, max_window=self.window, min_match=self.min_match)
         if trimmed:
-            self._last[stream] = normalize_text(prev + " " + trimmed).strip()
+            updated = normalize_text(prev + " " + trimmed).strip()
+            # trim_overlap reads only prev[-window:], so keep only that suffix
+            self._last[stream] = updated[-self.window:]
         return trimmed, removed
