@@ -10,7 +10,7 @@ from asr.application.ports import (
     AsrLoggerFactoryPort,
     RealtimeWorkerRunnerPort,
 )
-from asr.application.segmentation import SegmenterConfig
+from asr.application.segmentation import SegmenterConfig, StreamingSegmenterConfig
 from asr.domain.types import Mode, OverloadStrategy
 from diarization.application.diarization import DiarizationConfig, DiarizationRuntimeFactoryPort
 from diarization.domain.types import DiarBackend
@@ -88,6 +88,9 @@ class ASRPipelineSettings:
     asr_initial_prompt: Optional[str] = None
     metrics_emit_interval_s: float = 1.0
     metrics_latency_window: int = 200
+    streaming_enabled: bool = False
+    streaming_chunk_interval_s: float = 1.0
+    streaming_endpoint_silence_ms: float = 300.0
 
     @property
     def normalized_overload_strategy(self) -> OverloadStrategy:
@@ -109,6 +112,25 @@ def build_segmenter_config(settings: ASRPipelineSettings) -> SegmenterConfig:
         vad_pre_speech_ms=int(settings.vad_pre_speech_ms),
         vad_min_end_silence_ms=int(settings.vad_min_end_silence_ms),
         min_segment_ms=int(settings.min_segment_ms),
+        agc_enabled=bool(settings.agc_enabled),
+        agc_target_rms=float(settings.agc_target_rms),
+        agc_max_gain=float(settings.agc_max_gain),
+        agc_alpha=float(settings.agc_alpha),
+    )
+
+
+def build_streaming_segmenter_config(settings: ASRPipelineSettings) -> StreamingSegmenterConfig:
+    return StreamingSegmenterConfig(
+        chunk_interval_s=float(settings.streaming_chunk_interval_s),
+        endpoint_silence_ms=float(settings.streaming_endpoint_silence_ms),
+        max_segment_s=float(settings.max_segment_s),
+        vad_energy_threshold=float(settings.vad_energy_threshold),
+        vad_hangover_ms=float(settings.vad_hangover_ms),
+        vad_min_speech_ms=float(settings.vad_min_speech_ms),
+        vad_band_ratio_min=float(settings.vad_band_ratio_min),
+        vad_voiced_min=float(settings.vad_voiced_min),
+        vad_pre_speech_ms=float(settings.vad_pre_speech_ms),
+        vad_min_end_silence_ms=float(settings.vad_min_end_silence_ms),
         agc_enabled=bool(settings.agc_enabled),
         agc_target_rms=float(settings.agc_target_rms),
         agc_max_gain=float(settings.agc_max_gain),

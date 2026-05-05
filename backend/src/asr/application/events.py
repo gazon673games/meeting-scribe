@@ -28,6 +28,8 @@ PUBLIC_EVENT_TYPES = {
     "diar_segment_processing",
     "diar_segment_done",
     "diar_segment_dropped",
+    "streaming_words",
+    "streaming_final",
 }
 
 

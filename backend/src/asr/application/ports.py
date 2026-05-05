@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional, Protocol
+from typing import Any, Callable, Dict, List, Optional, Protocol
 
 
 class AsrLoggerPort(Protocol):
@@ -61,6 +61,11 @@ class AudioSegmenterFactoryPort(Protocol):
         segmentation_params: Callable[[], tuple[float, float, float]],
     ) -> Any:
         ...
+
+class StreamingAsrBackendPort(Protocol):
+    def transcribe_words(self, audio_16k_mono: Any) -> List[Dict[str, Any]]:
+        ...
+
 
 class StopSignalPort(Protocol):
     def clear(self) -> None:

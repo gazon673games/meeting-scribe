@@ -71,8 +71,12 @@ class TranscriptionWorkerRuntime:
         except Exception as e:
             self._log_event({"type": "error", "where": "worker", "error": str(e), "ts": time.time()})
         finally:
-            # FasterWhisperASR owns native/CUDA resources; release them in the same
-            # worker thread that created and used them to avoid cross-thread teardown.
+            # Release CUDA resources in the worker thread that owns them
+            if self._asr is not None:
+                try:
+                    self._asr.close()
+                except Exception:
+                    pass
             self._asr = None
 
     def run(self) -> None:

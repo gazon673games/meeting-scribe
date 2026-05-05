@@ -91,6 +91,12 @@ export function useMeetingScribeApp() {
       if (event.type === "asr_metrics") {
         setState((current) => applyAsrMetrics(current, event));
       }
+      if (event.type === "streaming_words") {
+        setState((current) => applyStreamingWords(current, event));
+      }
+      if (event.type === "streaming_final") {
+        setState((current) => applyStreamingFinal(current, event));
+      }
       if (event.type === "assistant_ping_result") {
         setAssistantPing((current) => ({ ...current, busy: false, ...event, ts: Date.now() }));
       }
@@ -187,7 +193,7 @@ export function useMeetingScribeApp() {
   const assistantContextReady = transcript.some((line) => String(line?.text || "").trim());
   const asrMetrics = session.asrMetrics || {};
   const offlinePass = session.offlinePass || {};
-  const canStart = Boolean(capabilities.sessionControl && sources.length > 0 && !session.running);
+  const canStart = Boolean(capabilities.sessionControl && sources.length > 0 && !session.running && session.state !== "downloading_model");
   const canStop = Boolean(capabilities.sessionControl && session.running);
   const status = session.running ? "recording" : offlinePass.running ? "processing" : "idle";
 
@@ -467,6 +473,69 @@ function updateTranscriptLine(state, event) {
   };
 }
 
+function applyStreamingWords(state, event) {
+  if (!state?.session) return state;
+  const stream = String(event.stream || "mix");
+  const newConfirmed = (event.confirmed || []).map((w) => w.text).join(" ").trim();
+  const tentativeText = (event.tentative || []).map((w) => w.text).join(" ").trim();
+  if (!newConfirmed && !tentativeText) return state;
+
+  const id = `streaming-${stream}`;
+  const transcript = state.session.transcript || [];
+  const existingIndex = transcript.findIndex((item) => item.id === id);
+  let line;
+  if (existingIndex >= 0) {
+    const prev = transcript[existingIndex];
+    const confirmedText = [String(prev.confirmedText || ""), newConfirmed].filter(Boolean).join(" ");
+    line = { ...prev, confirmedText, tentativeText, t_end: optionalNumber(event.t_end), ts: Number(event.ts || Date.now() / 1000) };
+  } else {
+    line = {
+      id,
+      ts: Number(event.ts || Date.now() / 1000),
+      stream,
+      speaker: "",
+      t_start: optionalNumber(event.t_start),
+      t_end: optionalNumber(event.t_end),
+      confirmedText: newConfirmed,
+      tentativeText,
+      text: "",
+      tentative: true,
+      overload: false
+    };
+  }
+  const updated =
+    existingIndex >= 0
+      ? transcript.map((item, i) => (i === existingIndex ? line : item))
+      : [...transcript, line].slice(-200);
+  return { ...state, session: { ...state.session, transcript: updated } };
+}
+
+function applyStreamingFinal(state, event) {
+  if (!state?.session) return state;
+  const stream = String(event.stream || "mix");
+  const text = (event.words || [])
+    .map((w) => w.text)
+    .join(" ")
+    .trim();
+  const streamingId = `streaming-${stream}`;
+  const transcript = (state.session.transcript || []).filter((item) => item.id !== streamingId);
+  if (!text) {
+    return { ...state, session: { ...state.session, transcript } };
+  }
+  const finalLine = {
+    id: transcriptLineId(event),
+    ts: Number(event.ts || Date.now() / 1000),
+    stream,
+    speaker: "",
+    t_start: optionalNumber(event.t_start),
+    t_end: optionalNumber(event.t_end),
+    text,
+    tentative: false,
+    overload: false
+  };
+  return { ...state, session: { ...state.session, transcript: [...transcript, finalLine].slice(-200) } };
+}
+
 function sameTranscriptLine(line, event, id) {
   if (id && String(line.id || "") === id) {
     return true;
@@ -540,7 +609,7 @@ function mergeTranscriptLines(currentLines, nextLines) {
   const merged = [];
   const indexByKey = new Map();
   const appendOrUpdate = (line) => {
-    if (!line || !String(line.text || "").trim()) {
+    if (!line || (!String(line.text || "").trim() && !line.tentative)) {
       return;
     }
     const key = transcriptLineKey(line);
@@ -571,11 +640,6 @@ function transcriptLineKey(line) {
 }
 
 function compareTranscriptLines(left, right) {
-  const leftStart = optionalNumber(left?.t_start) ?? optionalNumber(left?.ts) ?? 0;
-  const rightStart = optionalNumber(right?.t_start) ?? optionalNumber(right?.ts) ?? 0;
-  if (leftStart !== rightStart) {
-    return leftStart - rightStart;
-  }
   return (optionalNumber(left?.ts) ?? 0) - (optionalNumber(right?.ts) ?? 0);
 }
 
