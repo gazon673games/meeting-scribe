@@ -5,6 +5,24 @@ from typing import Protocol
 
 
 @dataclass(frozen=True)
+class StreamingSegmenterConfig:
+    chunk_interval_s: float = 1.0
+    endpoint_silence_ms: float = 300.0
+    max_segment_s: float = 30.0
+    vad_energy_threshold: float = 0.02
+    vad_hangover_ms: float = 400.0
+    vad_min_speech_ms: float = 100.0
+    vad_band_ratio_min: float = 0.15
+    vad_voiced_min: float = 0.1
+    vad_pre_speech_ms: float = 120.0
+    vad_min_end_silence_ms: float = 0.0
+    agc_enabled: bool = True
+    agc_target_rms: float = 0.05
+    agc_max_gain: float = 10.0
+    agc_alpha: float = 0.95
+
+
+@dataclass(frozen=True)
 class SegmenterConfig:
     vad_energy_threshold: float
     vad_hangover_ms: int

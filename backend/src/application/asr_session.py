@@ -47,6 +47,7 @@ class ASRSessionSettings:
     diar_sherpa_embedding_model_path: str = ""
     diar_sherpa_provider: str = "cpu"
     diar_sherpa_num_threads: int = 1
+    streaming_enabled: bool = False
 
 
 class ASRRuntimeFactory(Protocol):

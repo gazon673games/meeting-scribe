@@ -4,8 +4,10 @@ import queue
 import time
 from typing import Callable
 
+from asr.application.ports import StopSignalPort
+from asr.application.segmentation import AudioSegmenterPort
+
 LogEvent = Callable[[dict], None]
-EmitMetrics = Callable[[bool], None]
 
 
 class TapIngestRuntime:
@@ -13,18 +15,16 @@ class TapIngestRuntime:
         self,
         *,
         tap_queue: "queue.Queue[dict]",
-        stop_event,
+        stop_event: StopSignalPort,
         mode: str,
-        segmenter,
+        segmenter: AudioSegmenterPort,
         log_event: LogEvent,
-        emit_metrics: EmitMetrics,
     ) -> None:
         self._tap_q = tap_queue
         self._stop = stop_event
         self._mode = str(mode)
         self._segmenter = segmenter
         self._log_event = log_event
-        self._emit_metrics = emit_metrics
 
     def run_safe(self) -> None:
         try:
@@ -40,4 +40,3 @@ class TapIngestRuntime:
                 continue
 
             self._segmenter.feed_packet(mode=self._mode, pkt=pkt)
-            self._emit_metrics(False)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -32,6 +32,12 @@ class FasterWhisperASR(AsrBackendPort):
     initial_prompt: Optional[str] = None
     condition_on_previous_text: bool = True
     without_timestamps: bool = True
+
+    def close(self) -> None:
+        try:
+            self._model.model.unload_model()
+        except Exception:
+            pass
 
     def __post_init__(self) -> None:
         try:
@@ -101,3 +107,29 @@ class FasterWhisperASR(AsrBackendPort):
             pass
 
         return out
+
+    def transcribe_words(self, audio_16k_mono: np.ndarray) -> List[Dict[str, Any]]:
+        x = np.asarray(audio_16k_mono, dtype=np.float32)
+        if x.ndim != 1:
+            x = x.reshape(-1).astype(np.float32, copy=False)
+
+        kwargs: Dict[str, Any] = {
+            "beam_size": 1,
+            "temperature": 0.0,
+            "vad_filter": False,
+            "word_timestamps": True,
+            "without_timestamps": False,
+            "condition_on_previous_text": False,
+        }
+        if self.language is not None:
+            kwargs["language"] = self.language
+
+        segments, _ = self._model.transcribe(x, **kwargs)
+
+        result: List[Dict[str, Any]] = []
+        for seg in segments:
+            for w in (seg.words or []):
+                text = w.word.strip()
+                if text:
+                    result.append({"text": text, "start": float(w.start), "end": float(w.end)})
+        return result

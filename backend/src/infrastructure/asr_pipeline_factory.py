@@ -64,8 +64,9 @@ class ASRPipelineFactory(ASRRuntimeFactory):
             log_backup_count=5,
             asr_language=settings.asr_language,
             asr_initial_prompt=settings.asr_initial_prompt,
-            metrics_emit_interval_s=1.0,
+            metrics_emit_interval_s=5.0,
             metrics_latency_window=200,
+            streaming_enabled=bool(settings.streaming_enabled),
         )
         pipeline_dependencies = ASRPipelineDependencies(
             logger_factory=ASRLogger,

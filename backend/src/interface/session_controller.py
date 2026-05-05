@@ -116,6 +116,7 @@ class HeadlessSessionController:
         self._offline_pass_thread: Optional[threading.Thread] = None
         self._offline_pass_running = False
         self._offline_pass_result: Dict[str, Any] = {}
+        self._model_download_info: Dict[str, Any] = {}
         self._closing = False
 
     def set_event_sink(self, event_sink: Optional[EventSink]) -> None:
@@ -197,6 +198,36 @@ class HeadlessSessionController:
             self._pending_speaker_updates.clear()
             self._emit("transcript_cleared", {})
             return self.snapshot()
+
+    def begin_model_download(self, model_name: str) -> None:
+        with self._lock:
+            self._session_state.begin_model_download(model_name)
+            self._model_download_info = {
+                "model": model_name,
+                "downloadedBytes": 0,
+                "speedBps": 0.0,
+                "message": "Starting download...",
+            }
+            self._emit("session_state_changed", {"state": "downloading_model", "model": model_name})
+
+    def update_model_download_progress(self, info: Dict[str, Any]) -> None:
+        with self._lock:
+            self._model_download_info = {
+                "model": self._model_download_info.get("model", ""),
+                "downloadedBytes": int(info.get("downloadedBytes", 0)),
+                "speedBps": float(info.get("speedBps", 0.0)),
+                "message": str(info.get("message", "")),
+            }
+
+    def finish_model_download(self, error: str = "") -> None:
+        with self._lock:
+            model_name = self._model_download_info.get("model", "")
+            self._session_state.finish_model_download(model_name=model_name, error=error)
+            self._model_download_info = {}
+            if error:
+                self._last_error = error
+                self._emit("session_error", {"message": error})
+            self._emit("session_state_changed", {"state": "idle", "error": error})
 
     def start_session(self, params: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
@@ -314,6 +345,7 @@ class HeadlessSessionController:
                 "realtimeTranscriptPath": str(self._realtime_transcript_path or ""),
                 "transcript": list(self._transcript_lines[-200:]),
                 "sources": [self._source_record(name, meters=meters) for name in self._sources],
+                "modelDownload": dict(self._model_download_info),
             }
 
     def transcript_text(self, *, limit: int = 500) -> str:
@@ -473,27 +505,37 @@ class HeadlessSessionController:
         self._last_warning = ""
         return ""
 
+    def _resolve_stop_wav_path(self, params: Dict[str, Any]) -> Path:
+        return Path(str(
+            params.get("wavPath")
+            or self.writer.target_path()
+            or self._current_output_path(str(params.get("outputFile", "")))
+        ))
+
+    def _build_stop_asr_request(self, asr: Any, wav_path: Path, params: Dict[str, Any]) -> StopAsrRequest:
+        p = params or {}
+        return StopAsrRequest(
+            asr=asr,
+            wav_path=wav_path,
+            run_offline_pass=bool(p.get("runOfflinePass", False)),
+            offline_model_name=str(p.get("offlineModelName", p.get("model", "large-v3"))),
+            offline_language=runtime_asr_language(str(p.get("language", "ru"))),
+        )
+
     def _stop_asr_locked(self, params: Dict[str, Any]) -> None:
         asr = self._asr_runtime
         self._asr_runtime = None
         self._asr_running = False
         self._asr_event_stop.set()
+        self._transcript_lines = [l for l in self._transcript_lines if not str(l.get("id", "")).startswith("streaming-")]
         if asr is None:
             self._transcription_state.reset()
             return
 
         if self._transcription_state.can_stop:
             self._transcription_state.begin_stop()
-        wav_path = Path(str(params.get("wavPath") or self.writer.target_path() or self._current_output_path(str(params.get("outputFile", "")))))
-        result = self.stop_asr_use_case.execute(
-            StopAsrRequest(
-                asr=asr,
-                wav_path=wav_path,
-                run_offline_pass=bool((params or {}).get("runOfflinePass", False)),
-                offline_model_name=str((params or {}).get("offlineModelName", (params or {}).get("model", "large-v3"))),
-                offline_language=runtime_asr_language(str((params or {}).get("language", "ru"))),
-            )
-        )
+        wav_path = self._resolve_stop_wav_path(params)
+        result = self.stop_asr_use_case.execute(self._build_stop_asr_request(asr, wav_path, params))
         self._drain_asr_events()
         stop_error = str(result.stop_error or "")
         if self._transcription_state.is_stopping:
@@ -578,6 +620,8 @@ class HeadlessSessionController:
             drained = self._drain_asr_events(limit=80)
             if drained <= 0:
                 time.sleep(0.08)
+            elif drained == 80:
+                pass  # Queue likely still has items — loop immediately without sleeping
         self._drain_asr_events(limit=500)
 
     def _drain_asr_events(self, *, limit: int = 500) -> int:
@@ -604,50 +648,112 @@ class HeadlessSessionController:
         event = event_from_record(raw)
         record = event_to_record(event)
         with self._lock:
-            if isinstance(event, UtteranceEvent):
-                text = event.text.strip()
-                if text:
-                    stream = str(event.stream)
-                    speaker = _clean_speaker(event.speaker) or self._speaker_label_for_stream_locked(stream)
-                    t_start = _optional_float(event.t_start)
-                    t_end = _optional_float(event.t_end)
-                    line = {
-                        "id": build_transcript_line_id(
-                            stream=stream,
-                            t_start=t_start,
-                            t_end=t_end,
-                            ts=float(event.ts),
-                        ),
-                        "ts": float(event.ts),
-                        "stream": stream,
-                        "speaker": speaker,
-                        "t_start": t_start,
-                        "t_end": t_end,
-                        "text": text,
-                        "overload": bool(event.overload),
-                    }
-                    self._apply_pending_speaker_updates_locked(line)
-                    self._transcript_lines.append(line)
-                    if len(self._transcript_lines) > 500:
-                        del self._transcript_lines[:-500]
-                    record["line"] = line
-                    self._write_transcript_line_locked(line)
-            elif isinstance(event, TranscriptSpeakerUpdateEvent):
-                line = self._find_line_for_speaker_update_locked(event)
-                if line is None:
-                    self._remember_pending_speaker_update_locked(event)
-                elif self._update_line_speaker_from_event_locked(line, event):
-                    record["line"] = dict(line)
-            elif isinstance(event, AsrMetricsEvent):
-                self._asr_metrics = {
-                    "segDroppedTotal": int(event.seg_dropped_total),
-                    "segSkippedTotal": int(event.seg_skipped_total),
-                    "avgLatencyS": float(event.avg_latency_s),
-                    "p95LatencyS": float(event.p95_latency_s),
-                    "lagS": float(event.lag_s),
-                }
-            elif isinstance(event, SourceErrorEvent):
-                self._last_error = f"{event.source}: {event.error}"
+            self._dispatch_asr_event(event, record)
+        self._emit_asr_notifications(event, record)
+
+    def _dispatch_asr_event(self, event: object, record: Dict[str, Any]) -> None:
+        if isinstance(event, UtteranceEvent):
+            self._handle_utterance_locked(event, record)
+        elif isinstance(event, TranscriptSpeakerUpdateEvent):
+            self._handle_speaker_update_locked(event, record)
+        elif isinstance(event, AsrMetricsEvent):
+            self._handle_metrics_locked(event)
+        elif isinstance(event, SourceErrorEvent):
+            self._last_error = f"{event.source}: {event.error}"
+        elif record.get("type") == "streaming_words":
+            self._handle_streaming_words_locked(record)
+        elif record.get("type") == "streaming_final":
+            self._handle_streaming_final_locked(record)
+
+    def _handle_utterance_locked(self, event: UtteranceEvent, record: Dict[str, Any]) -> None:
+        text = event.text.strip()
+        if not text:
+            return
+        stream = str(event.stream)
+        speaker = _clean_speaker(event.speaker) or self._speaker_label_for_stream_locked(stream)
+        t_start = _optional_float(event.t_start)
+        t_end = _optional_float(event.t_end)
+        line = {
+            "id": build_transcript_line_id(stream=stream, t_start=t_start, t_end=t_end, ts=float(event.ts)),
+            "ts": float(event.ts),
+            "stream": stream,
+            "speaker": speaker,
+            "t_start": t_start,
+            "t_end": t_end,
+            "text": text,
+            "overload": bool(event.overload),
+        }
+        self._apply_pending_speaker_updates_locked(line)
+        self._append_transcript_line_locked(line)
+        record["line"] = line
+        self._write_transcript_line_locked(line)
+
+    def _handle_speaker_update_locked(self, event: TranscriptSpeakerUpdateEvent, record: Dict[str, Any]) -> None:
+        line = self._find_line_for_speaker_update_locked(event)
+        if line is None:
+            self._remember_pending_speaker_update_locked(event)
+        elif self._update_line_speaker_from_event_locked(line, event):
+            record["line"] = dict(line)
+
+    def _handle_metrics_locked(self, event: AsrMetricsEvent) -> None:
+        self._asr_metrics = {
+            "segDroppedTotal": int(event.seg_dropped_total),
+            "segSkippedTotal": int(event.seg_skipped_total),
+            "avgLatencyS": float(event.avg_latency_s),
+            "p95LatencyS": float(event.p95_latency_s),
+            "lagS": float(event.lag_s),
+        }
+
+    def _handle_streaming_words_locked(self, record: Dict[str, Any]) -> None:
+        stream = str(record.get("stream") or "mix")
+        new_confirmed = _join_words(record.get("confirmed"))
+        tentative_text = _join_words(record.get("tentative"))
+        tentative_id = f"streaming-{stream}"
+        existing = next((l for l in self._transcript_lines if l.get("id") == tentative_id), None)
+        if existing is not None:
+            confirmed = " ".join(filter(None, [str(existing.get("_confirmed", "")), new_confirmed]))
+            existing["_confirmed"] = confirmed
+            existing["text"] = " ".join(filter(None, [confirmed, tentative_text]))
+            existing["t_end"] = _optional_float(record.get("t_end"))
+        else:
+            text = " ".join(filter(None, [new_confirmed, tentative_text]))
+            if text:
+                self._append_transcript_line_locked({
+                    "id": tentative_id,
+                    "_confirmed": new_confirmed,
+                    "ts": float(record.get("ts") or time.time()),
+                    "stream": stream,
+                    "speaker": "",
+                    "t_start": _optional_float(record.get("t_start")),
+                    "t_end": _optional_float(record.get("t_end")),
+                    "text": text,
+                    "overload": False,
+                })
+
+    def _handle_streaming_final_locked(self, record: Dict[str, Any]) -> None:
+        stream = str(record.get("stream") or "mix")
+        tentative_id = f"streaming-{stream}"
+        self._transcript_lines = [l for l in self._transcript_lines if l.get("id") != tentative_id]
+        text = _join_words(record.get("words"))
+        if not text:
+            return
+        t_start = _optional_float(record.get("t_start"))
+        t_end = _optional_float(record.get("t_end"))
+        ts = float(record.get("ts") or time.time())
+        line = {
+            "id": build_transcript_line_id(stream=stream, t_start=t_start, t_end=t_end, ts=ts),
+            "ts": ts, "stream": stream, "speaker": "",
+            "t_start": t_start, "t_end": t_end, "text": text, "overload": False,
+        }
+        self._append_transcript_line_locked(line)
+        self._write_transcript_line_locked(line)
+
+    def _append_transcript_line_locked(self, line: Dict[str, Any]) -> None:
+        self._transcript_lines.append(line)
+        if len(self._transcript_lines) > 500:
+            del self._transcript_lines[:-500]
+
+    def _emit_asr_notifications(self, event: object, record: Dict[str, Any]) -> None:
         self._emit("asr_event", record)
         if isinstance(event, UtteranceEvent) and str(record.get("text", "")).strip():
             self._emit("transcript_line", record.get("line", {}))
@@ -666,7 +772,7 @@ class HeadlessSessionController:
             return
         self.engine.set_tap_queue(self.tap_queue)
         self.engine.set_tap_config(
-            mode="sources",
+            mode="both",
             sources=[source.name for source in self._sources.values() if source.enabled],
             drop_threshold=0.85,
         )
@@ -943,7 +1049,14 @@ def _asr_settings_from_params(
             1,
             32,
         ),
+        streaming_enabled=bool(params.get("streamingEnabled", params.get("streaming_enabled", False))),
     )
+
+
+def _join_words(words: object) -> str:
+    if not isinstance(words, list):
+        return ""
+    return " ".join(str(w.get("text", "")) for w in words).strip()
 
 
 def _clean_speaker(raw: object) -> str:
