@@ -1,5 +1,6 @@
 import React from "react";
 import { Check, ChevronDown, ChevronUp, Download, Trash2, X } from "lucide-react";
+
 import { formatBytes } from "../../shared/lib/format";
 
 function downloadStatusLabel(model) {
@@ -7,7 +8,7 @@ function downloadStatusLabel(model) {
   const sp = Number(model.speedBps || 0);
   if (dl > 0 || sp > 0) {
     const dlStr = dl > 0 ? formatBytes(dl) : "0 B";
-    return sp > 0 ? `${dlStr} – ${formatBytes(sp)}/s` : dlStr;
+    return sp > 0 ? `${dlStr} - ${formatBytes(sp)}/s` : dlStr;
   }
   return model.downloadMessage || "downloading...";
 }
@@ -93,41 +94,43 @@ function weightFilesLabel(files) {
   return files.map((f) => `${f.name} (${formatBytes(f.bytes)})`).join(", ");
 }
 
-export function AsrModelRow({ model, isDownloading, isSelected, isExternal, metaEntry, onDownload, onDelete, onRemoveEntry, onToggleMeta, onChange }) {
-  const compatible = Boolean(model.compatible || model.cached);
-  const statusLabel = asrStatusLabel(model, isDownloading);
-  const statusClass = asrStatusClass(model, compatible, isDownloading);
-  const expanded = Boolean(metaEntry);
+export function AsrModelRow({
+  model,
+  isDownloading,
+  isSelected,
+  isExternal,
+  metaEntry,
+  onDownload,
+  onDelete,
+  onRemoveEntry,
+  onToggleMeta,
+  onChange,
+}) {
+  const row = buildAsrRowState(model, isDownloading, isSelected, metaEntry);
 
   return (
-    <div className={`model-row-shell${expanded ? " expanded" : ""}`}>
+    <div className={`model-row-shell${row.expanded ? " expanded" : ""}`}>
       <div className="model-row">
-        <span className="model-row-name" title={model.path || model.name}>{model.label || model.name}</span>
-        <span className={`model-row-status ${statusClass}`} title={model.downloadError || model.downloadMessage || model.warnings?.join(", ") || statusLabel}>
-          {statusLabel}
+        <span className="model-row-name" title={row.nameTitle}>{row.label}</span>
+        <span className={`model-row-status ${row.statusClass}`} title={row.statusTitle}>
+          {row.statusLabel}
         </span>
 
-        <button className="model-row-btn" title={expanded ? "Hide metadata" : "Show metadata"} type="button" onClick={() => onToggleMeta(model)}>
-          {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+        <button className="model-row-btn" title={row.expanded ? "Hide metadata" : "Show metadata"} type="button" onClick={() => onToggleMeta(model)}>
+          {row.expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
         </button>
 
-        {compatible ? (
-          <button className="model-row-btn" disabled={isSelected} title={isSelected ? "Already selected" : `Use ${model.name}`} type="button" onClick={() => onChange({ model: model.name })}>
-            <Check size={12} />
-          </button>
-        ) : (
-          <button className="model-row-btn" disabled={isDownloading || model.downloadable === false} title={isDownloading ? "Downloading…" : `Download ${model.name}`} type="button" onClick={() => !isDownloading && model.downloadable !== false && onDownload(model.name)}>
-            <Download size={12} />
-          </button>
-        )}
+        <AsrActionButton
+          canDownload={row.canDownload}
+          compatible={row.compatible}
+          isDownloading={isDownloading}
+          isSelected={row.isSelected}
+          model={model}
+          onChange={onChange}
+          onDownload={onDownload}
+        />
 
-        {(model.deletable || model.cached) ? (
-          <button className="model-row-btn danger" disabled={isSelected || isDownloading} title={isSelected ? "Selected model cannot be deleted" : `Delete ${model.name}`} type="button" onClick={() => onDelete(model.name)}>
-            <Trash2 size={12} />
-          </button>
-        ) : (
-          <div className="model-row-btn-gap" />
-        )}
+        <DeleteModelButton canDelete={row.canDelete} isDownloading={isDownloading} isSelected={row.isSelected} model={model} onDelete={onDelete} />
 
         {isExternal ? (
           <button className="model-row-btn danger" disabled={isSelected} title="Remove from list" type="button" onClick={() => onRemoveEntry(model.name)}>
@@ -135,7 +138,61 @@ export function AsrModelRow({ model, isDownloading, isSelected, isExternal, meta
           </button>
         ) : null}
       </div>
-      {expanded ? <ModelMetadataPanel loading={metaEntry.loading} metadata={metaEntry.metadata} error={metaEntry.error} /> : null}
+      {row.expanded ? <ModelMetadataPanel loading={metaEntry.loading} metadata={metaEntry.metadata} error={metaEntry.error} /> : null}
     </div>
+  );
+}
+
+function buildAsrRowState(model, isDownloading, isSelected, metaEntry) {
+  const compatible = Boolean(model.compatible || model.cached);
+  const statusLabel = asrStatusLabel(model, isDownloading);
+  return {
+    compatible,
+    expanded: Boolean(metaEntry),
+    label: model.label || model.name,
+    nameTitle: model.path || model.name,
+    statusClass: asrStatusClass(model, compatible, isDownloading),
+    statusLabel,
+    statusTitle: asrStatusTitle(model, statusLabel),
+    canDownload: !isDownloading && model.downloadable !== false,
+    canDelete: Boolean(model.deletable || model.cached),
+    isSelected: Boolean(isSelected),
+  };
+}
+
+function asrStatusTitle(model, statusLabel) {
+  if (model.downloadError) {
+    return model.downloadError;
+  }
+  if (model.downloadMessage) {
+    return model.downloadMessage;
+  }
+  const warning = Array.isArray(model.warnings) ? model.warnings.join(", ") : "";
+  return warning || statusLabel;
+}
+
+function DeleteModelButton({ canDelete, isDownloading, isSelected, model, onDelete }) {
+  if (!canDelete) {
+    return <div className="model-row-btn-gap" />;
+  }
+  return (
+    <button className="model-row-btn danger" disabled={isSelected || isDownloading} title={isSelected ? "Selected model cannot be deleted" : `Delete ${model.name}`} type="button" onClick={() => onDelete(model.name)}>
+      <Trash2 size={12} />
+    </button>
+  );
+}
+
+function AsrActionButton({ canDownload, compatible, isDownloading, isSelected, model, onChange, onDownload }) {
+  if (compatible) {
+    return (
+      <button className="model-row-btn" disabled={isSelected} title={isSelected ? "Already selected" : `Use ${model.name}`} type="button" onClick={() => onChange({ model: model.name })}>
+        <Check size={12} />
+      </button>
+    );
+  }
+  return (
+    <button className="model-row-btn" disabled={!canDownload} title={isDownloading ? "Downloading..." : `Download ${model.name}`} type="button" onClick={() => canDownload && onDownload(model.name)}>
+      <Download size={12} />
+    </button>
   );
 }

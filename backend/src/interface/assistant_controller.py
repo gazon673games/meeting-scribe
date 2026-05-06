@@ -14,26 +14,14 @@ from assistant.application.provider import ASSISTANT_PROVIDER_CODEX
 from assistant.domain.aggregate import AssistantJobAggregate
 from settings.application.config_repository import ConfigRepository
 
+from interface.assistant_controller_parts import (
+    build_request_plan,
+    provider_cache_key,
+    provider_for_profile,
+    provider_snapshot_fields,
+    resolve_context_text,
+)
 from interface.session_controller import HeadlessSessionController
-
-FAST_ANSWER_LOG_CHARS = 4000
-FAST_ANSWER_TIMEOUT_S = 35
-FAST_ANSWER_FALLBACK_LOG_CHARS = 2000
-FAST_ANSWER_FALLBACK_TIMEOUT_S = 20
-SUMMARY_LOG_CHARS = 200000
-SUMMARY_TIMEOUT_S = 180
-SUMMARY_REQUEST = (
-    "Summarize the whole session context. "
-    "Focus on decisions, open questions, risks, and the most useful next actions."
-)
-ACTION_ITEMS_REQUEST = (
-    "Extract concise action items from the current transcript. "
-    "For each item include owner if clear, deadline if mentioned, and the next concrete step."
-)
-RISK_CHECK_REQUEST = (
-    "Review the current transcript for risks, gaps, and unclear points. "
-    "Return the highest-impact risks first, then questions that should be clarified."
-)
 
 
 @dataclass
@@ -60,11 +48,11 @@ class AssistantController:
         settings = self._settings()
         selected = self._selected_profile(settings) if settings.profiles else None
         providers = self._provider_records(settings)
-        selected_provider = _provider_for_profile(providers, selected) if selected is not None else None
+        selected_provider = provider_for_profile(providers, selected) if selected is not None else None
         with self._lock:
             return {
                 "enabled": bool(settings.enabled),
-                **_provider_snapshot_fields(selected_provider),
+                **provider_snapshot_fields(selected_provider),
                 "busy": bool(self._job_state.is_busy),
                 "fallback": bool(self._job_state.is_fallback),
                 "selectedProfileId": selected.id if selected is not None else "",
@@ -80,8 +68,15 @@ class AssistantController:
         if not settings.enabled:
             raise RuntimeError("Assistant is disabled in config")
         profile = self._select_profile(settings, str(params.get("profileId", params.get("profile_id", "")) or ""))
-        request_text, source_label, limits = self._request_plan(params, settings)
-        context_text = self._context_text(params, settings)
+        plan = build_request_plan(params, settings)
+        request_text = plan.request_text
+        source_label = plan.source_label
+        limits = plan.limits
+        context_text = resolve_context_text(
+            params=params,
+            settings=settings,
+            transcript_supplier=self.session_controller.transcript_text if self.session_controller is not None else None,
+        )
         context_label = "current transcript" if context_text else "no transcript"
 
         command = InvokeAssistantCommand(
@@ -136,6 +131,9 @@ class AssistantController:
             device_auth=bool(params.get("deviceAuth", params.get("device_auth", False))),
         )
         return result.as_dict()
+
+    def start_login(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        return self.start_provider_login(params)
 
     def ping_provider(self, params: Dict[str, Any]) -> Dict[str, Any]:
         settings = self._settings()
@@ -314,7 +312,7 @@ class AssistantController:
     def _provider_records(self, settings: CodexSettings) -> list[Dict[str, Any]]:
         # Return cached status only — never probe providers automatically.
         # Status is refreshed only via explicit user actions (ping, invoke).
-        cache_key = _provider_cache_key(settings)
+        cache_key = provider_cache_key(settings)
         now = time.monotonic()
         with self._lock:
             if self._provider_cache_key == cache_key and self._provider_cache_records:
@@ -323,7 +321,7 @@ class AssistantController:
         return []
 
     def _refresh_provider_records(self, settings: CodexSettings) -> list[Dict[str, Any]]:
-        cache_key = _provider_cache_key(settings)
+        cache_key = provider_cache_key(settings)
         status_fn = getattr(self.assistant_service, "provider_statuses", None)
         if callable(status_fn):
             try:
@@ -374,77 +372,6 @@ class AssistantController:
     def _selected_profile(self, settings: CodexSettings) -> CodexProfile:
         return self._select_profile(settings, settings.selected_profile_id)
 
-    def _request_plan(self, params: Dict[str, Any], settings: CodexSettings) -> tuple[str, str, Dict[str, Optional[int]]]:
-        action = str(params.get("action", "") or "").strip().lower()
-        raw_text = str(params.get("requestText", params.get("request_text", "")) or "").strip()
-        if action == "answer":
-            return (
-                str(settings.answer_keyword or "ANSWER"),
-                "answer",
-                {
-                    "max_log_chars": FAST_ANSWER_LOG_CHARS,
-                    "timeout_s": FAST_ANSWER_TIMEOUT_S,
-                    "fallback_max_log_chars": FAST_ANSWER_FALLBACK_LOG_CHARS,
-                    "fallback_timeout_s": FAST_ANSWER_FALLBACK_TIMEOUT_S,
-                },
-            )
-        if action == "summary":
-            return (
-                SUMMARY_REQUEST,
-                "summary",
-                {
-                    "max_log_chars": SUMMARY_LOG_CHARS,
-                    "timeout_s": SUMMARY_TIMEOUT_S,
-                    "fallback_max_log_chars": None,
-                    "fallback_timeout_s": None,
-                },
-            )
-        if action == "action_items":
-            return (
-                ACTION_ITEMS_REQUEST,
-                "action items",
-                {
-                    "max_log_chars": SUMMARY_LOG_CHARS,
-                    "timeout_s": SUMMARY_TIMEOUT_S,
-                    "fallback_max_log_chars": None,
-                    "fallback_timeout_s": None,
-                },
-            )
-        if action == "risk_check":
-            return (
-                RISK_CHECK_REQUEST,
-                "risk check",
-                {
-                    "max_log_chars": SUMMARY_LOG_CHARS,
-                    "timeout_s": SUMMARY_TIMEOUT_S,
-                    "fallback_max_log_chars": None,
-                    "fallback_timeout_s": None,
-                },
-            )
-        if not raw_text:
-            raise ValueError("Assistant request text is empty")
-        return (
-            raw_text,
-            str(params.get("sourceLabel", params.get("source_label", "you")) or "you"),
-            {
-                "max_log_chars": _optional_int(params.get("maxLogChars", params.get("max_log_chars"))),
-                "timeout_s": _optional_int(params.get("timeoutS", params.get("timeout_s"))),
-                "fallback_max_log_chars": _optional_int(
-                    params.get("fallbackMaxLogChars", params.get("fallback_max_log_chars"))
-                ),
-                "fallback_timeout_s": _optional_int(params.get("fallbackTimeoutS", params.get("fallback_timeout_s"))),
-            },
-        )
-
-    def _context_text(self, params: Dict[str, Any], settings: CodexSettings) -> Optional[str]:
-        if "contextText" in params:
-            return str(params.get("contextText") or "")
-        if str(settings.context_source or "transcript") != "transcript":
-            return None
-        if self.session_controller is None:
-            return ""
-        return self.session_controller.transcript_text()
-
     def _emit(self, event_type: str, payload: Dict[str, Any]) -> None:
         sink = self.event_sink
         if sink is None:
@@ -467,60 +394,3 @@ def _profile_record(profile: CodexProfile) -> Dict[str, Any]:
         "baseUrl": getattr(profile, "base_url", ""),
         "offline": str(provider_id).lower() != ASSISTANT_PROVIDER_CODEX,
     }
-
-
-def _provider_snapshot_fields(provider: Dict[str, Any] | None) -> Dict[str, Any]:
-    if provider is None:
-        return {
-            "providerAvailable": False, "providerId": "", "providerMessage": "",
-            "providerErrorCode": "", "providerSuggestion": "", "providerAuthRequired": False,
-            "providerLoginSupported": False, "providerLocalHome": "",
-        }
-    return {
-        "providerAvailable": bool(provider.get("available", False)),
-        "providerId": str(provider.get("id", "")),
-        "providerMessage": str(provider.get("message", "")),
-        "providerErrorCode": str(provider.get("errorCode", "")),
-        "providerSuggestion": str(provider.get("suggestion", "")),
-        "providerAuthRequired": bool(provider.get("authRequired", False)),
-        "providerLoginSupported": bool(provider.get("loginSupported", False)),
-        "providerLocalHome": str(provider.get("localHome", "")),
-    }
-
-
-def _provider_for_profile(providers: list[Dict[str, Any]], profile: CodexProfile | None) -> Dict[str, Any] | None:
-    if not providers:
-        return None
-    wanted = str(getattr(profile, "provider_id", "") or ASSISTANT_PROVIDER_CODEX).strip().lower()
-    for provider in providers:
-        if str(provider.get("id", "")).strip().lower() == wanted:
-            return provider
-    return None
-
-
-def _provider_cache_key(settings: CodexSettings) -> tuple:
-    return (
-        bool(settings.enabled),
-        str(settings.proxy or ""),
-        tuple(settings.command_tokens or []),
-        tuple(settings.path_hints or []),
-        tuple(
-            (
-                str(profile.id),
-                str(profile.provider_id),
-                str(profile.model),
-                str(profile.base_url),
-                str(profile.codex_profile),
-            )
-            for profile in list(settings.profiles or [])
-        ),
-    )
-
-
-def _optional_int(raw: object) -> Optional[int]:
-    if raw is None:
-        return None
-    try:
-        return int(raw)
-    except Exception:
-        return None

@@ -6,6 +6,33 @@ import { formatBytes } from "../shared/lib/format";
 import "./styles.css";
 
 const MAX_EVENTS = 600;
+const ASR_EVENT_HANDLERS = {
+  asr_init_start: (event) => statusRecord("starting", `${event.model || "model"} on ${event.device || "-"}`, "warn"),
+  asr_init_ok: (event) => statusRecord("ready", event.model || "ASR initialized", "good"),
+  asr_started: (event) => statusRecord("ready", event.model || "ASR initialized", "good"),
+  asr_segment_processing: (event) => statusRecord("processing", segmentDetail(event), "warn"),
+  asr_segment_done: (event) => statusRecord("idle", `${segmentDetail(event)} latency ${seconds(event.latency_s)}`, "good"),
+  segment: (event) => statusRecord("idle", `${segmentDetail(event)} latency ${seconds(event.latency_s)}`, "good"),
+  asr_stopped: () => statusRecord("stopped", "Session stopped", "idle"),
+  session_stopped: () => statusRecord("stopped", "Session stopped", "idle"),
+};
+const DIAR_EVENT_HANDLERS = {
+  diar_init_ok: (event) => statusRecord("ready", `backend ${event.backend || "-"}`, "good"),
+  diar_sidecar_started: () => statusRecord("ready", "sidecar started", "good"),
+  diar_segment_processing: (event) => statusRecord("processing", segmentDetail(event), "warn"),
+  diar_debug: (event) => statusRecord("idle", diarDebugDetail(event), "good"),
+  diar_segment_done: (event) => statusRecord("idle", `${event.speaker || "no speaker"} in ${seconds(event.latency_s)}`, event.speaker ? "good" : "idle"),
+  transcript_speaker_update: (event) => statusRecord("updated", `${event.stream || "-"} -> ${event.speaker || "-"}`, "good"),
+};
+const PROCESSING_TYPES = new Set(["asr_segment_processing", "diar_segment_processing"]);
+const DONE_TYPES = new Set(["asr_segment_done", "diar_segment_done"]);
+const SUMMARY_HANDLERS = {
+  utterance: transcriptSummary,
+  transcript_line: transcriptSummary,
+  transcript_speaker_update: (event) => `${event.stream || "-"} ${event.t_start ?? ""}-${event.t_end ?? ""} -> ${event.speaker || "-"}`,
+  diar_debug: diarDebugDetail,
+  backend_stderr: (event) => event.text || "",
+};
 
 export function DebugConsoleApp() {
   const [events, setEvents] = React.useState([]);
@@ -128,12 +155,12 @@ function mergeEventLists(primary, secondary) {
 }
 
 function eventKey(event, fallbackIndex) {
-  const ts = Number(event?.ts || 0).toFixed(6);
-  const type = String(event?.type || "");
-  const id = event?.id || event?.line?.id || "";
-  const stream = event?.stream || event?.line?.stream || "";
-  const span = `${event?.t_start ?? event?.line?.t_start ?? ""}:${event?.t_end ?? event?.line?.t_end ?? ""}`;
-  const text = String(event?.text || event?.line?.text || event?.message || event?.error || "").slice(0, 80);
+  const ts = Number(valueOrDefault(event?.ts, 0)).toFixed(6);
+  const type = String(valueOrDefault(event?.type, ""));
+  const id = String(firstDefined([event?.id, event?.line?.id], ""));
+  const stream = String(firstDefined([event?.stream, event?.line?.stream], ""));
+  const span = `${valueOrDefault(firstDefined([event?.t_start, event?.line?.t_start], ""), "")}:${valueOrDefault(firstDefined([event?.t_end, event?.line?.t_end], ""), "")}`;
+  const text = String(firstDefined([event?.text, event?.line?.text, event?.message, event?.error], "")).slice(0, 80);
   return `${ts}:${type}:${id}:${stream}:${span}:${text || fallbackIndex}`;
 }
 
@@ -157,56 +184,13 @@ function buildProcessRows({ backendStatus, events, resourceUsage }) {
 }
 
 function buildAsrStatus(events) {
-  const status = { status: "idle", detail: "Waiting for ASR events", tone: "idle" };
-  for (const event of [...events].reverse()) {
-    if (event.type === "asr_init_start") {
-      Object.assign(status, { status: "starting", detail: `${event.model || "model"} on ${event.device || "-"}`, tone: "warn" });
-    }
-    if (event.type === "asr_init_ok" || event.type === "asr_started") {
-      Object.assign(status, { status: "ready", detail: event.model || "ASR initialized", tone: "good" });
-    }
-    if (event.type === "asr_segment_processing") {
-      Object.assign(status, { status: "processing", detail: segmentDetail(event), tone: "warn" });
-    }
-    if (event.type === "asr_segment_done" || event.type === "segment") {
-      Object.assign(status, { status: "idle", detail: `${segmentDetail(event)} latency ${seconds(event.latency_s)}`, tone: "good" });
-    }
-    if (event.type === "error" && !String(event.where || "").startsWith("diar")) {
-      Object.assign(status, { status: "error", detail: event.error || event.message || "ASR error", tone: "error" });
-    }
-    if (event.type === "asr_stopped" || event.type === "session_stopped") {
-      Object.assign(status, { status: "stopped", detail: "Session stopped", tone: "idle" });
-    }
-  }
-  return status;
+  const initial = statusRecord("idle", "Waiting for ASR events", "idle");
+  return foldStatusEvents(events, initial, applyAsrEvent);
 }
 
 function buildDiarStatus(events) {
-  const status = { status: "idle", detail: "Waiting for Speaker ID events", tone: "idle" };
-  for (const event of [...events].reverse()) {
-    if (event.type === "diar_init_ok") {
-      Object.assign(status, { status: "ready", detail: `backend ${event.backend || "-"}`, tone: "good" });
-    }
-    if (event.type === "diar_sidecar_started") {
-      Object.assign(status, { status: "ready", detail: "sidecar started", tone: "good" });
-    }
-    if (event.type === "diar_segment_processing") {
-      Object.assign(status, { status: "processing", detail: segmentDetail(event), tone: "warn" });
-    }
-    if (event.type === "diar_debug") {
-      Object.assign(status, { status: "idle", detail: diarDebugDetail(event), tone: "good" });
-    }
-    if (event.type === "diar_segment_done") {
-      Object.assign(status, { status: "idle", detail: `${event.speaker || "no speaker"} in ${seconds(event.latency_s)}`, tone: event.speaker ? "good" : "idle" });
-    }
-    if (event.type === "transcript_speaker_update") {
-      Object.assign(status, { status: "updated", detail: `${event.stream || "-"} -> ${event.speaker || "-"}`, tone: "good" });
-    }
-    if (event.type === "error" && String(event.where || "").startsWith("diar")) {
-      Object.assign(status, { status: "error", detail: event.error || "Speaker ID error", tone: "error" });
-    }
-  }
-  return status;
+  const initial = statusRecord("idle", "Waiting for Speaker ID events", "idle");
+  return foldStatusEvents(events, initial, applyDiarEvent);
 }
 
 function buildGpuStatus(resourceUsage) {
@@ -224,27 +208,12 @@ function buildGpuStatus(resourceUsage) {
 }
 
 function eventSummary(event) {
-  if (event.type === "error") {
-    return `${event.where || "error"}: ${event.error || event.message || ""}`;
-  }
-  if (event.type === "utterance" || event.type === "transcript_line") {
-    return `${event.speaker || ""} ${event.stream || ""}: ${event.text || ""}`.trim();
-  }
-  if (event.type === "transcript_speaker_update") {
-    return `${event.stream || "-"} ${event.t_start ?? ""}-${event.t_end ?? ""} -> ${event.speaker || "-"}`;
-  }
-  if (event.type === "diar_debug") {
-    return diarDebugDetail(event);
-  }
-  if (event.type === "asr_segment_processing" || event.type === "diar_segment_processing") {
-    return `processing ${segmentDetail(event)}`;
-  }
-  if (event.type === "asr_segment_done" || event.type === "diar_segment_done") {
-    return `done ${segmentDetail(event)} in ${seconds(event.latency_s)} ${event.speaker || ""}`.trim();
-  }
-  if (event.type === "backend_stderr") {
-    return event.text || "";
-  }
+  const type = String(event?.type || "");
+  if (type === "error") return errorSummary(event);
+  const handler = SUMMARY_HANDLERS[type];
+  if (handler) return handler(event);
+  if (PROCESSING_TYPES.has(type)) return `processing ${segmentDetail(event)}`;
+  if (DONE_TYPES.has(type)) return `done ${segmentDetail(event)} in ${seconds(event.latency_s)} ${event.speaker || ""}`.trim();
   return compactEventText(event);
 }
 
@@ -256,19 +225,82 @@ function compactEventText(event, maxLength = 180) {
   if (!event || typeof event !== "object") {
     return "";
   }
-  const parts = [];
-  for (const key of ["type", "where", "stream", "speaker", "model", "message", "error", "text"]) {
-    const value = event[key];
-    if (value === undefined || value === null || value === "") {
-      continue;
-    }
-    parts.push(`${key}=${String(value).replace(/\s+/g, " ").slice(0, 120)}`);
-  }
+  const parts = compactEventParts(event);
   const text = parts.join(" ");
   if (text) {
     return text.length > maxLength ? `${text.slice(0, maxLength - 1)}...` : text;
   }
   return String(event.type || "event");
+}
+
+function foldStatusEvents(events, initialStatus, reducer) {
+  let status = initialStatus;
+  for (const event of [...events].reverse()) {
+    status = reducer(status, event);
+  }
+  return status;
+}
+
+function applyAsrEvent(status, event) {
+  if (event.type === "error") {
+    return String(event.where || "").startsWith("diar")
+      ? status
+      : statusRecord("error", event.error || event.message || "ASR error", "error");
+  }
+  const handler = ASR_EVENT_HANDLERS[event.type];
+  return handler ? handler(event, status) : status;
+}
+
+function applyDiarEvent(status, event) {
+  if (event.type === "error") {
+    return String(event.where || "").startsWith("diar")
+      ? statusRecord("error", event.error || "Speaker ID error", "error")
+      : status;
+  }
+  const handler = DIAR_EVENT_HANDLERS[event.type];
+  return handler ? handler(event, status) : status;
+}
+
+function statusRecord(status, detail, tone) {
+  return { status, detail, tone };
+}
+
+function transcriptSummary(event) {
+  return `${event.speaker || ""} ${event.stream || ""}: ${event.text || ""}`.trim();
+}
+
+function errorSummary(event) {
+  return `${event.where || "error"}: ${event.error || event.message || ""}`;
+}
+
+function compactEventParts(event) {
+  const keys = ["type", "where", "stream", "speaker", "model", "message", "error", "text"];
+  const parts = [];
+  for (const key of keys) {
+    const value = event[key];
+    if (isBlankValue(value)) {
+      continue;
+    }
+    parts.push(`${key}=${String(value).replace(/\s+/g, " ").slice(0, 120)}`);
+  }
+  return parts;
+}
+
+function isBlankValue(value) {
+  return value === undefined || value === null || value === "";
+}
+
+function firstDefined(values, fallback) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && value !== "") {
+      return value;
+    }
+  }
+  return fallback;
+}
+
+function valueOrDefault(value, fallback) {
+  return value === undefined || value === null ? fallback : value;
 }
 
 function diarDebugDetail(event) {

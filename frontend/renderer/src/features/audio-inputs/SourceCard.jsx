@@ -20,21 +20,15 @@ export function SourceCard({
 }) {
   const [selectedId, setSelectedId] = React.useState("");
   const [selectedOverride, setSelectedOverride] = React.useState(null);
-  const sourceDevice = React.useMemo(() => devices.find((device) => source && device.label === source.label), [devices, source]);
-  const currentOption = React.useMemo(
-    () => (source && !sourceDevice ? { id: `current:${source.name}`, label: source.label || source.name, current: true } : null),
-    [source, sourceDevice]
+  const selection = React.useMemo(
+    () => resolveSelectionState({ devices, source, selectedId, selectedOverride, pickerAvailable: Boolean(Picker) }),
+    [devices, source, selectedId, selectedOverride, Picker]
   );
-  const selectableDevices = React.useMemo(() => (currentOption ? [currentOption, ...devices] : devices), [currentOption, devices]);
-  const preferredId = sourceDevice?.id || currentOption?.id || devices[0]?.id || "";
-  const selectedIdOrDefault = selectableDevices.some((device) => device.id === selectedId) ? selectedId : preferredId;
-  const selectedFromDevices = selectableDevices.find((device) => device.id === selectedIdOrDefault);
-  const selected = selectedFromDevices || (selectedOverride?.id === selectedId ? selectedOverride : null) || selectableDevices[0];
-  const selectedLabel = selected ? displayDeviceLabel(selected.fullLabel || selected.label || selected.name) : "No devices found";
-  const staticSelected = !Picker && selected?.current && selectableDevices.length === 1;
+  const { selectableDevices, preferredId, selected, staticSelected } = selection;
+  const selectedLabel = selectedLabelText(selected);
   const level = Math.max(0, Math.min(100, Number(source?.level || 0)));
   const meterClass = level > 80 ? "hot" : level > 45 ? "warm" : "";
-  const canToggle = !disabled && (Boolean(source) || Boolean(selected && !selected.current));
+  const canToggle = sourceToggleEnabled(disabled, source, selected);
 
   React.useEffect(() => {
     setSelectedId((current) => (selectableDevices.some((device) => device.id === current) ? current : preferredId));
@@ -46,18 +40,7 @@ export function SourceCard({
     }
     setSelectedId(next.id);
     setSelectedOverride(selectableDevices.some((device) => device.id === next.id) ? null : next);
-    if (next.current || !onAdd) {
-      return;
-    }
-    if (!source) {
-      await onAdd(next);
-      return;
-    }
-    if (!onRemove || sourceMatchesDevice(source, next)) {
-      return;
-    }
-    await onRemove(source);
-    await onAdd(next);
+    await syncSelectedDevice({ next, source, onAdd, onRemove });
   };
 
   const handleSelect = (event) => {
@@ -66,13 +49,7 @@ export function SourceCard({
   };
 
   const handleToggle = () => {
-    if (source) {
-      onToggle(source);
-      return;
-    }
-    if (selected && !selected.current) {
-      onAdd(selected);
-    }
+    toggleSource({ source, selected, onAdd, onToggle });
   };
 
   const handleRemove = () => {
@@ -110,42 +87,210 @@ export function SourceCard({
         <div className={meterClass} style={{ width: `${source?.enabled ? level : 0}%` }} />
       </div>
 
-      {staticSelected ? (
-        <div className="source-static-value" title={selectedLabel}>
-          {selectedLabel}
-        </div>
-      ) : Picker ? (
-        <Picker
-          devices={devices}
-          disabled={disabled}
-          {...pickerProps}
-          selectableDevices={selectableDevices}
-          selected={selected}
-          selectedId={selected?.id || ""}
-          onSelect={handleSelectDevice}
-        />
-      ) : (
-        <SelectShell displayLabel={selectedLabel} iconSize={14}>
-          <select
-            disabled={disabled || !selectableDevices.length}
-            title={selectedLabel}
-            value={selected?.id || ""}
-            onChange={handleSelect}
-          >
-            {selectableDevices.length ? (
-              selectableDevices.map((device) => (
-                <option key={device.id} value={device.id}>
-                  {displayDeviceLabel(device.label)}
-                </option>
-              ))
-            ) : (
-              <option value="">No devices found</option>
-            )}
-          </select>
-        </SelectShell>
-      )}
+      <SourceCardDevicePicker
+        Picker={Picker}
+        devices={devices}
+        disabled={disabled}
+        handleSelect={handleSelect}
+        handleSelectDevice={handleSelectDevice}
+        pickerProps={pickerProps}
+        selectableDevices={selectableDevices}
+        selected={selected}
+        selectedLabel={selectedLabel}
+        staticSelected={staticSelected}
+      />
     </article>
   );
+}
+
+function SourceCardDevicePicker({
+  Picker,
+  devices,
+  disabled,
+  handleSelect,
+  handleSelectDevice,
+  pickerProps,
+  selectableDevices,
+  selected,
+  selectedLabel,
+  staticSelected,
+}) {
+  if (staticSelected) {
+    return (
+      <div className="source-static-value" title={selectedLabel}>
+        {selectedLabel}
+      </div>
+    );
+  }
+  if (Picker) {
+    return (
+      <Picker
+        devices={devices}
+        disabled={disabled}
+        {...pickerProps}
+        selectableDevices={selectableDevices}
+        selected={selected}
+        selectedId={selected?.id || ""}
+        onSelect={handleSelectDevice}
+      />
+    );
+  }
+  return (
+    <DefaultSourcePicker
+      disabled={disabled}
+      selectableDevices={selectableDevices}
+      selected={selected}
+      selectedLabel={selectedLabel}
+      onSelect={handleSelect}
+    />
+  );
+}
+
+function DefaultSourcePicker({ disabled, selectableDevices, selected, selectedLabel, onSelect }) {
+  return (
+    <SelectShell displayLabel={selectedLabel} iconSize={14}>
+      <select
+        disabled={disabled || !selectableDevices.length}
+        title={selectedLabel}
+        value={selected?.id || ""}
+        onChange={onSelect}
+      >
+        {selectableDevices.length ? (
+          selectableDevices.map((device) => (
+            <option key={device.id} value={device.id}>
+              {displayDeviceLabel(device.label)}
+            </option>
+          ))
+        ) : (
+          <option value="">No devices found</option>
+        )}
+      </select>
+    </SelectShell>
+  );
+}
+
+function resolveSelectionState({ devices, source, selectedId, selectedOverride, pickerAvailable }) {
+  const sourceDevice = findSourceDevice(devices, source);
+  const currentOption = buildCurrentOption(source, sourceDevice);
+  const selectableDevices = withCurrentOption(currentOption, devices);
+  const preferredId = resolvePreferredId(sourceDevice, currentOption, devices);
+  const selectedIdOrDefault = resolveSelectedId(selectableDevices, selectedId, preferredId);
+  const selected = resolveSelectedDevice(selectableDevices, selectedIdOrDefault, selectedOverride, selectedId);
+  return {
+    selectableDevices,
+    preferredId,
+    selected,
+    staticSelected: computeStaticSelected(pickerAvailable, selected, selectableDevices),
+  };
+}
+
+function findSourceDevice(devices, source) {
+  if (!source) {
+    return null;
+  }
+  return devices.find((device) => device.label === source.label) || null;
+}
+
+function buildCurrentOption(source, sourceDevice) {
+  if (!source || sourceDevice) {
+    return null;
+  }
+  return {
+    id: `current:${source.name}`,
+    label: sourceLabelValue(source),
+    current: true,
+  };
+}
+
+function withCurrentOption(currentOption, devices) {
+  if (!currentOption) {
+    return devices;
+  }
+  return [currentOption, ...devices];
+}
+
+function resolvePreferredId(sourceDevice, currentOption, devices) {
+  if (sourceDevice?.id) {
+    return sourceDevice.id;
+  }
+  if (currentOption?.id) {
+    return currentOption.id;
+  }
+  return devices[0]?.id || "";
+}
+
+function resolveSelectedId(selectableDevices, selectedId, preferredId) {
+  if (selectableDevices.some((device) => device.id === selectedId)) {
+    return selectedId;
+  }
+  return preferredId;
+}
+
+function resolveSelectedDevice(selectableDevices, selectedIdOrDefault, selectedOverride, selectedId) {
+  const fromList = selectableDevices.find((device) => device.id === selectedIdOrDefault);
+  if (fromList) {
+    return fromList;
+  }
+  if (selectedOverride?.id === selectedId) {
+    return selectedOverride;
+  }
+  return selectableDevices[0];
+}
+
+function computeStaticSelected(pickerAvailable, selected, selectableDevices) {
+  if (pickerAvailable || !selected) {
+    return false;
+  }
+  return Boolean(selected.current) && selectableDevices.length === 1;
+}
+
+function selectedLabelText(selected) {
+  if (!selected) {
+    return "No devices found";
+  }
+  return displayDeviceLabel(selected.fullLabel || selected.label || selected.name);
+}
+
+function sourceToggleEnabled(disabled, source, selected) {
+  if (disabled) {
+    return false;
+  }
+  if (source) {
+    return true;
+  }
+  return Boolean(selected) && !selected.current;
+}
+
+function toggleSource({ source, selected, onAdd, onToggle }) {
+  if (source) {
+    onToggle(source);
+    return;
+  }
+  if (selected && !selected.current) {
+    onAdd(selected);
+  }
+}
+
+function sourceLabelValue(source) {
+  if (source.label) {
+    return source.label;
+  }
+  return source.name || "";
+}
+
+async function syncSelectedDevice({ next, source, onAdd, onRemove }) {
+  if (next.current || !onAdd) {
+    return;
+  }
+  if (!source) {
+    await onAdd(next);
+    return;
+  }
+  if (!onRemove || sourceMatchesDevice(source, next)) {
+    return;
+  }
+  await onRemove(source);
+  await onAdd(next);
 }
 
 function sourceMatchesDevice(source, device) {

@@ -1,0 +1,43 @@
+from __future__ import annotations
+
+NO_PARAMS_METHODS: frozenset[str] = frozenset({
+    "get_state",
+    "get_runtime_state",
+    "get_config",
+    "list_devices",
+    "clear_transcript",
+    "list_process_sessions",
+})
+
+SESSION_METHODS: frozenset[str] = frozenset({
+    "ping",
+    "get_state",
+    "get_runtime_state",
+    "get_config",
+    "get_resource_usage",
+    "save_config",
+    "list_devices",
+    "add_source",
+    "remove_source",
+    "set_source_enabled",
+    "set_source_delay",
+    "start_session",
+    "stop_session",
+    "clear_transcript",
+    "invoke_assistant",
+    "start_assistant_login",
+    "ping_assistant_provider",
+    "list_models",
+    "download_model",
+    "delete_model",
+    "model_metadata",
+    "list_diarization_models",
+    "download_diarization_model",
+    "delete_diarization_model",
+    "list_llm_models",
+    "download_llm_model",
+    "delete_llm_model",
+    "start_local_llm",
+    "stop_local_llm",
+    "list_process_sessions",
+})
