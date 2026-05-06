@@ -1,16 +1,14 @@
-import React from "react";
 import { Check, ChevronDown, ChevronUp, Download, Trash2, X } from "lucide-react";
 
 import { formatBytes } from "../../shared/lib/format";
+import { ModelMetadataGrid } from "./ModelMetadataGrid";
+import { formatDownloadProgress } from "./modelDownloadProgress";
 
 function downloadStatusLabel(model) {
-  const dl = Number(model.downloadedBytes || 0);
-  const sp = Number(model.speedBps || 0);
-  if (dl > 0 || sp > 0) {
-    const dlStr = dl > 0 ? formatBytes(dl) : "0 B";
-    return sp > 0 ? `${dlStr} - ${formatBytes(sp)}/s` : dlStr;
-  }
-  return model.downloadMessage || "downloading...";
+  return formatDownloadProgress(model, {
+    fallback: model.downloadMessage || "downloading...",
+    includeTotal: false,
+  });
 }
 
 export function asrStatusLabel(model, isDownloading) {
@@ -49,14 +47,7 @@ export function ModelMetadataPanel({ error, loading, metadata }) {
       {error ? <div className="models-error">{error}</div> : null}
       {!loading && metadata ? (
         <>
-          <dl className="model-metadata-grid">
-            {rows.map(([label, value]) => (
-              <React.Fragment key={label}>
-                <dt>{label}</dt>
-                <dd title={String(value)}>{String(value)}</dd>
-              </React.Fragment>
-            ))}
-          </dl>
+          <ModelMetadataGrid rows={rows} />
           <div className="model-metadata-blocks">
             <MetadataObject title="Config" value={metadata.config} />
             <MetadataObject title="Preprocessor" value={metadata.preprocessor} />
