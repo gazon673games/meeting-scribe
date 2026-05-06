@@ -2,14 +2,41 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+PROFILE_ULTRA_FAST = "Ultra Fast"
 PROFILE_REALTIME = "Realtime"
 PROFILE_BALANCED = "Balanced"
 PROFILE_QUALITY = "Quality"
 PROFILE_CUSTOM = "Custom"
 
 
+def profile_requires_streaming(profile: str) -> bool:
+    return (profile or "").strip().lower() == PROFILE_ULTRA_FAST.lower()
+
+
 def profile_defaults(profile: str) -> Dict[str, Any]:
     p = (profile or "").strip().lower()
+    if p == PROFILE_ULTRA_FAST.lower():
+        return {
+            "compute_type": "int8_float16",
+            "cpu_threads": 0,
+            "num_workers": 2,
+            "beam_size": 1,
+            "endpoint_silence_ms": 180.0,
+            "max_segment_s": 1.8,
+            "overlap_ms": 40.0,
+            "vad_energy_threshold": 0.0058,
+            "overload_strategy": "drop_old",
+            "overload_enter_qsize": 8,
+            "overload_exit_qsize": 3,
+            "overload_hard_qsize": 12,
+            "overload_beam_cap": 1,
+            "overload_max_segment_s": 1.5,
+            "overload_overlap_ms": 30.0,
+            "streaming_enabled": True,
+            "streaming_chunk_interval_s": 0.45,
+            "streaming_endpoint_silence_ms": 180.0,
+        }
+
     if p == PROFILE_REALTIME.lower():
         return {
             "compute_type": "int8_float16",

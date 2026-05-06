@@ -9,10 +9,11 @@ from pathlib import Path
 from typing import List, Tuple
 from unittest.mock import patch
 
-from application.event_types import TranscriptSpeakerUpdateEvent, UtteranceEvent
+from application.asr_profiles import PROFILE_ULTRA_FAST
 from application.codex_assistant import CodexAssistantResult
 from application.codex_config import CodexProfile
 from application.diarization_model_download import RECOMMENDED_DIARIZATION_MODELS, diarization_models_dir
+from application.event_types import TranscriptSpeakerUpdateEvent, UtteranceEvent
 from interface.assistant_controller import AssistantController
 from interface.backend import ElectronBackend
 from interface.jsonl_bridge import JsonLineBridge
@@ -232,6 +233,9 @@ class ElectronInterfaceTests(unittest.TestCase):
             self.assertEqual(state["configSummary"]["language"], "ru")
             self.assertEqual(state["configSummary"]["asrMode"], "split")
             self.assertFalse(state["capabilities"]["sessionControl"])
+            self.assertEqual(state["options"]["asrProfiles"][0], PROFILE_ULTRA_FAST)
+            self.assertIn(PROFILE_ULTRA_FAST, state["options"]["streamingLockedProfiles"])
+            self.assertTrue(state["options"]["profileDefaults"][PROFILE_ULTRA_FAST]["streaming_enabled"])
             self.assertEqual(devices["loopback"][0]["id"], "loopback:0")
             self.assertEqual(devices["input"][0]["label"], "Built-in microphone")
 
@@ -446,6 +450,42 @@ class ElectronInterfaceTests(unittest.TestCase):
             self.assertEqual(asr_factory.settings.diarization_queue_size, 12)
             self.assertEqual(asr_factory.settings.diar_sherpa_embedding_model_path, "models/speaker.onnx")
             self.assertEqual(asr_factory.settings.diar_sherpa_num_threads, 2)
+
+    def test_backend_forces_streaming_for_ultra_fast_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            repository = JsonConfigRepository(root / "config.json")
+            repository.write(
+                {
+                    "ui": {
+                        "asr_enabled": True,
+                        "model": "medium",
+                        "lang": "en",
+                        "profile": PROFILE_ULTRA_FAST,
+                    },
+                    "asr": {"streaming_enabled": False},
+                }
+            )
+            asr_factory = _FakeAsrRuntimeFactory()
+            controller = HeadlessSessionController(
+                project_root=root,
+                audio_runtime_factory=_FakeAudioRuntimeFactory(),
+                audio_source_factory=_FakeAudioSourceFactory(),
+                wav_recorder_factory=_FakeWavRecorderFactory(),
+                asr_runtime_factory=asr_factory,
+                transcription_startup_service=TranscriptionStartupService(),
+            )
+            backend = ElectronBackend(root, repository, _DeviceCatalog(), controller)
+
+            backend.handle("list_devices")
+            backend.handle("add_source", {"deviceId": "input:0"})
+            with patch("application.model_download.is_model_cached", return_value=True):
+                backend.handle("start_session", {"streamingEnabled": False})
+            backend.handle("stop_session", {"runOfflinePass": False})
+
+            self.assertTrue(asr_factory.settings.streaming_enabled)
+            self.assertEqual(asr_factory.settings.streaming_chunk_interval_s, 0.45)
+            self.assertEqual(asr_factory.settings.streaming_endpoint_silence_ms, 180.0)
 
     def test_backend_uses_cached_sherpa_model_when_online_backend_dependency_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:

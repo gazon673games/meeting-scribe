@@ -32,7 +32,12 @@ export function ProcessingColumn({
       headerProps={headerProps}
     >
       <SectionLabel>Speed vs Quality</SectionLabel>
-      <QualityProfileSelector disabled={locked} selectedProfile={draft.profile} onProfileChange={onProfileChange} />
+      <QualityProfileSelector
+        disabled={locked}
+        profiles={options.asrProfiles}
+        selectedProfile={draft.profile}
+        onProfileChange={onProfileChange}
+      />
 
       <SectionLabel>Language</SectionLabel>
       <SelectShell>
@@ -46,7 +51,7 @@ export function ProcessingColumn({
       </SelectShell>
 
       <SectionLabel>Features</SectionLabel>
-      <ProcessingFeatureGrid draft={draft} locked={locked} onChange={onChange} />
+      <ProcessingFeatureGrid draft={draft} locked={locked} options={options} onChange={onChange} />
 
       <ProcessingStats asrMetrics={asrMetrics} draft={draft} session={session} summary={summary} />
       <ResourceUsage usage={resourceUsage} />

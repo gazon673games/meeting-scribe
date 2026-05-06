@@ -14,7 +14,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from application.asr_language import SUPPORTED_ASR_LANGUAGES
-from application.asr_profiles import PROFILE_BALANCED, PROFILE_CUSTOM, PROFILE_QUALITY, PROFILE_REALTIME, profile_defaults
+from application.asr_profiles import (
+    PROFILE_BALANCED,
+    PROFILE_CUSTOM,
+    PROFILE_QUALITY,
+    PROFILE_REALTIME,
+    PROFILE_ULTRA_FAST,
+    profile_defaults,
+    profile_requires_streaming,
+)
 from application.device_catalog import DeviceCatalog
 from application.model_policy import ASR_MODEL_NAMES
 from interface.assistant_controller import AssistantController
@@ -107,7 +115,7 @@ class ElectronBackend:
             },
             "options": {
                 "languages": list(SUPPORTED_ASR_LANGUAGES),
-                "asrProfiles": [PROFILE_REALTIME, PROFILE_BALANCED, PROFILE_QUALITY, PROFILE_CUSTOM],
+                "asrProfiles": [PROFILE_ULTRA_FAST, PROFILE_REALTIME, PROFILE_QUALITY, PROFILE_CUSTOM],
                 "asrModels": self._asr_model_options(config),
                 "asrModes": [
                     {"id": "mix", "label": "MIX (master)"},
@@ -119,11 +127,16 @@ class ElectronBackend:
                 "diarizationProviders": ["cpu", "cuda"],
                 "overloadStrategies": ["drop_old", "keep_all"],
                 "profileDefaults": {
+                    PROFILE_ULTRA_FAST: profile_defaults(PROFILE_ULTRA_FAST),
                     PROFILE_REALTIME: profile_defaults(PROFILE_REALTIME),
                     PROFILE_BALANCED: profile_defaults(PROFILE_BALANCED),
                     PROFILE_QUALITY: profile_defaults(PROFILE_QUALITY),
                     PROFILE_CUSTOM: profile_defaults(PROFILE_BALANCED),
                 },
+                "streamingLockedProfiles": [
+                    profile for profile in [PROFILE_ULTRA_FAST, PROFILE_REALTIME, PROFILE_QUALITY]
+                    if profile_requires_streaming(profile)
+                ],
             },
             "capabilities": {
                 "config": True,

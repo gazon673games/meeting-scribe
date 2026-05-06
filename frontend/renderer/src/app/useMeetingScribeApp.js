@@ -1,6 +1,13 @@
 import React from "react";
 
-import { ASR_FIELDS, FALLBACK_OPTIONS, applySettingsToConfig, draftToStartParams, makeSettingsDraft } from "../entities/settings/model";
+import {
+  ASR_FIELDS,
+  FALLBACK_OPTIONS,
+  applySettingsToConfig,
+  asrProfileRequiresStreaming,
+  draftToStartParams,
+  makeSettingsDraft
+} from "../entities/settings/model";
 import { noticeFromBackendEvent, upsertRuntimeNotice } from "../entities/runtimeNotice/model";
 import { meetingScribeClient } from "../shared/api/meetingScribeClient";
 
@@ -127,9 +134,9 @@ export function useMeetingScribeApp() {
 
   React.useEffect(() => {
     if (!settingsDirty) {
-      setSettingsDraft(makeSettingsDraft(config));
+      setSettingsDraft(applyLockedProfileDefaults(makeSettingsDraft(config), state?.options || FALLBACK_OPTIONS));
     }
-  }, [config, settingsDirty]);
+  }, [config, settingsDirty, state?.options]);
 
   React.useEffect(() => {
     if (!config) {
@@ -198,9 +205,9 @@ export function useMeetingScribeApp() {
   const status = session.running ? "recording" : offlinePass.running ? "processing" : "idle";
 
   const updateSettings = React.useCallback((patch) => {
-    setSettingsDraft((current) => ({ ...current, ...patch }));
+    setSettingsDraft((current) => mergeSettingsPatch(current, patch, options));
     setSettingsDirty(true);
-  }, []);
+  }, [options]);
 
   const clearError = React.useCallback(() => {
     setError("");
@@ -282,25 +289,10 @@ export function useMeetingScribeApp() {
 
   const applyProfile = React.useCallback(
     (profile) => {
-      setSettingsDraft((current) => {
-        const defaults = options.profileDefaults?.[profile];
-        if (!defaults || profile === "Custom") {
-          return { ...current, profile };
-        }
-        return {
-          ...current,
-          profile,
-          computeType: String(defaults.compute_type || current.computeType),
-          overloadStrategy: String(defaults.overload_strategy || current.overloadStrategy),
-          asr: {
-            ...current.asr,
-            ...Object.fromEntries(ASR_FIELDS.map((field) => [field.key, defaults[field.key] ?? current.asr[field.key]]))
-          }
-        };
-      });
+      setSettingsDraft((current) => applyProfileDefaults(current, profile, options));
       setSettingsDirty(true);
     },
-    [options.profileDefaults]
+    [options]
   );
 
   const saveSettings = React.useCallback(async () => {
@@ -402,6 +394,60 @@ export function useMeetingScribeApp() {
     dismissRuntimeNotice,
     updateSettings
   };
+}
+
+function mergeSettingsPatch(current, patch, options) {
+  const next = { ...current, ...patch };
+  return asrProfileRequiresStreaming(next.profile, options)
+    ? { ...next, streamingEnabled: true }
+    : next;
+}
+
+function applyLockedProfileDefaults(current, options) {
+  return asrProfileRequiresStreaming(current.profile, options)
+    ? applyProfileDefaults(current, current.profile, options)
+    : current;
+}
+
+function applyProfileDefaults(current, profile, options) {
+  const defaults = options.profileDefaults?.[profile];
+  const requiresStreaming = asrProfileRequiresStreaming(profile, options);
+  if (!hasProfileDefaults(profile, defaults)) {
+    return withProfileStreaming(current, profile, requiresStreaming);
+  }
+  return {
+    ...current,
+    profile,
+    computeType: String(defaultValue(defaults.compute_type, current.computeType)),
+    overloadStrategy: String(defaultValue(defaults.overload_strategy, current.overloadStrategy)),
+    streamingEnabled: profileStreamingEnabled(defaults, current.streamingEnabled, requiresStreaming),
+    streamingChunkIntervalS: defaultValue(defaults.streaming_chunk_interval_s, current.streamingChunkIntervalS),
+    streamingEndpointSilenceMs: defaultValue(defaults.streaming_endpoint_silence_ms, current.streamingEndpointSilenceMs),
+    asr: {
+      ...current.asr,
+      ...Object.fromEntries(ASR_FIELDS.map((field) => [field.key, defaultValue(defaults[field.key], current.asr[field.key])]))
+    }
+  };
+}
+
+function hasProfileDefaults(profile, defaults) {
+  return Boolean(defaults) && profile !== "Custom";
+}
+
+function withProfileStreaming(current, profile, requiresStreaming) {
+  return {
+    ...current,
+    profile,
+    streamingEnabled: requiresStreaming ? true : current.streamingEnabled
+  };
+}
+
+function profileStreamingEnabled(defaults, currentValue, requiresStreaming) {
+  return requiresStreaming ? true : Boolean(defaultValue(defaults.streaming_enabled, currentValue));
+}
+
+function defaultValue(value, fallback) {
+  return value ?? fallback;
 }
 
 function appendTranscriptLine(state, event) {

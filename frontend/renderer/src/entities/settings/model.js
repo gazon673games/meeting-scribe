@@ -1,6 +1,8 @@
+export const ASR_PROFILE_ULTRA_FAST = "Ultra Fast";
+
 export const FALLBACK_OPTIONS = {
   languages: ["ru", "en", "auto"],
-  asrProfiles: ["Realtime", "Balanced", "Quality", "Custom"],
+  asrProfiles: [ASR_PROFILE_ULTRA_FAST, "Realtime", "Quality", "Custom"],
   asrModels: [
     "large-v3",
     "large-v3-turbo",
@@ -18,8 +20,17 @@ export const FALLBACK_OPTIONS = {
   diarizationBackends: ["online", "sherpa_onnx", "nemo", "pyannote"],
   diarizationProviders: ["cpu", "cuda"],
   overloadStrategies: ["drop_old", "keep_all"],
-  profileDefaults: {}
+  profileDefaults: {},
+  streamingLockedProfiles: [ASR_PROFILE_ULTRA_FAST]
 };
+
+export function asrProfileRequiresStreaming(profile, options = FALLBACK_OPTIONS) {
+  const wanted = String(profile || "").trim().toLowerCase();
+  const lockedProfiles = Array.isArray(options?.streamingLockedProfiles)
+    ? options.streamingLockedProfiles
+    : FALLBACK_OPTIONS.streamingLockedProfiles;
+  return lockedProfiles.some((item) => String(item || "").trim().toLowerCase() === wanted);
+}
 
 export const ASR_RESOURCE_FIELDS = [
   { key: "cpu_threads", label: "CPU Threads", defaultValue: 0, step: 1, min: 0, max: 64, integer: true },
@@ -41,6 +52,8 @@ export const ASR_TIMING_FIELDS = [
 ];
 
 export const ASR_FIELDS = [...ASR_RESOURCE_FIELDS, ...ASR_TIMING_FIELDS];
+const STREAMING_CHUNK_INTERVAL_FIELD = { defaultValue: 1, min: 0.1, max: 5 };
+const STREAMING_ENDPOINT_SILENCE_FIELD = { defaultValue: 300, min: 50, max: 5000 };
 
 export const ASSISTANT_REASONING_OPTIONS = ["low", "medium", "high", "xhigh"];
 export const ASSISTANT_PROVIDER_OPTIONS = [
@@ -87,7 +100,7 @@ export function makeSettingsDraft(config) {
     language: String(ui.lang || "ru"),
     asrMode: Number(ui.asr_mode || 0) === 1 ? "split" : "mix",
     model: String(ui.model || "medium"),
-    profile: String(ui.profile || "Balanced"),
+    profile: normalizeAsrProfile(ui.profile),
     outputFile: String(ui.output_file || "capture_mix.wav"),
     assistantEnabled: boolWithDefault(codex.enabled, false),
     assistantSelectedProfileId: String(codex.selected_profile || ""),
@@ -105,6 +118,8 @@ export function makeSettingsDraft(config) {
     diarSherpaProvider: normalizeDiarizationProvider(asr.diar_sherpa_provider),
     diarSherpaNumThreads: normalizeInteger(asr.diar_sherpa_num_threads, 1, 1, 32),
     streamingEnabled: boolWithDefault(asr.streaming_enabled, false),
+    streamingChunkIntervalS: normalizeNumber(asr.streaming_chunk_interval_s, STREAMING_CHUNK_INTERVAL_FIELD),
+    streamingEndpointSilenceMs: normalizeNumber(asr.streaming_endpoint_silence_ms, STREAMING_ENDPOINT_SILENCE_FIELD),
     perProcessAudio: boolWithDefault(ui.per_process_audio, false),
     assistantProxyEnabled: assistantProxy.enabled,
     assistantProxyScheme: proxy.scheme,
@@ -118,6 +133,7 @@ export function makeSettingsDraft(config) {
 
 export function applySettingsToConfig(config, draft) {
   const current = objectSection(config);
+  const streamingEnabled = asrProfileRequiresStreaming(draft.profile) || Boolean(draft.streamingEnabled);
   return {
     ...current,
     version: current.version ?? 2,
@@ -129,7 +145,7 @@ export function applySettingsToConfig(config, draft) {
       lang: String(draft.language || "ru"),
       asr_mode: draft.asrMode === "split" ? 1 : 0,
       model: String(draft.model || "medium"),
-      profile: String(draft.profile || "Balanced"),
+      profile: normalizeAsrProfile(draft.profile),
       wav_enabled: Boolean(draft.wavEnabled),
       output_file: String(draft.outputFile || "capture_mix.wav"),
       long_run: boolWithDefault(current.ui?.long_run, true),
@@ -150,7 +166,9 @@ export function applySettingsToConfig(config, draft) {
       diar_sherpa_embedding_model_path: String(draft.diarSherpaEmbeddingModelPath || "").trim(),
       diar_sherpa_provider: normalizeDiarizationProvider(draft.diarSherpaProvider),
       diar_sherpa_num_threads: normalizeInteger(draft.diarSherpaNumThreads, 1, 1, 32),
-      streaming_enabled: Boolean(draft.streamingEnabled),
+      streaming_enabled: streamingEnabled,
+      streaming_chunk_interval_s: normalizeNumber(draft.streamingChunkIntervalS, STREAMING_CHUNK_INTERVAL_FIELD),
+      streaming_endpoint_silence_ms: normalizeNumber(draft.streamingEndpointSilenceMs, STREAMING_ENDPOINT_SILENCE_FIELD),
       ...Object.fromEntries(ASR_FIELDS.map((field) => [field.key, normalizeNumber(draft.asr[field.key], field)]))
     },
     models: {
@@ -178,7 +196,9 @@ export function draftToStartParams(draft) {
     realtimeTranscriptToFile: config.ui.rt_transcript_to_file,
     language: config.ui.lang,
     asrMode: draft.asrMode,
-    streamingEnabled: Boolean(draft.streamingEnabled),
+    streamingEnabled: config.asr.streaming_enabled,
+    streamingChunkIntervalS: config.asr.streaming_chunk_interval_s,
+    streamingEndpointSilenceMs: config.asr.streaming_endpoint_silence_ms,
     profile: config.ui.profile,
     model: config.ui.model,
     outputFile: config.ui.output_file,
@@ -268,6 +288,14 @@ function normalizeDiarizationBackend(value) {
 function normalizeDiarizationProvider(value) {
   const provider = String(value || "cpu").trim().toLowerCase();
   return DIARIZATION_PROVIDERS.includes(provider) ? provider : "cpu";
+}
+
+function normalizeAsrProfile(value) {
+  const profile = String(value || "").trim();
+  if (!profile) {
+    return "Realtime";
+  }
+  return profile.toLowerCase() === "balanced" ? "Realtime" : profile;
 }
 
 function boolWithDefault(value, fallback) {

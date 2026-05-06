@@ -48,6 +48,8 @@ class ASRSessionSettings:
     diar_sherpa_provider: str = "cpu"
     diar_sherpa_num_threads: int = 1
     streaming_enabled: bool = False
+    streaming_chunk_interval_s: float = 1.0
+    streaming_endpoint_silence_ms: float = 300.0
 
 
 class ASRRuntimeFactory(Protocol):
