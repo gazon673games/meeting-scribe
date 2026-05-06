@@ -1,0 +1,159 @@
+.error-strip {
+  position: fixed;
+  z-index: 40;
+  bottom: 18px;
+  left: 24px;
+  right: 24px;
+  min-height: 42px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border: 1px solid var(--error-border);
+  border-radius: 6px;
+  background: var(--error-bg);
+  color: var(--error-text);
+  padding: 10px 10px 10px 12px;
+  box-shadow: 0 18px 40px var(--shadow-soft);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.error-strip span {
+  min-width: 0;
+  flex: 1;
+  line-height: 1.45;
+}
+
+.error-strip button {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--error-button-border);
+  border-radius: 4px;
+  background: var(--error-button-bg);
+  color: var(--error-soft);
+  cursor: pointer;
+}
+
+.error-strip button:hover {
+  background: var(--error-button-hover);
+  color: var(--error-text);
+}
+
+.runtime-notice-tray {
+  position: fixed;
+  z-index: 39;
+  right: 18px;
+  bottom: 72px;
+  width: min(560px, calc(100vw - 36px));
+  display: grid;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.runtime-notice {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 28px;
+  align-items: flex-start;
+  gap: 9px;
+  border: 1px solid rgba(234, 179, 8, 0.42);
+  border-radius: 6px;
+  background: var(--panel-bg-strong);
+  color: var(--text);
+  box-shadow: 0 18px 40px var(--shadow-soft);
+  padding: 10px;
+  pointer-events: auto;
+}
+
+.runtime-notice.error {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+
+.runtime-notice-icon {
+  margin-top: 2px;
+  color: var(--warn);
+}
+
+.runtime-notice.error .runtime-notice-icon {
+  color: var(--error-soft);
+}
+
+.runtime-notice-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.runtime-notice-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.runtime-notice-title strong {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-notice-title span {
+  flex: 0 0 auto;
+  color: var(--subtle);
+  font-size: 11px;
+}
+
+.runtime-notice p,
+.runtime-notice small {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1.35;
+  opacity: 0.92;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-notice small {
+  color: var(--subtle);
+  font-size: 11px;
+}
+
+.runtime-notice button {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--error-button-border);
+  border-radius: 4px;
+  background: var(--error-button-bg);
+  color: inherit;
+  cursor: pointer;
+}
+
+.runtime-notice button:hover {
+  background: var(--error-button-hover);
+}
+
+.pipeline {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  overflow: auto hidden;
+}
+
+

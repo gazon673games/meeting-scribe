@@ -1,0 +1,203 @@
+.debug-console-shell {
+  width: 100%;
+  height: 100vh;
+  min-height: 520px;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 14px;
+  overflow: hidden;
+  background: var(--app-bg);
+  color: var(--text);
+  padding: 16px;
+}
+
+.debug-console-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+}
+
+.debug-console-head span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.debug-console-head h1 {
+  margin: 2px 0 0;
+  color: var(--heading);
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.debug-process-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.debug-process-card {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-bg-strong);
+  padding: 10px;
+}
+
+.debug-process-card.good {
+  border-color: rgba(34, 197, 94, 0.34);
+}
+
+.debug-process-card.warn {
+  border-color: rgba(234, 179, 8, 0.42);
+}
+
+.debug-process-card.error {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+}
+
+.debug-process-icon {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--subtle);
+}
+
+.debug-process-copy {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.debug-process-copy div {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.debug-process-copy strong,
+.debug-process-copy span,
+.debug-process-copy p {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-process-copy strong {
+  color: var(--heading);
+  font-size: 12px;
+}
+
+.debug-process-copy span {
+  color: var(--subtle);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.debug-process-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.debug-log-panel {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--panel-bg);
+}
+
+.debug-log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding: 10px 12px;
+}
+
+.debug-log-head strong {
+  color: var(--heading);
+  font-size: 12px;
+}
+
+.debug-log-head span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.debug-log-list {
+  min-height: 0;
+  overflow: auto;
+  font-family: "Cascadia Mono", Consolas, "SFMono-Regular", monospace;
+}
+
+.debug-log-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 82px 190px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  border-bottom: 1px solid var(--border-soft);
+  padding: 7px 10px;
+  color: var(--control-text);
+  font-size: 11px;
+}
+
+.debug-log-row.good {
+  color: #86efac;
+}
+
+.debug-log-row.warn {
+  color: #fde68a;
+}
+
+.debug-log-row.error {
+  color: var(--error-soft);
+}
+
+.debug-log-row time,
+.debug-log-row strong,
+.debug-log-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-log-row time {
+  color: var(--muted);
+}
+
+.debug-log-row strong {
+  color: inherit;
+  font-weight: 700;
+}
+
+.debug-log-empty {
+  padding: 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+

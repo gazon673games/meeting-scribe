@@ -1,0 +1,246 @@
+.source-card,
+.assistant-response {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-bg-strong);
+}
+
+.source-card {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 108px;
+  overflow: hidden;
+  padding: 12px;
+  background: var(--panel-bg-soft);
+}
+
+.source-head,
+.source-title {
+  display: flex;
+  align-items: center;
+}
+
+.source-head {
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+  min-width: 0;
+}
+
+.source-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  gap: 9px;
+}
+
+.source-title svg {
+  color: var(--subtle);
+  flex: 0 0 auto;
+}
+
+.source-title strong {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.source-remove {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-bg-strong);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.source-remove:hover:not(:disabled) {
+  border-color: var(--danger-soft);
+  color: var(--danger-soft);
+}
+
+.source-remove:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.switch-button {
+  position: relative;
+  width: 40px;
+  height: 21px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--border-strong);
+  cursor: pointer;
+}
+
+.switch-button span {
+  position: absolute;
+  top: 2px;
+  left: 3px;
+  width: 17px;
+  height: 17px;
+  border-radius: 999px;
+  background: var(--control-knob);
+  transition: left 0.14s ease;
+}
+
+.switch-button.on {
+  background: var(--accent);
+}
+
+.switch-button.on span {
+  left: 20px;
+}
+
+.audio-meter {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--meter-bg);
+  margin-bottom: 12px;
+}
+
+.audio-meter div {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--success);
+  transition: width 0.18s ease;
+}
+
+.audio-meter div.warm {
+  background: #facc15;
+}
+
+.audio-meter div.hot {
+  background: #f97316;
+}
+
+.select-shell {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.select-shell select,
+.field input,
+.field select,
+.field textarea,
+.assistant-input textarea {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--app-bg);
+  color: var(--control-text);
+  outline: none;
+}
+
+.field textarea {
+  padding: 8px 10px;
+  font-size: 12px;
+  resize: vertical;
+  line-height: 1.4;
+}
+
+.select-shell select,
+.field input,
+.field select {
+  height: 34px;
+  padding: 0 32px 0 10px;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  appearance: none;
+}
+
+.select-shell.has-display-label select {
+  color: transparent;
+}
+
+.select-shell.has-display-label select option {
+  color: var(--control-text);
+  background: var(--app-bg);
+}
+
+.select-shell-label {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 10px;
+  right: 32px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.25;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  transform: translateY(-50%);
+  white-space: nowrap;
+}
+
+.select-shell svg {
+  z-index: 2;
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  pointer-events: none;
+  color: var(--muted);
+  transform: translateY(-50%);
+}
+
+.source-card .select-shell select {
+  height: 29px;
+  color: var(--text);
+}
+
+.source-static-value {
+  width: 100%;
+  min-width: 0;
+  height: 29px;
+  display: block;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--app-bg);
+  color: var(--text);
+  padding: 6px 10px 0;
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-card .select-shell select,
+.add-source-picker .select-shell select,
+.source-dropdown-button,
+.source-option {
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.25;
+}
+

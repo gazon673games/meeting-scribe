@@ -1,0 +1,71 @@
+.quick-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.action-button {
+  min-width: 0;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.action-button svg {
+  flex: 0 0 auto;
+  color: var(--control-text);
+}
+
+.action-button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@container assistant-column (max-width: 260px) {
+  .quick-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .action-button {
+    padding: 0;
+  }
+
+  .action-button span {
+    display: none;
+  }
+}
+
+.assistant-response {
+  min-height: 180px;
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  margin-top: 16px;
+  padding: 13px;
+}
+
+.assistant-response p {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.assistant-response p.muted {
+  color: var(--muted);
+}
+
+.assistant-response p.error {
+  color: var(--danger);
+}
+
+
