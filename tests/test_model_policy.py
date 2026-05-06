@@ -2,7 +2,15 @@ from __future__ import annotations
 
 import unittest
 
-from application.asr_profiles import PROFILE_BALANCED, PROFILE_CUSTOM, PROFILE_QUALITY, PROFILE_REALTIME
+from application.asr_profiles import (
+    PROFILE_BALANCED,
+    PROFILE_CUSTOM,
+    PROFILE_QUALITY,
+    PROFILE_REALTIME,
+    PROFILE_ULTRA_FAST,
+    profile_defaults,
+    profile_requires_streaming,
+)
 from application.codex_config import CodexProfile
 from application.model_policy import (
     ASR_MODEL_LARGE_V3,
@@ -27,6 +35,23 @@ class ModelOrchestratorTests(unittest.TestCase):
         )
 
         self.assertEqual(model, ASR_MODEL_RU_PODLODKA_TURBO)
+
+    def test_ultra_fast_ru_prefers_russian_turbo(self) -> None:
+        model = self.orchestrator.recommend_asr_model(
+            asr_profile=PROFILE_ULTRA_FAST,
+            language="ru",
+            current_model=ASR_MODEL_LARGE_V3,
+        )
+
+        self.assertEqual(model, ASR_MODEL_RU_PODLODKA_TURBO)
+
+    def test_ultra_fast_profile_defaults_require_streaming(self) -> None:
+        defaults = profile_defaults(PROFILE_ULTRA_FAST)
+
+        self.assertTrue(profile_requires_streaming(PROFILE_ULTRA_FAST))
+        self.assertTrue(defaults["streaming_enabled"])
+        self.assertLess(defaults["endpoint_silence_ms"], 300.0)
+        self.assertLess(defaults["streaming_chunk_interval_s"], 1.0)
 
     def test_realtime_en_prefers_generic_turbo(self) -> None:
         model = self.orchestrator.recommend_asr_model(

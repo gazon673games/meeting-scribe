@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, Optional
 import numpy as np
 
 from application.asr_language import initial_prompt_for_language, normalize_asr_language, runtime_asr_language
+from application.asr_profiles import profile_defaults, profile_requires_streaming
 from application.asr_session import ASRRuntime, ASRRuntimeFactory, ASRSessionSettings
 from application.audio_runtime import AudioRuntimeFactory, AudioRuntimePort
 from application.audio_sources import AudioSourceFactory
@@ -975,6 +976,49 @@ def _asr_settings_from_params(
     mode_raw = str(params.get("asrMode", params.get("asr_mode", "split"))).strip().lower()
     mode = "split" if mode_raw in {"1", "split", "sources"} else "mix"
     overload_strategy = str(params.get("overload_strategy", params.get("overloadStrategy", "drop_old"))).strip().lower()
+    profile = str(params.get("profile", params.get("asr_profile", "")) or "").strip()
+    streaming_required = profile_requires_streaming(profile)
+    streaming_defaults = profile_defaults(profile) if streaming_required else {}
+    streaming_chunk_default = float(streaming_defaults.get("streaming_chunk_interval_s", 1.0))
+    streaming_endpoint_default = float(streaming_defaults.get("streaming_endpoint_silence_ms", 300.0))
+    streaming_enabled = (
+        _safe_bool(
+            _first_param(
+                params,
+                "streamingEnabled",
+                "streaming_enabled",
+                default=streaming_defaults.get("streaming_enabled", False),
+            ),
+            bool(streaming_defaults.get("streaming_enabled", False)),
+        )
+        or streaming_required
+    )
+    streaming_chunk_interval_s = _safe_float_clamped(
+        streaming_chunk_default
+        if streaming_required
+        else _first_param(
+            params,
+            "streamingChunkIntervalS",
+            "streaming_chunk_interval_s",
+            default=streaming_chunk_default,
+        ),
+        streaming_chunk_default,
+        0.1,
+        5.0,
+    )
+    streaming_endpoint_silence_ms = _safe_float_clamped(
+        streaming_endpoint_default
+        if streaming_required
+        else _first_param(
+            params,
+            "streamingEndpointSilenceMs",
+            "streaming_endpoint_silence_ms",
+            default=streaming_endpoint_default,
+        ),
+        streaming_endpoint_default,
+        50.0,
+        5000.0,
+    )
     return ASRSessionSettings(
         language=language,
         mode=mode,  # type: ignore[arg-type]
@@ -1049,7 +1093,9 @@ def _asr_settings_from_params(
             1,
             32,
         ),
-        streaming_enabled=bool(params.get("streamingEnabled", params.get("streaming_enabled", False))),
+        streaming_enabled=streaming_enabled,
+        streaming_chunk_interval_s=streaming_chunk_interval_s,
+        streaming_endpoint_silence_ms=streaming_endpoint_silence_ms,
     )
 
 
@@ -1082,6 +1128,19 @@ def _first_param(params: Dict[str, Any], *keys: str, default: object = None) -> 
         if key in params:
             return params[key]
     return default
+
+
+def _safe_bool(raw: object, default: bool = False) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    if raw is None:
+        return bool(default)
+    value = str(raw).strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off", ""}:
+        return False
+    return bool(default)
 
 
 def _safe_int(raw: object, default: int, lo: int, hi: int) -> int:

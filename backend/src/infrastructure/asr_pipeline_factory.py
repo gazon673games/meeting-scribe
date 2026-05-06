@@ -67,6 +67,8 @@ class ASRPipelineFactory(ASRRuntimeFactory):
             metrics_emit_interval_s=5.0,
             metrics_latency_window=200,
             streaming_enabled=bool(settings.streaming_enabled),
+            streaming_chunk_interval_s=float(settings.streaming_chunk_interval_s),
+            streaming_endpoint_silence_ms=float(settings.streaming_endpoint_silence_ms),
         )
         pipeline_dependencies = ASRPipelineDependencies(
             logger_factory=ASRLogger,

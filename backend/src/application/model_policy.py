@@ -3,7 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Sequence
 
-from application.asr_profiles import PROFILE_BALANCED, PROFILE_CUSTOM, PROFILE_QUALITY, PROFILE_REALTIME
+from application.asr_profiles import (
+    PROFILE_BALANCED,
+    PROFILE_CUSTOM,
+    PROFILE_QUALITY,
+    PROFILE_REALTIME,
+    PROFILE_ULTRA_FAST,
+)
 
 ASR_MODEL_LARGE_V3 = "large-v3"
 ASR_MODEL_LARGE_V3_TURBO = "large-v3-turbo"
@@ -135,7 +141,7 @@ class ModelOrchestrator:
 
     def _policy_mode(self, asr_profile: str) -> str:
         profile = str(asr_profile or "").strip().lower()
-        if profile == PROFILE_REALTIME.lower():
+        if profile in {PROFILE_ULTRA_FAST.lower(), PROFILE_REALTIME.lower()}:
             return "fast"
         if profile == PROFILE_QUALITY.lower():
             return "quality"
