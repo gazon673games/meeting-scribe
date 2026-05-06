@@ -9,6 +9,9 @@ class OnlineDiarizerPort(Protocol):
     def last_error(self) -> Optional[str]:
         ...
 
+    def clusters_snapshot(self) -> List[dict]:
+        ...
+
     def assign_with_debug(
         self, audio_16k: Any, ts: Optional[float] = None
     ) -> tuple[str, Optional[int], float, bool]:

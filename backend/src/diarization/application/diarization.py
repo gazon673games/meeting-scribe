@@ -42,6 +42,9 @@ class DiarizationPort(Protocol):
     def speaker_for_segment(self, seg: Segment, log_event: LogEvent) -> str:
         ...
 
+    def identity_snapshot(self) -> Dict[str, Dict[str, Any]]:
+        ...
+
 
 class DiarizationRuntimeFactoryPort(Protocol):
     def __call__(self, *, config: DiarizationConfig) -> DiarizationPort:
