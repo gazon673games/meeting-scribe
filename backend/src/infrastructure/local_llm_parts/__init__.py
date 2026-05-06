@@ -1,4 +1,5 @@
 from infrastructure.local_llm_parts.errors import LocalLlmError
+from infrastructure.local_llm_parts.http_client import request_json
 from infrastructure.local_llm_parts.http_utils import http_error_body, http_suggestion
 from infrastructure.local_llm_parts.profile_utils import (
     auth_header,
@@ -22,6 +23,12 @@ from infrastructure.local_llm_parts.result_utils import (
     status_error,
 )
 from infrastructure.local_llm_parts.runtime_discovery import find_direct_gguf_path, find_gguf_model, find_llama_server
+from infrastructure.local_llm_parts.runtime_server import (
+    SERVER_PROCESSES,
+    ensure_openai_local_runtime,
+    start_local_llm_async,
+    stop_local_llm,
+)
 
 __all__ = [
     "LocalLlmError",
@@ -40,11 +47,16 @@ __all__ = [
     "ollama_options",
     "openai_models",
     "openai_text",
+    "request_json",
     "ping_error",
     "ping_ok",
     "profile_for_provider",
     "same_provider",
     "status_error",
     "status_timeout",
+    "start_local_llm_async",
+    "stop_local_llm",
+    "SERVER_PROCESSES",
+    "ensure_openai_local_runtime",
     "temperature",
 ]

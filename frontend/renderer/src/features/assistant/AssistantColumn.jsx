@@ -32,46 +32,37 @@ export function AssistantColumn({
 }) {
   const [text, setText] = React.useState("");
   const [profileId, setProfileId] = React.useState(assistant.selectedProfileId || "");
-  const [chatMessages, setChatMessages] = React.useState([]);
-  const lastResponseRef = React.useRef(null);
-
-  React.useEffect(() => {
-    setProfileId((current) => current || assistant.selectedProfileId || "");
-  }, [assistant.selectedProfileId]);
-
-  React.useEffect(() => {
-    const r = assistant.lastResponse;
-    if (!r || !r.ts) return;
-    if (r.ts === lastResponseRef.current) return;
-    if (!r.text && r.ok !== false) return;
-    lastResponseRef.current = r.ts;
-    setChatMessages((prev) => [...prev, { id: Date.now(), role: "assistant", ...r }]);
-  }, [assistant.lastResponse]);
+  const { chatMessages, pushUserMessage } = useAssistantChat(assistant.lastResponse);
 
   const handleProfileChange = (id) => {
     setProfileId(id);
   };
 
-  const selectedProfile = profiles.find((profile) => profile.id === profileId) || {};
+  React.useEffect(() => {
+    setProfileId((current) => current || assistant.selectedProfileId || "");
+  }, [assistant.selectedProfileId]);
+
+  const selectedProfile = selectProfile(profiles, profileId);
   const response = assistant.lastResponse || {};
-  const noProfile = !profileId;
-  const actionsDisabled = disabled || !contextReady || noProfile;
-  const selectedProviderId = selectedProfile.providerId || selectedProfile.provider || assistant.providerId || "codex";
-  const isCodexProfile = (selectedProfile.provider || selectedProfile.providerId || "codex") === "codex";
-  const llmStatus = !isCodexProfile ? (localLlmStatus?.[profileId] || null) : null;
-  const llmRunning = llmStatus?.state === "running";
-  const llmStarting = llmStatus?.state === "starting";
+  const context = buildAssistantContext({
+    assistant,
+    contextReady,
+    disabled,
+    localLlmStatus,
+    profileId,
+    selectedProfile,
+  });
 
   const handleInvoke = (params) => {
     const label = params.requestText || ACTION_LABELS[params.action] || "";
     if (label) {
-      setChatMessages((prev) => [...prev, { id: Date.now(), role: "user", text: label, sourceLabel: params.sourceLabel || "you" }]);
+      pushUserMessage(label, params.sourceLabel || "you");
     }
     onInvoke(params);
   };
 
   const invokeCustom = (requestText, sourceLabel = "you") => {
-    setChatMessages((prev) => [...prev, { id: Date.now(), role: "user", text: requestText, sourceLabel }]);
+    pushUserMessage(requestText, sourceLabel);
     onInvoke({ requestText, profileId, sourceLabel });
   };
 
@@ -79,59 +70,27 @@ export function AssistantColumn({
     <PipelinePanel title="AI Assistant" active={assistant.busy} className="assistant-column" headerControls={layoutControls} headerProps={headerProps} showIndicator>
       <AssistantProfileSelect disabled={disabled} profileId={profileId} profiles={profiles} onProfileChange={handleProfileChange} />
 
-      {!isCodexProfile && profileId ? (
-        <div className="local-model-bar">
-          {!llmRunning && !llmStarting ? (
-            <button
-              className="assistant-ping-btn local-start-btn"
-              disabled={disabled}
-              type="button"
-              onClick={() => onStartLocalModel?.(profileId)}
-            >
-              <Play size={13} />
-              Start Model
-            </button>
-          ) : (
-            <button
-              className="assistant-ping-btn local-stop-btn"
-              disabled={disabled || llmStarting}
-              type="button"
-              onClick={() => onStopLocalModel?.(profileId)}
-            >
-              <Square size={13} />
-              {llmStarting ? "Starting..." : "Stop Model"}
-            </button>
-          )}
-          <LocalLlmStatusText status={llmStatus} />
-        </div>
-      ) : null}
+      <AssistantRuntimeBar
+        assistantPing={assistantPing}
+        disabled={disabled}
+        onPing={onPing}
+        onStartLocalModel={onStartLocalModel}
+        onStopLocalModel={onStopLocalModel}
+        profileId={profileId}
+        runtime={context}
+      />
 
-      {isCodexProfile && profileId ? (
-        <div className="local-model-bar">
-          <button
-            className="assistant-ping-btn"
-            disabled={disabled || assistantPing?.busy}
-            type="button"
-            onClick={() => onPing?.(selectedProviderId, profileId)}
-          >
-            <Radio size={13} />
-            Ping
-          </button>
-          <PingStatus ping={assistantPing} />
-        </div>
-      ) : null}
-
-      <AssistantQuickActions disabled={actionsDisabled} profileId={profileId} onInvoke={handleInvoke} />
+      <AssistantQuickActions disabled={context.actionsDisabled} profileId={profileId} onInvoke={handleInvoke} />
       <AssistantResponse
         assistant={assistant}
         busy={assistant.busy}
         messages={chatMessages}
-        onAuthorize={() => onAuthorize?.(selectedProviderId)}
+        onAuthorize={() => onAuthorize?.(context.selectedProviderId)}
       />
       <AssistantStats assistant={assistant} response={response} selectedProfile={selectedProfile} />
       <AssistantPromptBox
         disabled={disabled}
-        submitDisabled={disabled || noProfile}
+        submitDisabled={context.submitDisabled}
         text={text}
         onTextChange={setText}
         onSubmit={() => {
@@ -140,6 +99,108 @@ export function AssistantColumn({
         }}
       />
     </PipelinePanel>
+  );
+}
+
+function useAssistantChat(lastResponse) {
+  const [chatMessages, setChatMessages] = React.useState([]);
+  const lastResponseRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!isAssistantResponseAppendable(lastResponse, lastResponseRef.current)) {
+      return;
+    }
+    lastResponseRef.current = lastResponse.ts;
+    setChatMessages((prev) => [...prev, { id: Date.now(), role: "assistant", ...lastResponse }]);
+  }, [lastResponse]);
+
+  const pushUserMessage = React.useCallback((text, sourceLabel) => {
+    setChatMessages((prev) => [...prev, { id: Date.now(), role: "user", text, sourceLabel }]);
+  }, []);
+
+  return { chatMessages, pushUserMessage };
+}
+
+function isAssistantResponseAppendable(response, lastTs) {
+  if (!response || !response.ts) return false;
+  if (response.ts === lastTs) return false;
+  if (!response.text && response.ok !== false) return false;
+  return true;
+}
+
+function selectProfile(profiles, profileId) {
+  return profiles.find((profile) => profile.id === profileId) || {};
+}
+
+function buildAssistantContext({ assistant, contextReady, disabled, localLlmStatus, profileId, selectedProfile }) {
+  const noProfile = !profileId;
+  const selectedProviderId = selectedProfile.providerId || selectedProfile.provider || assistant.providerId || "codex";
+  const isCodexProfile = (selectedProfile.provider || selectedProfile.providerId || "codex") === "codex";
+  const llmStatus = !isCodexProfile ? (localLlmStatus?.[profileId] || null) : null;
+  return {
+    selectedProviderId,
+    isCodexProfile,
+    llmStatus,
+    llmRunning: llmStatus?.state === "running",
+    llmStarting: llmStatus?.state === "starting",
+    actionsDisabled: disabled || !contextReady || noProfile,
+    submitDisabled: disabled || noProfile,
+  };
+}
+
+function AssistantRuntimeBar({
+  assistantPing,
+  disabled,
+  onPing,
+  onStartLocalModel,
+  onStopLocalModel,
+  profileId,
+  runtime,
+}) {
+  if (!profileId) {
+    return null;
+  }
+  if (runtime.isCodexProfile) {
+    return (
+      <div className="local-model-bar">
+        <button
+          className="assistant-ping-btn"
+          disabled={disabled || assistantPing?.busy}
+          type="button"
+          onClick={() => onPing?.(runtime.selectedProviderId, profileId)}
+        >
+          <Radio size={13} />
+          Ping
+        </button>
+        <PingStatus ping={assistantPing} />
+      </div>
+    );
+  }
+  return (
+    <div className="local-model-bar">
+      {!runtime.llmRunning && !runtime.llmStarting ? (
+        <button
+          className="assistant-ping-btn local-start-btn"
+          disabled={disabled}
+          type="button"
+          onClick={() => onStartLocalModel?.(profileId)}
+        >
+          <Play size={13} />
+          Start Model
+        </button>
+      ) : (
+        <button
+          className="assistant-ping-btn local-stop-btn"
+          disabled={disabled || runtime.llmStarting}
+          type="button"
+          onClick={() => onStopLocalModel?.(profileId)}
+        >
+          <Square size={13} />
+          {runtime.llmStarting ? "Starting..." : "Stop Model"}
+        </button>
+      )}
+      <LocalLlmStatusText status={runtime.llmStatus} />
+    </div>
   );
 }
 

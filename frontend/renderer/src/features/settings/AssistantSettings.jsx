@@ -1,82 +1,87 @@
 import React from "react";
-import { Cpu, Plus, Radio, Trash2 } from "lucide-react";
+import { Cpu } from "lucide-react";
 
-import {
-  ASSISTANT_REASONING_OPTIONS,
-  ASSISTANT_PROVIDER_OPTIONS,
-  normalizeAssistantProfiles
-} from "../../entities/settings/model";
+import { normalizeAssistantProfiles } from "../../entities/settings/model";
 import { meetingScribeClient } from "../../shared/api/meetingScribeClient";
 import { CollapsibleSection } from "../../shared/ui/CollapsibleSection";
-import { Field } from "../../shared/ui/Field";
+import { AssistantProfileDetails } from "./assistant/AssistantProfileDetails";
+import { AssistantProfilesSidebar } from "./assistant/AssistantProfilesSidebar";
+import { newProfile, uniqueProfileId } from "./assistant/profileUtils";
 
 export function AssistantSettings({ draft, onChange }) {
   const assistantEnabled = Boolean(draft.assistantEnabled);
   const profiles = normalizeAssistantProfiles(draft.assistantProfiles);
+  const selectedProfileId = draft.assistantSelectedProfileId || profiles[0]?.id || "";
+  const selectedIndex = Math.max(0, profiles.findIndex((profile) => profile.id === selectedProfileId));
+  const selectedProfile = profiles[selectedIndex] || profiles[0];
+
   const [pingStates, setPingStates] = React.useState({});
   const [llmModels, setLlmModels] = React.useState([]);
   const [llmLoaded, setLlmLoaded] = React.useState(false);
-  const selectedId = draft.assistantSelectedProfileId || profiles[0]?.id || "";
-  const selectedIndex = Math.max(0, profiles.findIndex((p) => p.id === selectedId));
-  const selectedProfile = profiles[selectedIndex] || profiles[0];
 
-  const hasLocalProfile = profiles.some((p) => (p.provider || "codex") !== "codex");
-
+  const hasLocalProfile = profiles.some((profile) => (profile.provider || "codex") !== "codex");
   React.useEffect(() => {
     if (!hasLocalProfile || llmLoaded) return;
     setLlmLoaded(true);
-    meetingScribeClient.request("list_llm_models", {})
-      .then((r) => setLlmModels(r?.models || []))
+    meetingScribeClient
+      .request("list_llm_models", {})
+      .then((result) => setLlmModels(result?.models || []))
       .catch(() => {});
   }, [hasLocalProfile, llmLoaded]);
 
-  const updateProfile = (index, patch) => {
-    const next = profiles.map((p, i) => (i === index ? { ...p, ...patch } : p));
+  const updateProfile = React.useCallback((index, patch) => {
+    const next = profiles.map((profile, profileIndex) => (profileIndex === index ? { ...profile, ...patch } : profile));
     onChange({ assistantProfiles: next });
-  };
+  }, [onChange, profiles]);
 
-  const updateSelected = (patch) => {
+  const updateSelected = React.useCallback((patch) => {
     if (!selectedProfile) return;
     updateProfile(selectedIndex, patch);
-  };
+  }, [selectedIndex, selectedProfile, updateProfile]);
 
-  const addProfile = (provider = "codex") => {
+  const addProfile = React.useCallback((provider = "codex") => {
     const id = uniqueProfileId(profiles, provider);
     onChange({
       assistantProfiles: [...profiles, newProfile(id, provider)],
       assistantSelectedProfileId: id
     });
-  };
+  }, [onChange, profiles]);
 
-  const removeProfile = (index) => {
+  const removeProfile = React.useCallback((index) => {
     const removed = profiles[index];
-    const next = profiles.filter((_, i) => i !== index);
+    const next = profiles.filter((_, profileIndex) => profileIndex !== index);
     const fallback = next[Math.max(0, Math.min(index, next.length - 1))]?.id || "";
     onChange({
       assistantProfiles: next,
       assistantSelectedProfileId:
         draft.assistantSelectedProfileId === removed.id ? fallback : draft.assistantSelectedProfileId
     });
-  };
+  }, [draft.assistantSelectedProfileId, onChange, profiles]);
 
   const pingProfile = React.useCallback(async (profile) => {
-    setPingStates((s) => ({ ...s, [profile.id]: { busy: true } }));
+    setPingStates((state) => ({ ...state, [profile.id]: { busy: true } }));
     try {
       const result = await meetingScribeClient.request("ping_assistant_provider", {
         providerId: profile.provider || "codex",
         profileId: profile.id
       });
-      setPingStates((s) => ({ ...s, [profile.id]: { busy: false, ...result } }));
-    } catch (e) {
-      setPingStates((s) => ({
-        ...s,
-        [profile.id]: { busy: false, ok: false, errorCode: "ping_failed", message: String(e?.message || e) }
+      setPingStates((state) => ({ ...state, [profile.id]: { busy: false, ...result } }));
+    } catch (error) {
+      setPingStates((state) => ({
+        ...state,
+        [profile.id]: { busy: false, ok: false, errorCode: "ping_failed", message: String(error?.message || error) }
       }));
     }
   }, []);
 
-  const cachedLocalModels = llmModels.filter((m) => m.cached).map((m) => String(m.modelAlias || m.name || "")).filter(Boolean);
-  const cachedGgufModels = llmModels.filter((m) => m.cached && m.path).map((m) => ({ label: String(m.label || m.name || m.path), path: String(m.path) }));
+  const cachedLocalModels = llmModels
+    .filter((model) => model.cached)
+    .map((model) => String(model.modelAlias || model.name || ""))
+    .filter(Boolean);
+
+  const cachedGgufModels = llmModels
+    .filter((model) => model.cached && model.path)
+    .map((model) => ({ label: String(model.label || model.name || model.path), path: String(model.path) }));
 
   return (
     <CollapsibleSection title="Assistant" defaultOpen={false}>
@@ -93,66 +98,16 @@ export function AssistantSettings({ draft, onChange }) {
         </button>
 
         <div className="assistant-profile-workbench">
-          <div className="assistant-profile-sidebar">
-            <div className="assistant-profile-sidebar-head">
-              <span>Profiles</span>
-              <span>{profiles.length}</span>
-            </div>
-            <div className="assistant-profile-list">
-              {profiles.map((profile, index) => {
-                const isCodex = normalizeProvider(profile.provider) === "codex";
-                const selected = profile.id === selectedProfile?.id;
-                return (
-                  <div
-                    className={`assistant-profile-list-item ${selected ? "selected" : ""}`}
-                    key={profile.id || index}
-                  >
-                    <button
-                      className="assistant-profile-list-select"
-                      type="button"
-                      onClick={() => onChange({ assistantSelectedProfileId: profile.id })}
-                    >
-                      <span className="assistant-profile-list-main">
-                        <b>{profile.label || profile.id}</b>
-                        <small>
-                          {isCodex ? "Codex CLI" : runtimeLabel(profile.provider)}
-                          {!isCodex && profile.model ? ` · ${modelBasename(profile.model)}` : ""}
-                        </small>
-                      </span>
-                      <span className={`profile-mode-badge ${isCodex ? "online" : "offline"}`}>
-                        {isCodex ? "online" : "local"}
-                      </span>
-                    </button>
-                    <button
-                      className="model-row-btn danger"
-                      title="Delete"
-                      type="button"
-                      onClick={() => removeProfile(index)}
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="assistant-add-row">
-              <button className="model-download-button" type="button" onClick={() => addProfile("codex")}>
-                <Plus size={13} />
-                Codex
-              </button>
-              <button className="model-download-button" type="button" onClick={() => addProfile("local")}>
-                <Plus size={13} />
-                GGUF
-              </button>
-              <button className="model-download-button" type="button" onClick={() => addProfile("ollama")}>
-                <Plus size={13} />
-                Ollama
-              </button>
-            </div>
-          </div>
+          <AssistantProfilesSidebar
+            profiles={profiles}
+            selectedProfileId={selectedProfile?.id}
+            onSelect={(id) => onChange({ assistantSelectedProfileId: id })}
+            onDelete={removeProfile}
+            onAdd={addProfile}
+          />
 
           {selectedProfile ? (
-            <ProfileDetails
+            <AssistantProfileDetails
               assistantEnabled={assistantEnabled}
               cachedGgufModels={cachedGgufModels}
               cachedLocalModels={cachedLocalModels}
@@ -172,299 +127,4 @@ export function AssistantSettings({ draft, onChange }) {
       </div>
     </CollapsibleSection>
   );
-}
-
-function ProfileDetails({ assistantEnabled, cachedGgufModels, cachedLocalModels, ping, profile, onDelete, onPing, onUpdate }) {
-  const provider = normalizeProvider(profile.provider);
-  const isCodex = provider === "codex";
-  const isLocalGguf = provider === "local";
-  const [customModel, setCustomModel] = React.useState(false);
-
-  const modelValue = profile.model || "";
-  const showOllamaDropdown = provider === "ollama" && cachedLocalModels.length > 0;
-  const showGgufDropdown = isLocalGguf && (cachedGgufModels?.length > 0);
-  const showModelDropdown = showOllamaDropdown;
-  const modelInList = showModelDropdown && cachedLocalModels.includes(modelValue);
-  const ggufInList = showGgufDropdown && (cachedGgufModels || []).some((m) => m.path === modelValue);
-  const useCustomInput = customModel || (!modelInList && !ggufInList && modelValue !== "");
-
-  return (
-    <div className="assistant-profile-detail">
-      <div className="assistant-profile-detail-head">
-        <div>
-          <span>{isCodex ? "Codex CLI" : runtimeLabel(provider)}</span>
-          <h4>{profile.label || profile.id}</h4>
-        </div>
-        <div className="assistant-profile-actions">
-          {isCodex ? (
-            <button
-              className="model-download-button"
-              disabled={!assistantEnabled || ping?.busy}
-              type="button"
-              onClick={onPing}
-            >
-              <Radio size={13} />
-              {ping?.busy ? "Pinging…" : "Ping"}
-            </button>
-          ) : null}
-          <button
-            className="model-row-btn danger"
-            title="Delete profile"
-            type="button"
-            onClick={onDelete}
-          >
-            <Trash2 size={12} />
-          </button>
-        </div>
-      </div>
-
-      {isCodex && ping && !ping.busy ? (
-        <div className="assistant-ping-result-row">
-          <PingStatus ping={ping} />
-        </div>
-      ) : null}
-
-      <div className="settings-grid assistant-detail-grid">
-        <Field label="Label">
-          <input value={profile.label} onChange={(e) => onUpdate({ label: e.target.value })} />
-        </Field>
-
-        {isCodex ? (
-          <>
-            <Field label="Model">
-              <input
-                placeholder="gpt-5.3-codex"
-                spellCheck={false}
-                value={modelValue}
-                onChange={(e) => onUpdate({ model: e.target.value })}
-              />
-            </Field>
-            <Field label="Reasoning">
-              <select
-                value={profile.reasoning_effort || ""}
-                onChange={(e) => onUpdate({ reasoning_effort: e.target.value })}
-              >
-                <option value="">default</option>
-                {ASSISTANT_REASONING_OPTIONS.map((r) => (
-                  <option key={r} value={r}>{r}</option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Codex Profile">
-              <input
-                spellCheck={false}
-                value={profile.codex_profile || ""}
-                onChange={(e) => onUpdate({ codex_profile: e.target.value })}
-              />
-            </Field>
-          </>
-        ) : (
-          <>
-            <Field label="Model">
-              {showGgufDropdown && !useCustomInput ? (
-                <select
-                  value={ggufInList ? modelValue : ""}
-                  onChange={(e) => {
-                    if (e.target.value === "__custom__") {
-                      setCustomModel(true);
-                    } else {
-                      onUpdate({ model: e.target.value });
-                    }
-                  }}
-                >
-                  <option value="">— select —</option>
-                  {(cachedGgufModels || []).map((m) => (
-                    <option key={m.path} value={m.path}>{m.label}</option>
-                  ))}
-                  <option value="__custom__">Custom path…</option>
-                </select>
-              ) : showModelDropdown && !useCustomInput ? (
-                <select
-                  value={modelInList ? modelValue : ""}
-                  onChange={(e) => {
-                    if (e.target.value === "__custom__") {
-                      setCustomModel(true);
-                    } else {
-                      onUpdate({ model: e.target.value });
-                    }
-                  }}
-                >
-                  <option value="">— select —</option>
-                  {cachedLocalModels.map((alias) => (
-                    <option key={alias} value={alias}>{alias}</option>
-                  ))}
-                  <option value="__custom__">Custom…</option>
-                </select>
-              ) : (
-                <div className="model-custom-input-row">
-                  <input
-                    spellCheck={false}
-                    placeholder={isLocalGguf ? "path/to/model.gguf" : ""}
-                    value={modelValue}
-                    onChange={(e) => onUpdate({ model: e.target.value })}
-                  />
-                  {(showGgufDropdown || showModelDropdown) ? (
-                    <button
-                      className="model-row-btn"
-                      title="Pick from list"
-                      type="button"
-                      onClick={() => { setCustomModel(false); onUpdate({ model: "" }); }}
-                    >
-                      ↩
-                    </button>
-                  ) : null}
-                </div>
-              )}
-            </Field>
-            <Field label="Runtime">
-              <select
-                value={provider}
-                onChange={(e) => onUpdate(runtimePatch(profile, e.target.value))}
-              >
-                <option value="local">Local GGUF (llama.cpp)</option>
-                <option value="openai_local">OpenAI-compatible server</option>
-                <option value="ollama">Ollama</option>
-              </select>
-            </Field>
-            {isLocalGguf ? (
-              <>
-                <Field label="GPU Layers">
-                  <input
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    placeholder="0 = CPU, 28+ = GPU"
-                    value={profile.gpu_layers ?? ""}
-                    onChange={(e) => onUpdate({ gpu_layers: e.target.value.replace(/\D/g, "") })}
-                  />
-                </Field>
-                <Field label="Context Size">
-                  <input
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    placeholder="4096"
-                    value={profile.context_size || ""}
-                    onChange={(e) => onUpdate({ context_size: e.target.value.replace(/\D/g, "") })}
-                  />
-                </Field>
-              </>
-            ) : (
-              <>
-                <Field label="Temperature">
-                  <input
-                    inputMode="decimal"
-                    placeholder="0.7"
-                    value={profile.temperature ?? ""}
-                    onChange={(e) => onUpdate({ temperature: e.target.value })}
-                  />
-                </Field>
-                <Field label="Max Tokens">
-                  <input
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    placeholder="2048"
-                    value={profile.max_tokens || ""}
-                    onChange={(e) => onUpdate({ max_tokens: e.target.value.replace(/\D/g, "") })}
-                  />
-                </Field>
-                <Field label="Base URL">
-                  <input
-                    spellCheck={false}
-                    placeholder={defaultBaseUrl(provider)}
-                    value={profile.base_url || ""}
-                    onChange={(e) => onUpdate({ base_url: e.target.value })}
-                  />
-                </Field>
-              </>
-            )}
-          </>
-        )}
-      </div>
-
-      <Field label="Instructions">
-        <textarea
-          className="assistant-profile-prompt"
-          rows={5}
-          spellCheck={false}
-          value={profile.prompt || ""}
-          onChange={(e) => onUpdate({ prompt: e.target.value })}
-        />
-      </Field>
-    </div>
-  );
-}
-
-function PingStatus({ ping }) {
-  if (!ping || ping.busy) return null;
-  const isAuthError = /auth|unauthorized|not_logged|login/i.test(ping.errorCode || "");
-  if (ping.ok) return <span className="ping-status ping-ok">ok</span>;
-  if (isAuthError) return <span className="ping-status ping-err">not authorized</span>;
-  return <span className="ping-status ping-err">{ping.message || "error"}</span>;
-}
-
-function newProfile(id, provider) {
-  const p = normalizeProvider(provider);
-  const labelMap = { codex: "Codex", local: "Local GGUF", ollama: "Ollama", openai_local: "Local Model" };
-  return {
-    id,
-    label: labelMap[p] || "Profile",
-    provider: p,
-    prompt: "Give concise, practical support based on the session context.",
-    model: "",
-    reasoning_effort: p === "codex" ? "low" : "",
-    codex_profile: "",
-    base_url: defaultBaseUrl(p),
-    api_key: "",
-    temperature: "",
-    max_tokens: 0,
-    answer_prompt: "",
-    extra_args: [],
-    offline: p !== "codex",
-    gpu_layers: p === "local" ? 0 : undefined,
-    context_size: p === "local" ? 4096 : undefined,
-  };
-}
-
-function runtimePatch(profile, provider) {
-  const p = normalizeProvider(provider);
-  const prev = normalizeProvider(profile.provider);
-  const currentUrl = String(profile.base_url || "");
-  const baseUrl = currentUrl && currentUrl !== defaultBaseUrl(prev) ? currentUrl : defaultBaseUrl(p);
-  const patch = { provider: p, base_url: baseUrl, offline: p !== "codex" };
-  if (p === "local") {
-    patch.gpu_layers = profile.gpu_layers ?? 0;
-    patch.context_size = profile.context_size ?? 4096;
-  }
-  return patch;
-}
-
-function uniqueProfileId(profiles, provider) {
-  const base = normalizeProvider(provider).replace(/[^a-z0-9_]+/g, "_") || "assistant";
-  const ids = new Set(profiles.map((p) => p.id));
-  let i = profiles.length + 1;
-  let id = `${base}_${i}`;
-  while (ids.has(id)) { i += 1; id = `${base}_${i}`; }
-  return id;
-}
-
-function normalizeProvider(provider) {
-  const v = String(provider || "codex").trim().toLowerCase();
-  return ASSISTANT_PROVIDER_OPTIONS.some((o) => o.id === v) ? v : "codex";
-}
-
-function runtimeLabel(provider) {
-  if (provider === "ollama") return "Ollama";
-  if (provider === "openai_local") return "OpenAI-compatible";
-  if (provider === "local") return "Local GGUF";
-  return "Local";
-}
-
-function defaultBaseUrl(provider) {
-  return ASSISTANT_PROVIDER_OPTIONS.find((o) => o.id === provider)?.defaultBaseUrl || "";
-}
-
-function modelBasename(model) {
-  const s = String(model || "");
-  const slash = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
-  const name = slash >= 0 ? s.slice(slash + 1) : s;
-  return name.replace(/\.gguf$/i, "");
 }
