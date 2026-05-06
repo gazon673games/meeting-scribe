@@ -2,6 +2,7 @@ import React from "react";
 import { Radio, Trash2 } from "lucide-react";
 
 import { ASSISTANT_REASONING_OPTIONS } from "../../../entities/settings/model";
+import { AssistantPingStatus } from "../../assistant/AssistantPingStatus";
 import { Field } from "../../../shared/ui/Field";
 import { defaultBaseUrl, normalizeProvider, runtimeLabel, runtimePatch } from "./profileUtils";
 
@@ -100,7 +101,7 @@ function PingResult({ isCodex, ping }) {
   if (!isCodex || !ping || ping.busy) return null;
   return (
     <div className="assistant-ping-result-row">
-      <PingStatus ping={ping} />
+      <AssistantPingStatus ping={ping} showBusy={false} showMessage />
     </div>
   );
 }
@@ -355,12 +356,4 @@ function RemoteRuntimeFields({ provider, profile, onUpdate }) {
       </Field>
     </>
   );
-}
-
-function PingStatus({ ping }) {
-  if (!ping || ping.busy) return null;
-  const isAuthError = /auth|unauthorized|not_logged|login/i.test(ping.errorCode || "");
-  if (ping.ok) return <span className="ping-status ping-ok">ok</span>;
-  if (isAuthError) return <span className="ping-status ping-err">not authorized</span>;
-  return <span className="ping-status ping-err">{ping.message || "error"}</span>;
 }

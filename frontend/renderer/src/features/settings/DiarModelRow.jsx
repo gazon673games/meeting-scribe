@@ -1,16 +1,11 @@
-import React from "react";
 import { Check, ChevronDown, ChevronUp, Download, Trash2 } from "lucide-react";
 
 import { formatBytes } from "../../shared/lib/format";
+import { ModelMetadataGrid } from "./ModelMetadataGrid";
+import { formatDownloadProgress } from "./modelDownloadProgress";
 
 function diarDownloadLabel(model) {
-  const dl = Number(model.downloadedBytes || 0);
-  const tot = Number(model.totalBytes || 0);
-  const sp = Number(model.speedBps || 0);
-  const dlStr = dl > 0 ? formatBytes(dl) : "0 B";
-  const totStr = tot > 0 ? ` / ${formatBytes(tot)}` : "";
-  const spStr = sp > 0 ? ` - ${formatBytes(sp)}/s` : "";
-  return `${dlStr}${totStr}${spStr}`;
+  return formatDownloadProgress(model);
 }
 
 function diarStatusLabel(model, selected, ready, isDownloading) {
@@ -140,14 +135,7 @@ function ModelDetailsPanel({ expanded, model, showStatus, statusLabel }) {
   }
   return (
     <div className="model-metadata-panel">
-      <dl className="model-metadata-grid">
-        {diarDetailFields(model, statusLabel, showStatus).map(([label, value]) => (
-          <React.Fragment key={label}>
-            <dt>{label}</dt>
-            <dd title={String(value)}>{String(value)}</dd>
-          </React.Fragment>
-        ))}
-      </dl>
+      <ModelMetadataGrid rows={diarDetailFields(model, statusLabel, showStatus)} />
     </div>
   );
 }

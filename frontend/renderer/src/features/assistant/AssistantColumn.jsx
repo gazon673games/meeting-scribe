@@ -4,6 +4,7 @@ import { Play, Radio, Square } from "lucide-react";
 import { PipelinePanel } from "../../shared/ui/pipeline/PipelinePanel";
 import { AssistantProfileSelect } from "./AssistantProfileSelect";
 import { AssistantPromptBox } from "./AssistantPromptBox";
+import { AssistantPingStatus } from "./AssistantPingStatus";
 import { AssistantQuickActions } from "./AssistantQuickActions";
 import { AssistantResponse } from "./AssistantResponse";
 import { AssistantStats } from "./AssistantStats";
@@ -172,7 +173,7 @@ function AssistantRuntimeBar({
           <Radio size={13} />
           Ping
         </button>
-        <PingStatus ping={assistantPing} />
+        <AssistantPingStatus idleRequiresTs ping={assistantPing} />
       </div>
     );
   }
@@ -211,13 +212,4 @@ function LocalLlmStatusText({ status }) {
   if (status.state === "error") return <span className="ping-status ping-err" title={status.message}>error: {status.message || "failed to start"}</span>;
   if (status.state === "stopped") return <span className="ping-status" style={{ color: "var(--muted)" }}>stopped</span>;
   return null;
-}
-
-function PingStatus({ ping }) {
-  if (!ping || (!ping.busy && ping.ts == null)) return null;
-  if (ping.busy) return <span className="ping-status ping-busy">pinging...</span>;
-  const isAuthError = /auth|unauthorized|not_logged|login/i.test(ping.errorCode || "");
-  if (ping.ok) return <span className="ping-status ping-ok">ok</span>;
-  if (isAuthError) return <span className="ping-status ping-err">not authorized</span>;
-  return <span className="ping-status ping-err">error</span>;
 }
