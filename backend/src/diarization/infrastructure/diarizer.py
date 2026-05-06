@@ -160,6 +160,19 @@ class OnlineDiarizer(OnlineDiarizerPort):
         label, n_speakers, _, _ = self.assign_with_debug(audio_16k, ts)
         return (label, n_speakers)
 
+    def clusters_snapshot(self) -> List[dict]:
+        out: List[dict] = []
+        for cluster in self._clusters:
+            out.append(
+                {
+                    "label": str(cluster.label),
+                    "centroid": np.asarray(cluster.centroid, dtype=np.float32).copy(),
+                    "count": int(cluster.n),
+                    "last_ts": float(cluster.last_ts),
+                }
+            )
+        return out
+
     def estimate_n_speakers(self, now: Optional[float] = None) -> Optional[int]:
         if self.window_s <= 0:
             return None

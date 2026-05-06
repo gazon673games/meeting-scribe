@@ -50,6 +50,14 @@ class ASRSessionSettings:
     streaming_enabled: bool = False
     streaming_chunk_interval_s: float = 1.0
     streaming_endpoint_silence_ms: float = 300.0
+    speaker_identity_enabled: bool = False
+    speaker_identity_persistent_profiles_enabled: bool = False
+    speaker_identity_backend: str = "file"
+    speaker_identity_app_data_dir: str = ""
+    speaker_identity_auto_match_threshold: float = 0.84
+    speaker_identity_uncertain_match_threshold: float = 0.74
+    speaker_identity_min_speech_ms_for_embedding: int = 8000
+    speaker_identity_min_quality_score: float = 0.65
 
 
 class ASRRuntimeFactory(Protocol):

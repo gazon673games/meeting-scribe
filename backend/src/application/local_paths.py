@@ -28,6 +28,14 @@ def project_recordings_dir(project_root: Path, *, create: bool = False) -> Path:
     return _project_named_dir(project_root, "recordings", create=create, read_legacy=False)
 
 
+def project_sessions_dir(project_root: Path, *, create: bool = False, read_legacy: bool = False) -> Path:
+    return _project_named_dir(project_root, "sessions", create=create, read_legacy=read_legacy)
+
+
+def project_identity_dir(project_root: Path, *, create: bool = False, read_legacy: bool = False) -> Path:
+    return _project_named_dir(project_root, "identity", create=create, read_legacy=read_legacy)
+
+
 def project_runtime_dir(project_root: Path, name: str) -> Path:
     safe_name = Path(str(name or "tmp")).name or "tmp"
     path = project_local_root(project_root) / "tmp" / safe_name

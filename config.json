@@ -42,6 +42,16 @@
     "diar_sherpa_num_threads": 1,
     "streaming_enabled": false
   },
+  "speaker_identity": {
+    "enabled": false,
+    "persistent_profiles_enabled": false,
+    "backend": "file",
+    "app_data_dir": "",
+    "auto_match_threshold": 0.84,
+    "uncertain_match_threshold": 0.74,
+    "min_speech_ms_for_embedding": 8000,
+    "min_quality_score": 0.65
+  },
   "codex": {
     "enabled": true,
     "proxy": "http://127.0.0.1:10808",

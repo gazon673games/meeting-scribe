@@ -57,3 +57,15 @@ class ASRPipeline:
 
     def stop(self) -> None:
         self.graph.stop_runtime()
+
+    def identity_snapshot(self) -> dict:
+        diarization = getattr(self.graph, "diarization", None)
+        if diarization is None:
+            return {}
+        export = getattr(diarization, "identity_snapshot", None)
+        if callable(export):
+            try:
+                return dict(export() or {})
+            except Exception:
+                return {}
+        return {}

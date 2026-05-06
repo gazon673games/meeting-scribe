@@ -188,6 +188,32 @@ class DiarizationRuntime:
             log_event({"type": "error", "where": "diar_assign", "error": str(e), "ts": time.time()})
             return self._fallback_speaker(seg.stream)
 
+    def identity_snapshot(self) -> Dict[str, Dict[str, dict]]:
+        snapshots: Dict[str, Dict[str, dict]] = {}
+        model_name = _embedding_backend_name(self.backend)
+        for stream, diar in self._diarizers.items():
+            items: Dict[str, dict] = {}
+            try:
+                clusters = diar.clusters_snapshot()
+            except Exception:
+                clusters = []
+            for cluster in clusters:
+                label = str(cluster.get("label") or "").strip()
+                centroid = cluster.get("centroid")
+                if not label or centroid is None:
+                    continue
+                vector = np.asarray(centroid, dtype=np.float32).reshape(-1)
+                items[label] = {
+                    "embedding": vector,
+                    "embedding_model": model_name,
+                    "embedding_dim": int(vector.shape[0]),
+                    "count": int(cluster.get("count") or 0),
+                    "last_ts": float(cluster.get("last_ts") or 0.0),
+                }
+            if items:
+                snapshots[str(stream)] = items
+        return snapshots
+
     def _fallback_speaker(self, stream: str) -> str:
         return source_speaker_label(self.source_speaker_labels, stream)
 
