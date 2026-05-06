@@ -1,0 +1,183 @@
+.source-card .select-shell select,
+.add-source-picker .select-shell select {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-dropdown {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.source-dropdown-button {
+  width: 100%;
+  min-width: 0;
+  height: 29px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--app-bg);
+  color: var(--text);
+  cursor: pointer;
+  padding: 0 10px;
+  text-align: left;
+}
+
+.source-dropdown-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.source-dropdown-button span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-dropdown-button svg {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.source-dropdown-panel {
+  position: fixed;
+  z-index: 45;
+  top: 0;
+  left: 0;
+  right: auto;
+  max-height: min(360px, calc(100vh - 24px));
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-bg-strong);
+  box-shadow: 0 18px 38px var(--shadow-soft);
+}
+
+.source-dropdown-section + .source-dropdown-section {
+  border-top: 1px solid var(--border-soft);
+}
+
+.source-dropdown-title {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.source-dropdown-section > .source-dropdown-title {
+  padding: 8px 10px 5px;
+}
+
+.source-option {
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  display: flex;
+  align-items: flex-start;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 5px 10px;
+  text-align: left;
+}
+
+.source-option:hover {
+  background: var(--hover-bg);
+}
+
+.source-option.selected {
+  background: rgba(37, 99, 235, 0.15);
+  color: #60a5fa;
+}
+
+.source-option span {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.source-dropdown-empty {
+  padding: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.process-tree-list.compact {
+  max-height: none;
+}
+
+.add-source {
+  margin-top: 12px;
+}
+
+.add-source summary,
+.add-source.empty {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.add-source summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.add-source summary::-webkit-details-marker {
+  display: none;
+}
+
+.add-source.disabled summary {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.add-source-picker {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.add-source-picker button {
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--subtle);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.add-source:not(.disabled) summary:hover,
+.add-source-picker button:not(:disabled):hover,
+.action-button:not(:disabled):hover,
+.quality-stack button:not(:disabled):hover,
+.feature-toggle:not(:disabled):hover,
+.transcript-tools button:not(:disabled):hover {
+  border-color: var(--faint);
+  background: var(--hover-bg);
+  color: var(--heading);
+}
+
+
