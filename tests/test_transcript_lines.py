@@ -30,6 +30,26 @@ class TranscriptLineTests(unittest.TestCase):
         self.assertEqual(line["speakerSource"], "test")
         self.assertEqual(line["speakerConfidence"], 0.8)
 
+    def test_ignores_small_segment_overlap_at_quality_boundaries(self) -> None:
+        previous = {"stream": "desktop", "t_start": 1290.474, "t_end": 1302.485, "speaker": "S5"}
+        current = {"stream": "desktop", "t_start": 1302.165, "t_end": 1314.176, "speaker": "Remote"}
+
+        premature = best_line_for_speaker_update(
+            [previous],
+            stream="desktop",
+            t_start=1302.165,
+            t_end=1314.176,
+        )
+        matched = best_line_for_speaker_update(
+            [previous, current],
+            stream="desktop",
+            t_start=1302.165,
+            t_end=1314.176,
+        )
+
+        self.assertIsNone(premature)
+        self.assertIs(matched, current)
+
 
 if __name__ == "__main__":
     unittest.main()

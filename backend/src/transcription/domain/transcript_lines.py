@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Optional
 
+MIN_SPEAKER_UPDATE_EVENT_OVERLAP_RATIO = 0.5
+
 
 def build_transcript_line_id(*, stream: str, t_start: Optional[float], t_end: Optional[float], ts: float) -> str:
     stream_key = _clean_part(stream or "mix")
@@ -31,12 +33,16 @@ def best_line_for_speaker_update(
     for line in candidates:
         if stream and str(line.get("stream", "")) != str(stream):
             continue
+        line_start = _optional_float(line.get("t_start"))
+        line_end = _optional_float(line.get("t_end"))
         overlap = _overlap_seconds(
-            _optional_float(line.get("t_start")),
-            _optional_float(line.get("t_end")),
+            line_start,
+            line_end,
             t_start,
             t_end,
         )
+        if not _speaker_update_overlap_is_meaningful(overlap, t_start, t_end):
+            continue
         if overlap > best_overlap:
             best_line = line
             best_overlap = overlap
@@ -94,3 +100,16 @@ def _overlap_seconds(
     if a_start is None or a_end is None or b_start is None or b_end is None:
         return 0.0
     return max(0.0, min(float(a_end), float(b_end)) - max(float(a_start), float(b_start)))
+
+
+def _speaker_update_overlap_is_meaningful(
+    overlap: float,
+    event_start: Optional[float],
+    event_end: Optional[float],
+) -> bool:
+    if overlap <= 0.0 or event_start is None or event_end is None:
+        return False
+    event_duration = max(0.0, float(event_end) - float(event_start))
+    if event_duration <= 0.0:
+        return False
+    return (float(overlap) / event_duration) >= MIN_SPEAKER_UPDATE_EVENT_OVERLAP_RATIO
