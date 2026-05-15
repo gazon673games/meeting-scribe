@@ -3,6 +3,12 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 
+def _hresult_type() -> Any:
+    import ctypes
+
+    return getattr(ctypes, "HRESULT", ctypes.c_long)
+
+
 def list_windows_session_groups() -> List[Dict[str, Any]]:
     try:
         import ctypes
@@ -59,11 +65,12 @@ def list_windows_session_groups() -> List[Dict[str, Any]]:
         IID_IAUDIO_SESSION_MANAGER2 = make_guid("{77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F}")
         IID_IAUDIO_SESSION_CONTROL2 = make_guid("{BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D}")
         PKEY_DEVICE_FRIENDLY_NAME = property_key("{A45C254E-DF1C-4EFD-8020-67D146A850E0}", 14)
+        HRESULT = _hresult_type()
 
         ole32 = ctypes.windll.ole32
-        ole32.CoInitializeEx.restype = ctypes.HRESULT
+        ole32.CoInitializeEx.restype = HRESULT
         ole32.CoInitializeEx.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-        ole32.CoCreateInstance.restype = ctypes.HRESULT
+        ole32.CoCreateInstance.restype = HRESULT
         ole32.CoCreateInstance.argtypes = [
             ctypes.POINTER(GUID),
             ctypes.c_void_p,
@@ -74,14 +81,14 @@ def list_windows_session_groups() -> List[Dict[str, Any]]:
         ole32.CoTaskMemFree.argtypes = [ctypes.c_void_p]
         ole32.CoTaskMemFree.restype = None
         ole32.PropVariantClear.argtypes = [ctypes.POINTER(PROPVARIANT)]
-        ole32.PropVariantClear.restype = ctypes.HRESULT
+        ole32.PropVariantClear.restype = HRESULT
 
         def failed(hr: int) -> bool:
             return int(hr) < 0
 
         def device_id(device: ctypes.c_void_p) -> str:
             raw = ctypes.c_void_p()
-            hr = _wincall(device, 5, ctypes.HRESULT, [ctypes.POINTER(ctypes.c_void_p)], ctypes.byref(raw))
+            hr = _wincall(device, 5, HRESULT, [ctypes.POINTER(ctypes.c_void_p)], ctypes.byref(raw))
             if failed(hr) or not raw.value:
                 return ""
             try:
@@ -91,7 +98,7 @@ def list_windows_session_groups() -> List[Dict[str, Any]]:
 
         def device_label(device: ctypes.c_void_p, fallback: str) -> str:
             store = ctypes.c_void_p()
-            hr = _wincall(device, 4, ctypes.HRESULT, [ctypes.c_uint32, ctypes.POINTER(ctypes.c_void_p)], STGM_READ, ctypes.byref(store))
+            hr = _wincall(device, 4, HRESULT, [ctypes.c_uint32, ctypes.POINTER(ctypes.c_void_p)], STGM_READ, ctypes.byref(store))
             if failed(hr) or not store:
                 return fallback
             value = PROPVARIANT()
@@ -99,7 +106,7 @@ def list_windows_session_groups() -> List[Dict[str, Any]]:
                 hr = _wincall(
                     store,
                     5,
-                    ctypes.HRESULT,
+                    HRESULT,
                     [ctypes.POINTER(PROPERTYKEY), ctypes.POINTER(PROPVARIANT)],
                     ctypes.byref(PKEY_DEVICE_FRIENDLY_NAME),
                     ctypes.byref(value),
@@ -119,7 +126,7 @@ def list_windows_session_groups() -> List[Dict[str, Any]]:
             hr = _wincall(
                 device,
                 3,
-                ctypes.HRESULT,
+                HRESULT,
                 [ctypes.POINTER(GUID), ctypes.c_uint32, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)],
                 ctypes.byref(IID_IAUDIO_SESSION_MANAGER2),
                 CLSCTX_ALL,
@@ -131,12 +138,12 @@ def list_windows_session_groups() -> List[Dict[str, Any]]:
 
             session_enum = ctypes.c_void_p()
             try:
-                hr = _wincall(manager, 5, ctypes.HRESULT, [ctypes.POINTER(ctypes.c_void_p)], ctypes.byref(session_enum))
+                hr = _wincall(manager, 5, HRESULT, [ctypes.POINTER(ctypes.c_void_p)], ctypes.byref(session_enum))
                 if failed(hr) or not session_enum:
                     return []
 
                 count = ctypes.c_int(0)
-                hr = _wincall(session_enum, 3, ctypes.HRESULT, [ctypes.POINTER(ctypes.c_int)], ctypes.byref(count))
+                hr = _wincall(session_enum, 3, HRESULT, [ctypes.POINTER(ctypes.c_int)], ctypes.byref(count))
                 if failed(hr):
                     return []
 
@@ -146,7 +153,7 @@ def list_windows_session_groups() -> List[Dict[str, Any]]:
                     hr = _wincall(
                         session_enum,
                         4,
-                        ctypes.HRESULT,
+                        HRESULT,
                         [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)],
                         index,
                         ctypes.byref(control),
@@ -159,7 +166,7 @@ def list_windows_session_groups() -> List[Dict[str, Any]]:
                         hr = _wincall(
                             control,
                             0,
-                            ctypes.HRESULT,
+                            HRESULT,
                             [ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p)],
                             ctypes.byref(IID_IAUDIO_SESSION_CONTROL2),
                             ctypes.byref(control2),
@@ -171,7 +178,7 @@ def list_windows_session_groups() -> List[Dict[str, Any]]:
 
                     pid = ctypes.c_ulong(0)
                     try:
-                        hr = _wincall(control2, 14, ctypes.HRESULT, [ctypes.POINTER(ctypes.c_ulong)], ctypes.byref(pid))
+                        hr = _wincall(control2, 14, HRESULT, [ctypes.POINTER(ctypes.c_ulong)], ctypes.byref(pid))
                     finally:
                         _com_release(control2)
                     if failed(hr) or pid.value == 0:
@@ -215,7 +222,7 @@ def list_windows_session_groups() -> List[Dict[str, Any]]:
             hr = _wincall(
                 device_enum,
                 3,
-                ctypes.HRESULT,
+                HRESULT,
                 [ctypes.c_int, ctypes.c_uint32, ctypes.POINTER(ctypes.c_void_p)],
                 E_RENDER,
                 DEVICE_STATE_ACTIVE,
@@ -251,15 +258,16 @@ def _process_label(pid: int) -> str:
 def _enumerate_windows_device_groups(collection: Any, sessions_fn: Any, device_id_fn: Any, device_label_fn: Any) -> list:
     import ctypes
 
+    HRESULT = _hresult_type()
     count = ctypes.c_uint(0)
-    hr = _wincall(collection, 3, ctypes.HRESULT, [ctypes.POINTER(ctypes.c_uint)], ctypes.byref(count))
+    hr = _wincall(collection, 3, HRESULT, [ctypes.POINTER(ctypes.c_uint)], ctypes.byref(count))
     if int(hr) < 0:
         return []
 
     groups = []
     for index in range(int(count.value)):
         device = ctypes.c_void_p()
-        hr = _wincall(collection, 4, ctypes.HRESULT, [ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)], index, ctypes.byref(device))
+        hr = _wincall(collection, 4, HRESULT, [ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)], index, ctypes.byref(device))
         if int(hr) < 0 or not device:
             continue
         try:
