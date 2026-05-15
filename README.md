@@ -19,66 +19,55 @@ Meeting Scribe is meant to make spoken work easier to review and act on:
 
 Typical use cases include product calls, support sessions, interviews, demos, research conversations, planning meetings, and long technical discussions where details matter after the call ends.
 
-## Main Pipelines
-
-### Live Transcription
+## Main Pipeline
 
 ```mermaid
-flowchart LR
-  Audio[Microphone / system / process audio]
-  Engine[Python audio engine]
-  VAD[Voice activity detection]
-  ASR[ASR profile<br/>faster-whisper / streaming]
-  Transcript[Transcript state]
+flowchart TD
+  User[User starts a session]
   UI[React desktop UI]
-  Files[Logs and transcript files]
+  IPC[Electron IPC bridge]
+  Backend[Python backend<br/>session controller]
 
-  Audio --> Engine --> VAD --> ASR --> Transcript
-  Transcript --> UI
-  Transcript --> Files
+  subgraph Capture["Audio capture"]
+    Mic[Microphone]
+    System[System loopback]
+    Process[Selected app / process audio]
+    Engine[Audio engine<br/>mixing, meters, optional recording tap]
+    VAD[Voice activity detection<br/>speech windows and silence trimming]
+  end
+
+  subgraph ASR["Transcription"]
+    Profile[ASR profile<br/>Ultra Fast / Realtime / Balanced / Quality]
+    Decoder[faster-whisper / streaming backend]
+    Segment[Timestamped ASR segments<br/>text, start, end, source]
+  end
+
+  subgraph Speakers["Speaker labeling"]
+    Diar[Diarization runtime<br/>speaker embeddings and assignments]
+    Match[Overlap-aware speaker matcher<br/>keeps quality chunk tails from rewriting old lines]
+    Identity[Speaker identity store<br/>known profiles and display names]
+  end
+
+  subgraph Transcript["Working transcript"]
+    Lines[Transcript timeline<br/>stable line ids, timestamps, sources, speaker labels]
+    Store[Session artifacts<br/>human log, jsonl, srt, wav when enabled]
+    Context[Assistant context<br/>current transcript snapshot]
+  end
+
+  User --> UI --> IPC --> Backend
+  Backend --> Engine
+  Mic --> Engine
+  System --> Engine
+  Process --> Engine
+  Engine --> VAD --> Profile --> Decoder --> Segment --> Lines
+  Segment --> Diar --> Match --> Lines
+  Identity --> Match
+  Lines --> UI
+  Lines --> Store
+  Lines --> Context
 ```
 
-### Speaker Updates
-
-```mermaid
-flowchart LR
-  Segment[ASR segment]
-  Timeline[Transcript line timeline]
-  Diar[Diarization runtime]
-  Match[Overlap-aware speaker match]
-  Identity[Speaker identity store]
-  UI[Speaker labels in UI]
-
-  Segment --> Timeline
-  Segment --> Diar --> Match
-  Timeline --> Match --> Identity --> UI
-```
-
-### Assistant Flow
-
-```mermaid
-flowchart LR
-  User[User prompt]
-  Context[Current transcript context]
-  Profile[Assistant profile]
-  Provider[Codex CLI / Ollama / local OpenAI API / GGUF]
-  Response[Assistant response]
-  UI[Assistant panel]
-
-  User --> Context --> Profile --> Provider --> Response --> UI
-```
-
-### Release Build
-
-```mermaid
-flowchart LR
-  Tag[v* git tag]
-  Checks[Tests and build checks]
-  Package[Release packaging]
-  Artifacts[Desktop archives]
-
-  Tag --> Checks --> Package --> Artifacts
-```
+The main idea is that transcription and speaker labeling are related but separate. ASR produces timestamped text lines first. Diarization then updates speaker labels by matching speaker events back onto the transcript timeline, instead of owning the transcript text itself. The assistant reads the current transcript snapshot as context; it does not sit in the audio path.
 
 ## Architecture
 
