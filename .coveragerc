@@ -1,0 +1,14 @@
+[run]
+source =
+    backend/src
+omit =
+    tests/*
+    */__pycache__/*
+    backend/test_complexity.py
+
+[report]
+show_missing = True
+skip_empty = True
+
+[html]
+directory = coverage/backend

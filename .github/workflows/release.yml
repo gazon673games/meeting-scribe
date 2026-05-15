@@ -82,7 +82,9 @@ jobs:
           npm ci
 
       - name: Run tests
-        run: python -m unittest discover -s tests -t . -v
+        run: |
+          npm run test:frontend
+          python -m unittest discover -s tests -t . -v
 
       - name: Build executable
         run: python -m tools.release.build_release --version "${{ github.ref_name }}" --artifact-suffix "${{ matrix.artifact_suffix }}"

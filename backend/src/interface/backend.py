@@ -4,6 +4,7 @@ import time
 from typing import Any, Dict, List
 
 from interface import backend_impl as _impl
+from interface.backend_parts.session_orchestration import with_default_sherpa_model
 from interface.backend_impl import ElectronBackend as _ElectronBackendImpl
 
 
@@ -30,9 +31,9 @@ class ElectronBackend(_ElectronBackendImpl):
         ).strip()
 
         if backend == "sherpa_onnx" and not sherpa_path:
-            return self._with_default_sherpa_model(params)
+            return with_default_sherpa_model(self, params)
         if backend == "online" and not _module_available("resemblyzer"):
-            return self._with_default_sherpa_model(params)
+            return with_default_sherpa_model(self, params)
         return params
 
     def _gpu_snapshot(self, *, max_age_s: float) -> List[Dict[str, Any]]:
@@ -47,4 +48,3 @@ class ElectronBackend(_ElectronBackendImpl):
 
 
 __all__ = ["ElectronBackend"]
-
