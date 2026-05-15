@@ -69,7 +69,10 @@ async function chooseRendererEndpoint(env = process.env, probe = isPortAvailable
 }
 
 function resolveViteCli() {
-  return require.resolve("vite/bin/vite.js", { paths: [projectRoot] });
+  const packageJsonPath = require.resolve("vite/package.json", { paths: [projectRoot] });
+  const packageJson = require(packageJsonPath);
+  const binPath = typeof packageJson.bin === "object" ? packageJson.bin.vite : packageJson.bin;
+  return path.join(path.dirname(packageJsonPath), binPath || "bin/vite.js");
 }
 
 function waitForHttp(url, { timeoutMs = 30000, intervalMs = 250, isAlive = () => true } = {}) {
@@ -167,5 +170,6 @@ module.exports = {
   endpointFromExplicitUrl,
   findOpenPort,
   firstConfiguredPort,
+  resolveViteCli,
   waitForHttp
 };
