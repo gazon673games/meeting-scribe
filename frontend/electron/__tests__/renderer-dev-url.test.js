@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { describe, expect, test } from "vitest";
 
 const require = createRequire(import.meta.url);
-const { chooseRendererEndpoint, endpointFromExplicitUrl } = require("../dev-runner.cjs");
+const { chooseRendererEndpoint, endpointFromExplicitUrl, resolveViteCli } = require("../dev-runner.cjs");
 const { parsePort, rendererUrlFromEnv, rendererUrlFromHostPort } = require("../renderer-url.cjs");
 
 describe("renderer dev URL configuration", () => {
@@ -32,5 +32,9 @@ describe("renderer dev URL configuration", () => {
       port: 6300,
       url: "http://localhost:6300/app"
     });
+  });
+
+  test("resolves the Vite CLI without using package-private exports", () => {
+    expect(resolveViteCli().replaceAll("\\", "/")).toMatch(/node_modules\/vite\/bin\/vite\.js$/);
   });
 });
