@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import re
 import unittest
-from pathlib import Path
 from urllib.parse import urlparse
 
+from tests import PROJECT_ROOT
 from application.codex_config import DEFAULT_CODEX_PROXY
 from infrastructure.local_llm import OLLAMA_DEFAULT_URL, OPENAI_LOCAL_DEFAULT_URL
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = PROJECT_ROOT
 
 
 def _frontend_provider_default(provider: str) -> str:

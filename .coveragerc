@@ -3,8 +3,9 @@ source =
     backend/src
 omit =
     tests/*
+    tests/**/*
     */__pycache__/*
-    backend/test_complexity.py
+    tools/quality/complexity_gate.py
 
 [report]
 show_missing = True

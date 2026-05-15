@@ -17,11 +17,11 @@ const client = vi.hoisted(() => ({
   status: vi.fn()
 }));
 
-vi.mock("../shared/api/meetingScribeClient", () => ({
+vi.mock("../../src/shared/api/meetingScribeClient", () => ({
   meetingScribeClient: client
 }));
 
-import { App } from "./App";
+import { App } from "../../src/app/App";
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));

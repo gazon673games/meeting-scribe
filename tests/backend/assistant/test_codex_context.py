@@ -4,6 +4,7 @@ import shutil
 import unittest
 from pathlib import Path
 
+from tests import PROJECT_ROOT
 from application.codex_assistant import CodexAssistantRequest, CodexAssistantResult, CodexExecutionSettings
 from application.codex_config import CodexProfile
 from application.local_paths import project_human_logs_dir
@@ -23,7 +24,7 @@ class _CapturingAssistant:
 class CodexContextTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls._tmp_parent = Path(__file__).resolve().parents[1] / "tmp_tests"
+        cls._tmp_parent = PROJECT_ROOT / "tmp_tests"
         cls._tmp_parent.mkdir(exist_ok=True)
 
     @classmethod
