@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import socket
 import subprocess
 import threading
 import time
@@ -93,6 +94,13 @@ def ensure_openai_local_runtime(profile: Any, settings: AssistantExecutionSettin
             message=f"Local LLM endpoint is not reachable at {resolved_base_url}",
             suggestion="Start the remote/local LLM server or choose a localhost profile.",
         )
+    if _localhost_port_accepts_connection(host, port):
+        raise LocalLlmError(
+            code="local_llm_port_in_use",
+            message=f"Port {host}:{port} is in use, but {resolved_base_url}/models is not reachable.",
+            retryable=False,
+            suggestion="Choose another base URL port or stop the process using that port.",
+        )
 
     model = normalize_model_name(getattr(profile, "model", ""))
     model_path = find_gguf_model(Path(settings.project_root or "."), model)
@@ -164,6 +172,14 @@ def _start_llama_server(server: Path, model_path: Path, alias: str, host: str, p
         stderr=subprocess.DEVNULL,
         creationflags=creationflags,
     )
+
+
+def _localhost_port_accepts_connection(host: str, port: int) -> bool:
+    try:
+        with socket.create_connection((host, int(port)), timeout=0.25):
+            return True
+    except OSError:
+        return False
 
 
 def _status_timeout(settings: AssistantExecutionSettings) -> int:

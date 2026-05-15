@@ -3,6 +3,8 @@ const { execFile, spawn } = require("node:child_process");
 const { existsSync, readFileSync } = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { registerIpcHandlers } = require("./ipc-handlers.cjs");
+const { rendererUrlFromEnv } = require("./renderer-url.cjs");
 
 const appRoot = app.isPackaged ? path.join(process.resourcesPath, "app") : path.resolve(__dirname, "..", "..");
 const backendRoot = app.isPackaged ? path.join(process.resourcesPath, "backend") : appRoot;
@@ -494,11 +496,11 @@ function createDebugWindow() {
 }
 
 function loadRenderer(window, query = {}) {
-  const rendererUrl = process.env.ELECTRON_RENDERER_URL || "http://127.0.0.1:5173";
   if (app.isPackaged && !process.env.ELECTRON_RENDERER_URL) {
     window.loadFile(path.join(appRoot, "build", "electron-renderer", "index.html"), { query });
     return;
   }
+  const rendererUrl = rendererUrlFromEnv(process.env);
   const url = new URL(rendererUrl);
   for (const [key, value] of Object.entries(query)) {
     url.searchParams.set(key, String(value));
@@ -507,17 +509,15 @@ function loadRenderer(window, query = {}) {
 }
 
 app.whenReady().then(() => {
-  ipcMain.handle("backend:request", (_event, method, params) => backend.request(method, params));
-  ipcMain.handle("backend:status", () => backend.status());
-  ipcMain.handle("backend:recent-events", () => backend.recentEvents());
-  ipcMain.handle("debug:show", () => showDebugConsole());
-  ipcMain.handle("window:set-content-protection", (event, enabled) => {
-    return setWindowContentProtection(BrowserWindow.fromWebContents(event.sender), enabled);
+  registerIpcHandlers({
+    BrowserWindow,
+    backend,
+    getResourceUsage,
+    ipcMain,
+    reloadWindow,
+    setWindowContentProtection,
+    showDebugConsole
   });
-  ipcMain.handle("window:reload", (event) => {
-    return reloadWindow(BrowserWindow.fromWebContents(event.sender));
-  });
-  ipcMain.handle("app:get-resource-usage", () => getResourceUsage());
   createWindow();
 
   app.on("activate", () => {
