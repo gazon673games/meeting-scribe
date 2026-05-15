@@ -9,7 +9,7 @@ from application.asr_profiles import PROFILE_ULTRA_FAST
 from interface.backend import ElectronBackend
 from interface.session_controller import HeadlessSessionController
 from settings.infrastructure.json_config_repository import JsonConfigRepository
-from tests.electron_interface_fakes import (
+from tests.helpers.electron_interface_fakes import (
     _DeviceCatalog,
     _FakeAudioRuntimeFactory,
     _FakeAudioSourceFactory,

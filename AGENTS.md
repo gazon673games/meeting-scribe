@@ -24,6 +24,7 @@ Working rules:
 - Use `rg` before opening files. Open the smallest likely file first.
 - Use `apply_patch` for manual file edits.
 - Keep new tests compact and split by behavior/module; do not dump unrelated cases into one large file.
+- Put React tests under `frontend/renderer/tests/` mirroring `src/`, Electron tests under `frontend/electron/tests/`, and backend tests under `tests/backend/<area>/`.
 - Prefer existing architecture and helper functions over new abstractions.
 - Keep documentation and code edits ASCII unless the target file already relies on non-ASCII text.
 

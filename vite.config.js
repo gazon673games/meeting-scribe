@@ -21,7 +21,7 @@ export default defineConfig({
     emptyOutDir: true
   },
   test: {
-    include: ["src/**/*.test.{js,jsx}", "../electron/**/*.test.js"],
+    include: ["tests/**/*.test.{js,jsx}", "../electron/tests/**/*.test.js"],
     setupFiles: ["src/test/setup.js"],
     coverage: {
       provider: "v8",
@@ -30,10 +30,10 @@ export default defineConfig({
       reportsDirectory: "../../coverage/frontend",
       include: ["src/**/*.{js,jsx}", "../electron/**/*.{cjs,js}", "frontend/electron/**/*.{cjs,js}"],
       exclude: [
-        "src/**/*.test.{js,jsx}",
+        "tests/**",
         "src/test/**",
-        "../electron/**/__tests__/**",
-        "frontend/electron/**/__tests__/**",
+        "../electron/tests/**",
+        "frontend/electron/tests/**",
         "../electron/assets/**",
         "frontend/electron/assets/**",
         "../electron/run-electron.cjs"

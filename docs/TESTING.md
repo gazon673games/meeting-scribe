@@ -6,6 +6,13 @@ This project has two test stacks:
 
 Run commands from the repository root.
 
+## Test Layout
+
+- React renderer tests live in `frontend/renderer/tests/` and mirror `frontend/renderer/src/`.
+- Electron main/preload tests live in `frontend/electron/tests/`.
+- Backend Python tests live in `tests/backend/<area>/`; shared test helpers live in `tests/helpers/`.
+- Keep new tests out of production source folders and avoid adding flat root-level test files.
+
 ## Quick Commands
 
 ```powershell
@@ -59,7 +66,7 @@ Backend coverage requires `coverage.py` in the active Python environment. The pr
 Run the focused test file first:
 
 ```powershell
-python -m unittest tests.test_transcript_lines -v
+python -m unittest tests.backend.domain.test_transcript_lines -v
 ```
 
 Then run backend tests:
@@ -73,11 +80,11 @@ python -m unittest discover -s tests -t . -v
 Useful focused suites:
 
 ```powershell
-python -m unittest tests.test_transcript_lines tests.test_electron_interface_session -v
+python -m unittest tests.backend.domain.test_transcript_lines tests.backend.interface.test_electron_interface_session -v
 ```
 
 ```powershell
-python -m unittest tests.test_diarization_updates tests.test_diarization_runtime -v
+python -m unittest tests.backend.diarization.test_diarization_updates tests.backend.diarization.test_diarization_runtime -v
 ```
 
 Then run:
@@ -95,9 +102,9 @@ npm run test:frontend
 ```
 
 Relevant tests live in:
-- `frontend/electron/__tests__/ipc-handlers.test.js`
-- `frontend/electron/__tests__/preload-api.test.js`
-- `frontend/electron/__tests__/renderer-dev-url.test.js`
+- `frontend/electron/tests/ipc-handlers.test.js`
+- `frontend/electron/tests/preload-api.test.js`
+- `frontend/electron/tests/renderer-dev-url.test.js`
 
 ### React UI Behavior
 
@@ -108,16 +115,16 @@ npm run test:frontend
 ```
 
 Relevant tests live near the feature or app flow:
-- `frontend/renderer/src/app/App.flow.test.jsx`
-- `frontend/renderer/src/features/assistant/AssistantColumn.test.jsx`
-- `frontend/renderer/src/features/transcript/TranscriptList.test.jsx`
+- `frontend/renderer/tests/app/App.flow.test.jsx`
+- `frontend/renderer/tests/features/assistant/AssistantColumn.test.jsx`
+- `frontend/renderer/tests/features/transcript/TranscriptList.test.jsx`
 
 ### Config, Settings, Or Start Params
 
 Run:
 
 ```powershell
-python -m unittest tests.test_runtime_config tests.test_commands tests.test_electron_interface_session -v
+python -m unittest tests.backend.infrastructure.test_runtime_config tests.backend.application.test_commands tests.backend.interface.test_electron_interface_session -v
 ```
 
 For frontend settings mapping:
@@ -131,7 +138,7 @@ npm run test:frontend
 Run:
 
 ```powershell
-python -m unittest tests.test_local_llm tests.test_local_llm_runtime_parts -v
+python -m unittest tests.backend.assistant.test_local_llm tests.backend.assistant.test_local_llm_runtime_parts -v
 ```
 
 Also run frontend tests if assistant profile UI changed:

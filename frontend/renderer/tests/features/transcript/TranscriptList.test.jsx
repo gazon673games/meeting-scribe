@@ -4,7 +4,7 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 
-import { TranscriptList } from "./TranscriptList";
+import { TranscriptList } from "../../../src/features/transcript/TranscriptList";
 
 describe("TranscriptList", () => {
   test("renders transcript lines with speaker labels", () => {

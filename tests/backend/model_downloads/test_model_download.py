@@ -5,6 +5,7 @@ import unittest
 import os
 from pathlib import Path
 
+from tests import PROJECT_ROOT
 from application.model_download import (
     delete_local_model,
     inspect_model_path,
@@ -20,7 +21,7 @@ from application.model_download import (
 class ModelDownloadTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls._tmp_parent = Path(__file__).resolve().parents[1] / "tmp_tests"
+        cls._tmp_parent = PROJECT_ROOT / "tmp_tests"
         cls._tmp_parent.mkdir(exist_ok=True)
 
     @classmethod

@@ -5,7 +5,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 
-import { AssistantColumn } from "./AssistantColumn";
+import { AssistantColumn } from "../../../src/features/assistant/AssistantColumn";
 
 function renderAssistant(overrides = {}) {
   const props = {
