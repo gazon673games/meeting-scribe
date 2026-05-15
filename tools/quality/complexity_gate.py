@@ -8,8 +8,8 @@ Thresholds (radon scale: A=1-5, B=6-10, C=11-15, D=16-20, E=21-25, F=26+):
   MAX_CRITICAL     — max allowed count of critical units
 
 Run:
-  python test_complexity.py
-  python test_complexity.py --complex-min 8 --critical-min 15 --max-pct 5 --max-critical 0
+  python tools/quality/complexity_gate.py
+  python tools/quality/complexity_gate.py --complex-min 8 --critical-min 15 --max-pct 5 --max-critical 0
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ CRITICAL_MIN = 21    # E and above >> zero-tolerance
 MAX_COMPLEX_PCT = 2  # at most 2 % of all units may be "complex"
 MAX_CRITICAL = 0     # no critical units allowed
 
-SRC_DIR = Path(__file__).parent / "src"
+SRC_DIR = Path(__file__).resolve().parents[2] / "backend" / "src"
 
 
 def collect(src: Path) -> list[dict]:

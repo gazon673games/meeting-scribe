@@ -4,13 +4,14 @@ import shutil
 import unittest
 from pathlib import Path
 
+from tests import PROJECT_ROOT
 from application.llm_model_download import _choose_gguf_file, list_llm_models, parse_llm_source
 
 
 class LlmModelDownloadTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls._tmp_parent = Path(__file__).resolve().parents[1] / "tmp_tests"
+        cls._tmp_parent = PROJECT_ROOT / "tmp_tests"
         cls._tmp_parent.mkdir(exist_ok=True)
 
     @classmethod

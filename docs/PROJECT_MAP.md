@@ -5,7 +5,8 @@
 - `backend/` - Python backend runtime, application logic, ASR, diarization, persistence, and Electron bridge.
 - `frontend/electron/` - Electron main process, preload API, IPC handlers, dev launcher, and app assets.
 - `frontend/renderer/` - React UI and client-side state management.
-- `tests/` - Python unit and integration-style backend tests.
+- `tests/backend/` - Python unit and integration-style backend tests grouped by area.
+- `tests/helpers/` - shared Python test helpers.
 - `tools/` - Release, coverage, and helper scripts.
 - `requirements/` - Python dependency files.
 - `config.json` - Local runtime configuration used by the app.
@@ -122,10 +123,10 @@ Quality mode uses longer segments and overlap. With diarization sidecar enabled,
 
 ## Useful Test Anchors
 
-- Transcript matching: `tests/test_transcript_lines.py`
-- Session transcript/speaker updates: `tests/test_electron_interface_session.py`
-- Diarization sidecar: `tests/test_diarization_updates.py`
-- Diarization runtime: `tests/test_diarization_runtime.py`
-- Electron IPC/preload: `frontend/electron/__tests__/`
-- React app flow: `frontend/renderer/src/app/App.flow.test.jsx`
-- Local LLM: `tests/test_local_llm.py`, `tests/test_local_llm_runtime_parts.py`
+- Transcript matching: `tests/backend/domain/test_transcript_lines.py`
+- Session transcript/speaker updates: `tests/backend/interface/test_electron_interface_session.py`
+- Diarization sidecar: `tests/backend/diarization/test_diarization_updates.py`
+- Diarization runtime: `tests/backend/diarization/test_diarization_runtime.py`
+- Electron IPC/preload: `frontend/electron/tests/`
+- React app flow: `frontend/renderer/tests/app/App.flow.test.jsx`
+- Local LLM: `tests/backend/assistant/test_local_llm.py`, `tests/backend/assistant/test_local_llm_runtime_parts.py`
