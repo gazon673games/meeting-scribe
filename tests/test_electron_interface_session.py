@@ -274,6 +274,46 @@ class ElectronInterfaceSessionTests(unittest.TestCase):
             self.assertEqual(asr_factory.settings.diar_backend, "sherpa_onnx")
             self.assertEqual(asr_factory.settings.diar_sherpa_embedding_model_path, str(model_path))
 
+    def test_backend_uses_cached_sherpa_model_when_sherpa_backend_path_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            spec = RECOMMENDED_DIARIZATION_MODELS[0]
+            model_dir = diarization_models_dir(root, root / "models")
+            model_dir.mkdir(parents=True)
+            model_path = model_dir / spec.file_name
+            model_path.write_bytes(b"onnx")
+            repository = JsonConfigRepository(root / "config.json")
+            repository.write(
+                {
+                    "ui": {"asr_enabled": True, "model": "medium", "lang": "en"},
+                    "asr": {
+                        "diarization_enabled": True,
+                        "diar_backend": "sherpa_onnx",
+                        "diar_sherpa_embedding_model_path": "",
+                    },
+                    "models": {"cache_dir": str(root / "models")},
+                }
+            )
+            asr_factory = _FakeAsrRuntimeFactory()
+            controller = HeadlessSessionController(
+                project_root=root,
+                audio_runtime_factory=_FakeAudioRuntimeFactory(),
+                audio_source_factory=_FakeAudioSourceFactory(),
+                wav_recorder_factory=_FakeWavRecorderFactory(),
+                asr_runtime_factory=asr_factory,
+                transcription_startup_service=TranscriptionStartupService(),
+            )
+            backend = ElectronBackend(root, repository, _DeviceCatalog(), controller)
+
+            backend.handle("list_devices")
+            backend.handle("add_source", {"deviceId": "input:0"})
+            with patch("application.model_download.is_model_cached", return_value=True):
+                backend.handle("start_session", {})
+            backend.handle("stop_session", {"runOfflinePass": False})
+
+            self.assertEqual(asr_factory.settings.diar_backend, "sherpa_onnx")
+            self.assertEqual(asr_factory.settings.diar_sherpa_embedding_model_path, str(model_path))
+
     def test_headless_session_applies_post_fact_speaker_update(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -352,3 +392,48 @@ class ElectronInterfaceSessionTests(unittest.TestCase):
             self.assertEqual(line["speakerSource"], "test")
             self.assertTrue(any(kind == "transcript_line" for kind, _ in events))
 
+    def test_headless_session_keeps_quality_overlap_update_pending_for_next_line(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            controller = HeadlessSessionController(
+                project_root=root,
+                audio_runtime_factory=_FakeAudioRuntimeFactory(),
+                audio_source_factory=_FakeAudioSourceFactory(),
+                wav_recorder_factory=_FakeWavRecorderFactory(),
+            )
+
+            controller._handle_asr_event(  # noqa: SLF001
+                UtteranceEvent(
+                    text="old speaker segment",
+                    stream="desktop_audio",
+                    speaker="S5",
+                    t_start=1290.474,
+                    t_end=1302.485,
+                    ts=1303.0,
+                )
+            )
+            controller._handle_asr_event(  # noqa: SLF001
+                TranscriptSpeakerUpdateEvent(
+                    stream="desktop_audio",
+                    speaker="S6",
+                    t_start=1302.165,
+                    t_end=1314.176,
+                    source="diarization_sidecar",
+                    ts=1303.2,
+                )
+            )
+            controller._handle_asr_event(  # noqa: SLF001
+                UtteranceEvent(
+                    text="new speaker segment",
+                    stream="desktop_audio",
+                    speaker="Remote",
+                    t_start=1302.165,
+                    t_end=1314.176,
+                    ts=1315.0,
+                )
+            )
+
+            lines = controller.snapshot()["transcript"]
+            self.assertEqual(lines[0]["speaker"], "S5")
+            self.assertEqual(lines[1]["speaker"], "S6")
+            self.assertEqual(lines[1]["speakerSource"], "diarization_sidecar")
