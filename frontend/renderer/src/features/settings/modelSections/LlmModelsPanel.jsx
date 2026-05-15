@@ -5,6 +5,7 @@ import { normalizeAssistantProfiles } from "../../../entities/settings/model";
 import { meetingScribeClient } from "../../../shared/api/meetingScribeClient";
 import { Field } from "../../../shared/ui/Field";
 import { InnerCollapsible } from "../../../shared/ui/InnerCollapsible";
+import { defaultBaseUrl } from "../assistant/profileUtils";
 import { LlmModelRow } from "../LlmModelRow";
 import { formatError, runWithPending, useModelList } from "./useModelList";
 
@@ -21,7 +22,7 @@ function createLocalProfile(id, alias) {
     model: alias,
     reasoning_effort: "",
     codex_profile: "",
-    base_url: "http://127.0.0.1:1234/v1",
+    base_url: defaultBaseUrl("openai_local"),
     api_key: "",
     temperature: "",
     max_tokens: 0,

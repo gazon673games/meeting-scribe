@@ -1,6 +1,7 @@
 const { spawn } = require("node:child_process");
 const { existsSync, readdirSync } = require("node:fs");
 const path = require("node:path");
+const { rendererUrlFromEnv } = require("./renderer-url.cjs");
 
 const projectRoot = path.resolve(__dirname, "..", "..");
 
@@ -36,7 +37,7 @@ function resolveElectronExecutable() {
 const electronExe = resolveElectronExecutable();
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
-env.ELECTRON_RENDERER_URL = env.ELECTRON_RENDERER_URL || "http://127.0.0.1:5173";
+env.ELECTRON_RENDERER_URL = env.ELECTRON_RENDERER_URL || rendererUrlFromEnv(env);
 
 const child = spawn(electronExe, [projectRoot], {
   cwd: projectRoot,
