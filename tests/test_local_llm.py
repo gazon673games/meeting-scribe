@@ -65,7 +65,7 @@ class LocalLlmProviderTests(unittest.TestCase):
         )
         opener = _Opener(_Response({"models": [{"name": "llama3.2"}]}))
 
-        with patch("infrastructure.local_llm.urllib.request.build_opener", return_value=opener):
+        with patch("infrastructure.local_llm_parts.http_client.urllib.request.build_opener", return_value=opener):
             status = OllamaLocalLlmRunner().status(_settings(Path("."), profile))
 
         self.assertTrue(status.available)
@@ -94,7 +94,7 @@ class LocalLlmProviderTests(unittest.TestCase):
                 settings=_settings(root, profile),
             )
 
-            with patch("infrastructure.local_llm.urllib.request.build_opener", return_value=opener):
+            with patch("infrastructure.local_llm_parts.http_client.urllib.request.build_opener", return_value=opener):
                 result = OllamaLocalLlmRunner().run(request)
 
         body = json.loads(opener.request.data.decode("utf-8"))
@@ -127,7 +127,7 @@ class LocalLlmProviderTests(unittest.TestCase):
                 settings=_settings(root, profile),
             )
 
-            with patch("infrastructure.local_llm.urllib.request.build_opener", return_value=opener):
+            with patch("infrastructure.local_llm_parts.http_client.urllib.request.build_opener", return_value=opener):
                 result = OpenAICompatibleLocalLlmRunner().run(request)
 
         body = json.loads(opener.request.data.decode("utf-8"))
@@ -165,7 +165,7 @@ class LocalLlmProviderTests(unittest.TestCase):
                     "infrastructure.local_llm._request_json",
                     side_effect=LocalLlmError("local_llm_unavailable", "refused"),
                 ),
-                patch("infrastructure.local_llm.subprocess.Popen", return_value=process) as popen,
+                patch("infrastructure.local_llm_parts.runtime_server.subprocess.Popen", return_value=process) as popen,
             ):
                 result = OpenAICompatibleLocalLlmRunner().ping(_settings(root, profile))
 

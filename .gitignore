@@ -11,6 +11,8 @@ human_logs/
 recordings/
 build/
 dist/
+coverage/
+.coverage
 capture_mix.wav
 tmp/
 .tmp_tests/

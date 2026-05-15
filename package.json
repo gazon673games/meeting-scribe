@@ -6,9 +6,14 @@
   "main": "frontend/electron/main.cjs",
   "scripts": {
     "start": "node frontend/electron/run-electron.cjs",
-    "dev": "concurrently -k \"vite --config vite.config.js --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && node frontend/electron/run-electron.cjs\"",
-    "dev:renderer": "vite --config vite.config.js --host 127.0.0.1",
+    "test": "npm run test:frontend && python -m unittest discover -s tests -t . -v",
+    "dev": "node frontend/electron/dev-runner.cjs",
+    "dev:renderer": "vite --config vite.config.js",
     "dev:electron": "node frontend/electron/run-electron.cjs",
+    "test:frontend": "vitest run",
+    "test:coverage": "npm run test:coverage:frontend && npm run test:coverage:backend",
+    "test:coverage:frontend": "vitest run --coverage",
+    "test:coverage:backend": "python tools/test_backend_coverage.py",
     "build": "vite build --config vite.config.js",
     "package": "python -m tools.release.build_release --version dev",
     "package:win": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/release/build_exe.ps1 -Version dev"
@@ -19,11 +24,17 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@vitest/coverage-v8": "^4.1.6",
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.0",
     "electron": "^41.3.0",
+    "jsdom": "^29.1.1",
     "rcedit": "^5.0.2",
     "vite": "^6.0.3",
+    "vitest": "^4.1.6",
     "wait-on": "^8.0.1"
   }
 }
