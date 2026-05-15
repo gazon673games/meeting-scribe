@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -69,13 +70,21 @@ Sink Input #13
                 return 0
             return -1
 
-        with patch("infrastructure.process_session_catalog_parts.windows._wincall", side_effect=fake_wincall):
-            groups = windows._enumerate_windows_device_groups(
-                collection,
-                lambda device, endpoint_id, endpoint_label: [{"pid": 10}] if endpoint_label == "Beta" else [],
-                lambda device: "endpoint-beta" if device else "",
-                lambda device, fallback: "Beta" if fallback == "Output 1" else "Alpha",
-            )
+        had_hresult = hasattr(ctypes, "HRESULT")
+        original_hresult = getattr(ctypes, "HRESULT", None)
+        if had_hresult:
+            delattr(ctypes, "HRESULT")
+        try:
+            with patch("infrastructure.process_session_catalog_parts.windows._wincall", side_effect=fake_wincall):
+                groups = windows._enumerate_windows_device_groups(
+                    collection,
+                    lambda device, endpoint_id, endpoint_label: [{"pid": 10}] if endpoint_label == "Beta" else [],
+                    lambda device: "endpoint-beta" if device else "",
+                    lambda device, fallback: "Beta" if fallback == "Output 1" else "Alpha",
+                )
+        finally:
+            if had_hresult:
+                ctypes.HRESULT = original_hresult
 
         self.assertEqual(groups, [{"id": "endpoint-beta", "label": "Beta", "sessions": [{"pid": 10}]}])
         with patch.dict("sys.modules", {"psutil": None}):
