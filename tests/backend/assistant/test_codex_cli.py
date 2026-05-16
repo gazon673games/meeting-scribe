@@ -8,7 +8,10 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from assistant.application.provider import AssistantExecutionSettings
+from assistant.application.provider import AssistantProviderError, AssistantProviderRequest
+from application.codex_config import CodexProfile
 from infrastructure.codex_cli import CodexCliRunner
+from infrastructure.codex_cli_parts.errors import codex_not_found_error, provider_info_from_error
 
 
 def _canonical_path(value: object) -> Path:
@@ -135,9 +138,41 @@ class CodexCliRunnerTests(unittest.TestCase):
             with patch("infrastructure.codex_cli.urllib.request.build_opener", return_value=opener):
                 result = runner.ping(_settings(root))
 
-            self.assertFalse(result.ok)
-            self.assertEqual(result.error_code, "network_error")
-            self.assertTrue(result.retryable)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error_code, "network_error")
+        self.assertTrue(result.retryable)
+
+    def test_run_executes_codex_command_and_private_result_helpers(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            profile = CodexProfile(id="default", label="Default", prompt="", model="gpt-5.4-mini")
+            runner = CodexCliRunner()
+            runner._resolver = _Resolver()  # type: ignore[assignment]
+            request = AssistantProviderRequest(
+                prompt="hello",
+                profile=profile,
+                original_cmd="ANSWER",
+                project_root=root,
+                settings=_settings(root),
+            )
+            completed = subprocess.CompletedProcess(["codex"], 0, stdout="", stderr="")
+
+            with (
+                patch("infrastructure.codex_cli.subprocess.run", return_value=completed) as run,
+                patch("infrastructure.codex_cli.read_output_file", return_value="assistant answer"),
+            ):
+                result = runner.run(request)
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.text, "assistant answer")
+        self.assertEqual(run.call_args.kwargs["input"], "hello")
+        self.assertEqual(runner._result(True, profile, "cmd", "ok", 0).provider, "codex")
+        self.assertEqual(
+            runner._error_result(profile, "cmd", AssistantProviderError("boom", "failed"), 0).error_code,
+            "boom",
+        )
+        self.assertFalse(runner._info_from_error(codex_not_found_error()).available)
+        self.assertFalse(provider_info_from_error(codex_not_found_error(runtime=True), provider_id="codex", provider_label="Codex").login_supported)
 
 
 if __name__ == "__main__":

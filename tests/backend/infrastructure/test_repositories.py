@@ -40,6 +40,8 @@ class RepositoryTests(unittest.TestCase):
         store = FileTranscriptStore(root)
 
         path = store.open_human_log()
+        self.assertEqual(store.current_human_log_path, path)
+        self.assertIsNotNone(store.current_human_log_handle)
         store.write_human_line("hello")
         store.close_human_log()
 
@@ -47,6 +49,8 @@ class RepositoryTests(unittest.TestCase):
         assert path is not None
         self.assertEqual(path.parent, project_human_logs_dir(root))
         self.assertIn("hello", path.read_text(encoding="utf-8"))
+        self.assertIsNone(store.current_human_log_path)
+        self.assertIsNone(store.current_human_log_handle)
 
 
 if __name__ == "__main__":
