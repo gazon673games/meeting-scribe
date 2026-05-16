@@ -250,6 +250,60 @@ class ASRRuntimeGraphAndWorkerTests(unittest.TestCase):
         self.assertTrue(any(event.get("type") == "asr_metrics" for event in logs))
         self.assertTrue(diarization.init_called)
 
+    def test_transcription_worker_run_consumes_segment_before_stop(self) -> None:
+        seg_queue: queue.Queue = queue.Queue()
+        logs = []
+        stop = threading.Event()
+        segment = Segment("mic", 0.0, 0.5, MonoAudio16kBuffer.from_array(np.ones(800, dtype=np.float32)), enqueue_ts=0.0)
+        seg_queue.put(segment)
+
+        class _StoppingBackend(_ASRBackend):
+            def transcribe(self, samples, *, beam_size=None):  # noqa: ANN001
+                stop.set()
+                return super().transcribe(samples, beam_size=beam_size)
+
+        worker = TranscriptionWorkerRuntime(
+            config=TranscriptionWorkerConfig(
+                model_name="tiny",
+                language="en",
+                device="cpu",
+                compute_type="int8",
+                cpu_threads=1,
+                num_workers=1,
+                beam_size=1,
+                initial_prompt=None,
+                text_dedup_enabled=False,
+                text_dedup_window=10,
+                adaptive_beam_enabled=False,
+                log_speaker_labels=True,
+                init_diarization=False,
+                diarization_blocking_lookup=False,
+            ),
+            segment_queue=seg_queue,
+            stop_event=stop,
+            log_event=logs.append,
+            metrics=ASRMetrics(latency_window=4, emit_interval_s=0.0),
+            overload=OverloadController(
+                enter_qsize=10,
+                exit_qsize=0,
+                hard_qsize=20,
+                hold_s=0.0,
+                beam_cap=1,
+                overlap_ms=80,
+                max_segment_s=3.0,
+            ),
+            beam_controller=AdaptiveBeam(min_beam=1, max_beam=1, cur_beam=1),
+            diarization=_Diarization(),
+            utterances=UtteranceAggregator(enabled=False, gap_s=0.5, max_s=3.0, flush_s=1.0, log_speaker_labels=True),
+            asr_backend_factory=lambda **kwargs: _StoppingBackend(),
+        )
+
+        worker.run()
+
+        self.assertTrue(stop.is_set())
+        self.assertTrue(any(event.get("type") == "asr_init_ok" for event in logs))
+        self.assertTrue(any(event.get("type") == "segment" for event in logs))
+
 
 if __name__ == "__main__":
     unittest.main()
