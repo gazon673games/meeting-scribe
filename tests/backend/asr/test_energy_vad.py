@@ -5,6 +5,7 @@ import unittest
 import numpy as np
 
 from asr.infrastructure.vad import EnergyVAD
+from asr.infrastructure.vad import _SpeechStateMachine
 
 
 def _sine_frame(freq_hz: float, amplitude: float, sample_rate: int, frame_len: int) -> np.ndarray:
@@ -13,6 +14,20 @@ def _sine_frame(freq_hz: float, amplitude: float, sample_rate: int, frame_len: i
 
 
 class EnergyVADTests(unittest.TestCase):
+    def test_reset_and_speech_long_enough_clear_accumulated_state(self) -> None:
+        sm = _SpeechStateMachine(hangover_frames=1, min_speech_frames=2, min_end_silence_frames=0)
+        sm.update(True)
+        sm.update(True)
+        self.assertTrue(sm.speech_long_enough())
+        sm.reset()
+        self.assertFalse(sm.speech_long_enough())
+
+        vad = EnergyVAD(energy_threshold=0.001, min_speech_ms=20, hangover_ms=20)
+        vad.is_speech_frame(np.ones(vad.frame_len, dtype=np.float32) * 0.1)
+        self.assertTrue(vad.speech_long_enough())
+        vad.reset()
+        self.assertFalse(vad.speech_long_enough())
+
     def test_strong_voiced_speech_frame_is_detected(self) -> None:
         vad = EnergyVAD(
             sample_rate=16000,

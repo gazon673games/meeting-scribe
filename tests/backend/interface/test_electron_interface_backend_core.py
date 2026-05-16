@@ -10,11 +10,13 @@ from interface.backend import ElectronBackend
 from interface.session_controller import HeadlessSessionController
 from settings.infrastructure.json_config_repository import JsonConfigRepository
 from tests.helpers.electron_interface_fakes import (
+    _FakeAsrRuntimeFactory,
     _DeviceCatalog,
     _FakeAudioRuntimeFactory,
     _FakeAudioSourceFactory,
     _FakeWavRecorderFactory,
 )
+from transcription.application.startup_service import TranscriptionStartupService
 
 
 class ElectronInterfaceBackendCoreTests(unittest.TestCase):
@@ -79,6 +81,37 @@ class ElectronInterfaceBackendCoreTests(unittest.TestCase):
             self.assertTrue(started["wavRecording"])
             self.assertFalse(runtime_factory.engine.output_enabled)
             self.assertFalse(wav_factory.writer.recording)
+
+    def test_backend_toggles_source_enabled_while_session_is_running(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            repository = JsonConfigRepository(root / "config.json")
+            repository.write({})
+            runtime_factory = _FakeAudioRuntimeFactory()
+            asr_factory = _FakeAsrRuntimeFactory()
+            controller = HeadlessSessionController(
+                project_root=root,
+                audio_runtime_factory=runtime_factory,
+                audio_source_factory=_FakeAudioSourceFactory(),
+                wav_recorder_factory=_FakeWavRecorderFactory(),
+                asr_runtime_factory=asr_factory,
+                transcription_startup_service=TranscriptionStartupService(),
+            )
+            backend = ElectronBackend(root, repository, _DeviceCatalog(), controller)
+
+            backend.handle("list_devices")
+            backend.handle("add_source", {"deviceId": "input:0"})
+            backend.handle("start_session", {"asrEnabled": True, "skipModelDownload": True})
+            muted = backend.handle("set_source_enabled", {"name": "mic", "enabled": False})
+            muted_tap_sources = runtime_factory.engine.tap_config["sources"]
+            unmuted = backend.handle("set_source_enabled", {"name": "mic", "enabled": True})
+            unmuted_tap_sources = runtime_factory.engine.tap_config["sources"]
+            backend.handle("stop_session", {"runOfflinePass": False})
+
+            self.assertFalse(muted["enabled"])
+            self.assertTrue(unmuted["enabled"])
+            self.assertEqual(muted_tap_sources, [])
+            self.assertEqual(unmuted_tap_sources, ["mic"])
 
     def test_runtime_state_is_lightweight_and_resource_usage_can_skip_gpu(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
@@ -201,4 +234,3 @@ class ElectronInterfaceBackendCoreTests(unittest.TestCase):
 
             self.assertEqual(result["models"][0]["label"], model_path.name)
             self.assertEqual(result["models"][0]["modelAlias"], "Meta-Llama-3-8B-Instruct-Q4_K_M")
-

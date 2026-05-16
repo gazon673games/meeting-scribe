@@ -96,6 +96,7 @@ class AudioEngineAndInfrastructureTests(unittest.TestCase):
     def test_engine_start_buffers_audio_and_reports_runtime_meters(self) -> None:
         fmt = AudioFormat(sample_rate=48_000, channels=2, blocksize=2)
         engine = AudioEngine(fmt, queue.Queue(), max_source_buffer_blocks=1, tap_queue=queue.Queue(), tap_queue_max=5)
+        self.assertEqual(engine.format, fmt)
 
         with self.assertRaises(RuntimeError):
             engine.start()
@@ -132,8 +133,10 @@ class AudioEngineAndInfrastructureTests(unittest.TestCase):
         self.assertEqual(meters["drops"]["dropped_tap_blocks"], 1)
 
         engine.set_source_enabled("mic", False)
+        engine.set_source_delay_ms("mic", 25)
         source.callback("mic", np.array([1.0], dtype=np.float32))
         engine.stop()
+        engine.remove_source("mic")
         engine.stop()
 
         self.assertFalse(engine.is_running())
@@ -202,6 +205,7 @@ class AudioEngineAndInfrastructureTests(unittest.TestCase):
             wav_writer._stop = _StopAfterOne()  # type: ignore[method-assign]
             wav_writer.start_recording(Path("out.wav"), fmt)
             self.assertTrue(wav_writer.is_recording())
+            self.assertEqual(wav_writer.target_path(), Path("out.wav"))
             wav_writer.run()
             self.assertEqual(wav_writer.written_blocks(), 1)
             self.assertEqual(wav_writer.drained_blocks(), 1)

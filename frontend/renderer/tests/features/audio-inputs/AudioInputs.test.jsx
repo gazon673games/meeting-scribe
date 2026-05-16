@@ -96,4 +96,21 @@ describe("AudioInputs", () => {
     expect(props.onToggle).toHaveBeenCalledWith(expect.objectContaining({ name: "system" }));
     expect(client.request).not.toHaveBeenCalled();
   });
+
+  test("keeps source switches available while device selection is locked during capture", async () => {
+    const user = userEvent.setup();
+    const props = renderInputs({ sourceSelectionLocked: true });
+    const micCard = screen.getByText("Microphone").closest(".source-card");
+    const virtualRemove = screen.getByRole("button", { name: /Remove Virtual Cable/i });
+    const virtualCard = virtualRemove.closest(".source-card");
+
+    expect(within(micCard).getByRole("combobox")).toBeDisabled();
+    expect(virtualRemove).toBeDisabled();
+
+    await user.click(micCard.querySelector(".switch-button"));
+    await user.click(virtualCard.querySelector(".switch-button"));
+
+    expect(props.onToggle).toHaveBeenNthCalledWith(1, expect.objectContaining({ name: "mic" }));
+    expect(props.onToggle).toHaveBeenNthCalledWith(2, expect.objectContaining({ name: "virtual" }));
+  });
 });

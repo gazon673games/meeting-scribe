@@ -1,10 +1,11 @@
-const { app, BrowserWindow, dialog, ipcMain } = require("electron");
-const { execFile, spawn } = require("node:child_process");
-const { existsSync, readFileSync } = require("node:fs");
-const os = require("node:os");
+const mainDeps = global.__MEETING_SCRIBE_MAIN_DEPS__ || {};
+const { app, BrowserWindow, dialog, ipcMain } = mainDeps.electron || require("electron");
+const { execFile, spawn } = mainDeps.childProcess || require("node:child_process");
+const { existsSync, readFileSync } = mainDeps.fs || require("node:fs");
+const os = mainDeps.os || require("node:os");
 const path = require("node:path");
-const { registerIpcHandlers } = require("./ipc-handlers.cjs");
-const { rendererUrlFromEnv } = require("./renderer-url.cjs");
+const { registerIpcHandlers } = mainDeps.ipcHandlers || require("./ipc-handlers.cjs");
+const { rendererUrlFromEnv } = mainDeps.rendererUrl || require("./renderer-url.cjs");
 
 const appRoot = app.isPackaged ? path.join(process.resourcesPath, "app") : path.resolve(__dirname, "..", "..");
 const backendRoot = app.isPackaged ? path.join(process.resourcesPath, "backend") : appRoot;
@@ -508,32 +509,56 @@ function loadRenderer(window, query = {}) {
   window.loadURL(url.toString());
 }
 
-app.whenReady().then(() => {
-  registerIpcHandlers({
-    BrowserWindow,
-    backend,
-    getResourceUsage,
-    ipcMain,
-    reloadWindow,
-    setWindowContentProtection,
-    showDebugConsole
-  });
-  createWindow();
+function boot() {
+  app.whenReady().then(() => {
+    registerIpcHandlers({
+      BrowserWindow,
+      backend,
+      getResourceUsage,
+      ipcMain,
+      reloadWindow,
+      setWindowContentProtection,
+      showDebugConsole
+    });
+    createWindow();
 
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow();
+      }
+    });
+  });
+
+  app.on("before-quit", () => {
+    app.isQuitting = true;
+    backend.stop();
+  });
+
+  app.on("window-all-closed", () => {
+    if (process.platform !== "darwin") {
+      app.quit();
     }
   });
-});
+}
 
-app.on("before-quit", () => {
-  app.isQuitting = true;
-  backend.stop();
-});
+if (!global.__MEETING_SCRIBE_MAIN_DISABLE_BOOT__) {
+  boot();
+}
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
-});
+module.exports = {
+  PythonBackend,
+  backend,
+  boot,
+  createDebugWindow,
+  createWindow,
+  electronResourceUsage,
+  getResourceUsage,
+  loadRenderer,
+  nvidiaGpuUsage,
+  readSavedContentProtection,
+  reloadWindow,
+  setWindowContentProtection,
+  showDebugConsole,
+  stoppedResultForMethod,
+  toNumber
+};

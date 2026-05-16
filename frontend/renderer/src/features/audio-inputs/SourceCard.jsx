@@ -12,6 +12,7 @@ export function SourceCard({
   picker: Picker,
   pickerProps = {},
   removable = false,
+  selectionDisabled = false,
   source,
   title,
   onAdd,
@@ -28,6 +29,7 @@ export function SourceCard({
   const selectedLabel = selectedLabelText(selected);
   const level = Math.max(0, Math.min(100, Number(source?.level || 0)));
   const meterClass = level > 80 ? "hot" : level > 45 ? "warm" : "";
+  const devicePickerDisabled = disabled || selectionDisabled;
   const canToggle = sourceToggleEnabled(disabled, source, selected);
 
   React.useEffect(() => {
@@ -35,7 +37,7 @@ export function SourceCard({
   }, [preferredId, selectableDevices]);
 
   const handleSelectDevice = async (next) => {
-    if (!next) {
+    if (!next || devicePickerDisabled) {
       return;
     }
     setSelectedId(next.id);
@@ -53,7 +55,7 @@ export function SourceCard({
   };
 
   const handleRemove = () => {
-    if (!source || disabled || !onRemove) {
+    if (!source || devicePickerDisabled || !onRemove) {
       return;
     }
     onRemove(source);
@@ -71,7 +73,7 @@ export function SourceCard({
             <button
               aria-label={`Remove ${title}`}
               className="source-remove"
-              disabled={disabled || !onRemove}
+              disabled={devicePickerDisabled || !onRemove}
               title="Remove source"
               type="button"
               onClick={handleRemove}
@@ -90,7 +92,7 @@ export function SourceCard({
       <SourceCardDevicePicker
         Picker={Picker}
         devices={devices}
-        disabled={disabled}
+        disabled={devicePickerDisabled}
         handleSelect={handleSelect}
         handleSelectDevice={handleSelectDevice}
         pickerProps={pickerProps}
