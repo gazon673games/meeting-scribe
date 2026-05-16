@@ -15,6 +15,11 @@ class _Stop:
         return False
 
 
+class _StopSet:
+    def is_set(self) -> bool:
+        return True
+
+
 class _Diarization:
     enabled = True
     backend = "online"
@@ -47,6 +52,31 @@ def _segment() -> Segment:
 
 
 class DiarizationUpdateRuntimeTests(unittest.TestCase):
+    def test_run_returns_when_disabled_and_run_safe_reports_errors(self) -> None:
+        records: list[dict] = []
+        runtime = DiarizationUpdateRuntime(
+            config=DiarizationUpdateConfig(enabled=False),
+            segment_queue=queue.Queue(),
+            stop_event=_Stop(),
+            diarization=_Diarization("S1"),
+            log_event=records.append,
+        )
+        runtime.run()
+        self.assertEqual(records, [])
+
+        runtime = DiarizationUpdateRuntime(
+            config=DiarizationUpdateConfig(enabled=True),
+            segment_queue=queue.Queue(),
+            stop_event=_StopSet(),
+            diarization=_Diarization("S1"),
+            log_event=records.append,
+        )
+        runtime.run()
+        self.assertTrue(any(record.get("type") == "diar_sidecar_started" for record in records))
+        runtime.run = lambda: (_ for _ in ()).throw(RuntimeError("sidecar failed"))  # type: ignore[method-assign]
+        runtime.run_safe()
+        self.assertEqual(records[-1]["where"], "diar_sidecar")
+
     def test_emits_speaker_update_for_non_fallback_speaker(self) -> None:
         segment_queue: queue.Queue[Segment] = queue.Queue()
         segment_queue.put_nowait(_segment())

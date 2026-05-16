@@ -89,8 +89,9 @@ export function AudioInputs({
       <div className="source-stack">
         <SourceCard
           devices={devices.input}
-          disabled={disabled || sourceSelectionLocked}
+          disabled={disabled}
           icon={<Mic size={16} />}
+          selectionDisabled={sourceSelectionLocked}
           source={inputSources[0]}
           title="Microphone"
           onAdd={onAdd}
@@ -99,7 +100,7 @@ export function AudioInputs({
         />
         <SourceCard
           devices={devices.loopback}
-          disabled={disabled || sourceSelectionLocked}
+          disabled={disabled}
           icon={<Monitor size={16} />}
           picker={useProcessDropdown ? SystemAudioPicker : undefined}
           pickerProps={{
@@ -108,6 +109,7 @@ export function AudioInputs({
             loading: processLoading,
             onRefresh: loadProcessCatalog
           }}
+          selectionDisabled={sourceSelectionLocked}
           source={systemSources[0]}
           title="System Audio"
           onAdd={onAdd}
@@ -118,9 +120,10 @@ export function AudioInputs({
           <SourceCard
             key={source.name}
             devices={[]}
-            disabled={disabled || sourceSelectionLocked}
+            disabled={disabled}
             icon={<Activity size={16} />}
             removable
+            selectionDisabled={sourceSelectionLocked}
             source={source}
             title={source.label || source.name}
             onAdd={onAdd}
