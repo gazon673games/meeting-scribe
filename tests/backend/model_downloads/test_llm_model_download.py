@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import shutil
+import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from tests import PROJECT_ROOT
-from application.llm_model_download import _choose_gguf_file, list_llm_models, parse_llm_source
+from application.llm_model_download import LlmSource, _choose_gguf_file, _resolve_repo_source, list_llm_models, parse_llm_source
 
 
 class LlmModelDownloadTests(unittest.TestCase):
@@ -69,6 +72,21 @@ class LlmModelDownloadTests(unittest.TestCase):
         )
 
         self.assertEqual(filename, "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf")
+
+    def test_resolves_repo_source_by_querying_huggingface_siblings(self) -> None:
+        siblings = [
+            SimpleNamespace(rfilename="model-Q8_0.gguf"),
+            {"rfilename": "model-Q4_K_M.gguf"},
+        ]
+        fake_hf = SimpleNamespace(model_info=lambda repo_id: SimpleNamespace(siblings=siblings))
+        source = LlmSource(filename="", folder="repo", repo_id="org/repo")
+
+        with patch.dict(sys.modules, {"huggingface_hub": fake_hf}):
+            resolved = _resolve_repo_source(source, proxy="http://proxy")
+
+        ready = LlmSource(filename="ready.gguf", folder="repo")
+        self.assertEqual(resolved.filename, "model-Q4_K_M.gguf")
+        self.assertIs(_resolve_repo_source(ready, proxy=""), ready)
 
 
 if __name__ == "__main__":

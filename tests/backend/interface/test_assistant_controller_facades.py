@@ -10,7 +10,9 @@ from assistant.application.provider import (
     AssistantProviderLoginResult,
     AssistantProviderPingResult,
 )
+from application.codex_config import CodexProfile
 from interface.assistant_controller import AssistantController
+from interface.assistant_controller_parts.provider_cache import provider_for_profile
 from settings.infrastructure.json_config_repository import JsonConfigRepository
 
 
@@ -53,6 +55,14 @@ class AssistantControllerFacadeTests(unittest.TestCase):
             }
         )
         return AssistantController(project_root=root, config_repository=repository, assistant_service=service)  # type: ignore[arg-type]
+
+    def test_provider_for_profile_matches_requested_provider_id(self) -> None:
+        providers = [{"id": "codex"}, {"id": "ollama"}]
+
+        self.assertIsNone(provider_for_profile([], CodexProfile("p", "Profile", "")))
+        self.assertEqual(provider_for_profile(providers, CodexProfile("p", "Profile", "", provider_id="ollama"))["id"], "ollama")
+        self.assertEqual(provider_for_profile(providers, None)["id"], "codex")
+        self.assertIsNone(provider_for_profile(providers, CodexProfile("p", "Profile", "", provider_id="missing")))
 
     def test_provider_login_ping_cache_and_event_sink_facades(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
