@@ -20,6 +20,9 @@ High-value commands:
 Working rules:
 - The worktree is often dirty. Do not reset, checkout, or revert files unless explicitly asked.
 - Do not touch `tools/batch_scribe.py` unless the user explicitly asks; it may be unrelated untracked work.
+- Do not create commits unless the user explicitly asks for a commit. Finish with a status summary and wait for review.
+- Before committing, check recent `git log --oneline` entries and match the existing commit-message style: short imperative Title Case subject, no `type:` prefix unless the surrounding history uses one. Use a body only when it adds useful context.
+- Do not add, remove, or rewrite tests unless the user explicitly confirms that test changes are allowed. A direct request to add/fix tests or coverage counts as confirmation.
 - Avoid reading `node_modules`, `models`, `build`, `dist`, `coverage`, `.local`, `.venv`, and large runtime logs unless the task specifically needs them.
 - Use `rg` before opening files. Open the smallest likely file first.
 - Use `apply_patch` for manual file edits.
