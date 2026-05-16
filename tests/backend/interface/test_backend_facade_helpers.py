@@ -12,7 +12,7 @@ from interface import backend as backend_facade
 from interface import backend_impl
 from interface.assistant_controller_parts.request_plan import build_request_plan
 from interface.backend_parts.session_mixin import BackendSessionMixin
-from interface.backend_parts.session_orchestration import resolve_diarization_start_params
+from interface.backend_parts.session_orchestration import download_then_start, resolve_diarization_start_params
 from interface.backend_parts.state_mixin import _ui_model
 from interface.backend_parts.system_utils import module_available
 from interface.session_controller import HeadlessSessionController
@@ -112,6 +112,33 @@ class BackendFacadeHelperTests(unittest.TestCase):
                 self.assertEqual(impl._gpu_snapshot(max_age_s=10)[0]["name"], "GPU")
                 self.assertEqual(impl._gpu_snapshot(max_age_s=10)[0]["name"], "GPU")
             snapshot.assert_called_once()
+
+    def test_download_then_start_downloads_missing_model_before_starting_session(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            started = []
+            finished = []
+            owner = SimpleNamespace(
+                _models_dir=lambda: root / "models",
+                download_model=lambda params: setattr(owner, "downloaded", params["name"]),
+                _download_record=lambda name: {"state": "done"},
+            )
+            controller = SimpleNamespace(
+                begin_model_download=lambda name: setattr(controller, "begun", name),
+                finish_model_download=lambda error: finished.append(error),
+                start_session=lambda params: started.append(params) or {"started": True},
+            )
+
+            with (
+                patch("application.model_download.normalize_model_reference", return_value="openai/whisper-tiny"),
+                patch("application.model_download.is_model_cached", return_value=False),
+            ):
+                result = download_then_start(owner, controller, {"model": "tiny", "downloadWaitTimeoutS": 0.1})
+
+            self.assertTrue(result["started"])
+            self.assertEqual(controller.begun, "openai/whisper-tiny")
+            self.assertEqual(owner.downloaded, "openai/whisper-tiny")
+            self.assertEqual(finished, [""])
 
 
 if __name__ == "__main__":

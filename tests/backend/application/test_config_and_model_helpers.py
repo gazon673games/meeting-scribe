@@ -23,7 +23,8 @@ from application.local_paths import (
     project_sessions_dir,
 )
 from application.model_download_parts.catalog import inaccessible_model_record
-from application.model_download_parts.inspection import parse_readme_frontmatter
+from application.model_download_parts.inspection import coerce_summary_value, parse_readme_frontmatter
+from application.model_download_parts.paths import model_cache_dir
 from application.model_download_parts.references import is_builtin_model
 from application.model_policy import ModelOrchestrator
 
@@ -79,6 +80,9 @@ class ConfigAndModelHelperTests(unittest.TestCase):
 
         metadata = parse_readme_frontmatter(["---", "license: mit", "ignored: value", "---"])
         self.assertEqual(metadata["license"], "mit")
+        self.assertEqual(coerce_summary_value(["a"] * 20), (True, ["a"] * 12))
+        self.assertEqual(coerce_summary_value({"a": 1}), (True, {"a": 1}))
+        self.assertEqual(coerce_summary_value(object()), (False, None))
         self.assertTrue(is_builtin_model("large-v3"))
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -98,6 +102,10 @@ class ConfigAndModelHelperTests(unittest.TestCase):
         ):
             llm_model_download._download_hf_file(source, Path("model.gguf"), proxy="http://proxy", on_progress=lambda _: None)
         download_url.assert_called_once()
+
+        fake_constants = SimpleNamespace(HF_HUB_CACHE=str(Path("hf_cache")))
+        with patch.dict(sys.modules, {"huggingface_hub": SimpleNamespace(constants=fake_constants)}):
+            self.assertEqual(model_cache_dir().name, "hf_cache")
 
     def test_model_orchestrator_recommend_returns_combined_asr_and_codex_decision(self) -> None:
         profiles = [

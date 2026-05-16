@@ -80,9 +80,14 @@ class WindowsProcessSessionCatalogTests(unittest.TestCase):
                 _set_pointer(args[1], 300 + int(getattr(args[0], "value", args[0])))
                 return 0
             if value in {300, 301} and idx == 4:
-                return -1
+                _set_pointer(args[1], 800 + (value - 300))
+                return 0
             if value in {300, 301} and idx == 5:
                 return -1
+            if value in {800, 801} and idx == 5:
+                args[1]._obj.vt = 31  # noqa: SLF001
+                args[1]._obj.pwszVal = f"Output Label {value - 799}"  # noqa: SLF001
+                return 0
             if value in {300, 301} and idx == 3:
                 _set_pointer(args[3], 400 + (value - 300))
                 return 0
@@ -116,13 +121,13 @@ class WindowsProcessSessionCatalogTests(unittest.TestCase):
             [
                 {
                     "id": "endpoint:0",
-                    "label": "Output 1",
-                    "sessions": [{"pid": 1234, "label": "App 1234", "streams": 2, "endpointId": "endpoint:0", "endpointLabel": "Output 1"}],
+                    "label": "Output Label 1",
+                    "sessions": [{"pid": 1234, "label": "App 1234", "streams": 2, "endpointId": "endpoint:0", "endpointLabel": "Output Label 1"}],
                 },
                 {
                     "id": "endpoint:1",
-                    "label": "Output 2",
-                    "sessions": [{"pid": 456, "label": "App 456", "streams": 1, "endpointId": "endpoint:1", "endpointLabel": "Output 2"}],
+                    "label": "Output Label 2",
+                    "sessions": [{"pid": 456, "label": "App 456", "streams": 1, "endpointId": "endpoint:1", "endpointLabel": "Output Label 2"}],
                 },
             ],
         )
