@@ -1,0 +1,71 @@
+[importlinter]
+root_packages =
+    application
+    asr
+    assistant
+    audio
+    diarization
+    identity
+    infrastructure
+    interface
+    session
+    settings
+    shared
+    transcription
+
+[importlinter:contract:domain-boundaries]
+name = Domain packages stay independent from application and infrastructure layers
+type = forbidden
+source_modules =
+    asr.domain
+    assistant.domain
+    audio.domain
+    diarization.domain
+    session.domain
+    shared.domain
+    transcription.domain
+forbidden_modules =
+    application
+    infrastructure
+    interface
+    settings
+    asr.application
+    asr.infrastructure
+    audio.application
+    audio.infrastructure
+    diarization.application
+    diarization.infrastructure
+    transcription.application
+    transcription.infrastructure
+allow_indirect_imports = true
+
+[importlinter:contract:application-no-interface]
+name = Application layer does not import Electron interface adapters
+type = forbidden
+source_modules =
+    application
+    assistant.application
+    asr.application
+    audio.application
+    diarization.application
+    identity.application
+    settings.application
+    transcription.application
+forbidden_modules =
+    interface
+allow_indirect_imports = true
+
+[importlinter:contract:infrastructure-no-interface]
+name = Infrastructure layer does not import Electron interface adapters
+type = forbidden
+source_modules =
+    infrastructure
+    asr.infrastructure
+    audio.infrastructure
+    diarization.infrastructure
+    identity.infrastructure
+    settings.infrastructure
+    transcription.infrastructure
+forbidden_modules =
+    interface
+allow_indirect_imports = true
