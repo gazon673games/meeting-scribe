@@ -29,13 +29,14 @@ export function makeSettingsDraft(config) {
   const proxy = assistantProxy.enabled ? assistantProxy : modelProxy;
   return {
     wavEnabled: boolWithDefault(ui.wav_enabled, false),
-    offlineOnStop: false,
+    offlineOnStop: boolWithDefault(ui.offline_on_stop, false),
     realtimeTranscriptToFile: boolWithDefault(ui.rt_transcript_to_file, false),
     screenCaptureProtection: boolWithDefault(ui.screen_capture_protection, false),
     theme: normalizeTheme(ui.theme),
     language: String(ui.lang || "ru"),
     asrMode: Number(ui.asr_mode || 0) === 1 ? "split" : "mix",
     model: String(ui.model || "medium"),
+    offlineModel: String(asr.offline_model || "gigaam-v3-e2e-rnnt"),
     profile: normalizeAsrProfile(ui.profile),
     outputFile: String(ui.output_file || "capture_mix.wav"),
     assistantEnabled: boolWithDefault(codex.enabled, false),
@@ -46,6 +47,7 @@ export function makeSettingsDraft(config) {
     device: String(asr.device || "cuda"),
     computeType: String(asr.compute_type || "float16"),
     overloadStrategy: String(asr.overload_strategy || "drop_old"),
+    hotwords: String(asr.hotwords || ""),
     diarizationEnabled: boolWithDefault(asr.diarization_enabled, false),
     diarizationBackend: normalizeDiarizationBackend(asr.diar_backend),
     diarizationSidecarEnabled: boolWithDefault(asr.diarization_sidecar_enabled, true),
@@ -86,7 +88,7 @@ export function applySettingsToConfig(config, draft) {
       output_file: String(draft.outputFile || "capture_mix.wav"),
       long_run: boolWithDefault(current.ui?.long_run, true),
       rt_transcript_to_file: Boolean(draft.realtimeTranscriptToFile),
-      offline_on_stop: false,
+      offline_on_stop: Boolean(draft.offlineOnStop),
       asr_settings_expanded: boolWithDefault(current.ui?.asr_settings_expanded, false),
       per_process_audio: Boolean(draft.perProcessAudio)
     },
@@ -95,6 +97,8 @@ export function applySettingsToConfig(config, draft) {
       device: String(draft.device || "cuda"),
       compute_type: String(draft.computeType || "float16"),
       overload_strategy: String(draft.overloadStrategy || "drop_old"),
+      hotwords: String(draft.hotwords || "").trim(),
+      offline_model: String(draft.offlineModel || draft.model || "large-v3"),
       diarization_enabled: Boolean(draft.diarizationEnabled),
       diar_backend: normalizeDiarizationBackend(draft.diarizationBackend),
       diarization_sidecar_enabled: Boolean(draft.diarizationSidecarEnabled),
@@ -128,7 +132,7 @@ export function draftToStartParams(draft) {
   return {
     asrEnabled: true,
     wavEnabled: config.ui.wav_enabled,
-    runOfflinePass: false,
+    runOfflinePass: Boolean(draft.offlineOnStop),
     realtimeTranscriptToFile: config.ui.rt_transcript_to_file,
     language: config.ui.lang,
     asrMode: draft.asrMode,
@@ -137,6 +141,7 @@ export function draftToStartParams(draft) {
     streamingEndpointSilenceMs: config.asr.streaming_endpoint_silence_ms,
     profile: config.ui.profile,
     model: config.ui.model,
+    offlineModelName: config.asr.offline_model,
     outputFile: config.ui.output_file,
     ...config.asr
   };

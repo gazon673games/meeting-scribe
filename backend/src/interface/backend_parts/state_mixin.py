@@ -16,6 +16,8 @@ from application.asr_profiles import (
     profile_defaults,
     profile_requires_streaming,
 )
+from application.model_policy import ModelOrchestrator
+from application.native_asr_models import GIGAAM_MODEL_ID, NEMOTRON_MODEL_ID, is_native_asr_model_cached
 from interface.backend_parts.system_utils import (
     cpu_name,
     current_process_memory_bytes,
@@ -50,6 +52,16 @@ class BackendStateMixin:
         profiles = codex.get("profiles", []) if isinstance(codex, dict) else []
         session = self._session_snapshot()
         assistant = self._assistant_snapshot()
+        asr_models = self._asr_model_options(config)
+        policy_models = [
+            model
+            for model in asr_models
+            if model != NEMOTRON_MODEL_ID
+            or is_native_asr_model_cached(model, models_dir=self._models_dir(config))
+        ]
+        current_model = str(ui.get("model", "") or "").strip()
+        language = str(ui.get("lang", "") or "")
+        model_orchestrator = ModelOrchestrator()
 
         return {
             "protocolVersion": self.protocol_version,
@@ -81,8 +93,33 @@ class BackendStateMixin:
             },
             "options": {
                 "languages": list(SUPPORTED_ASR_LANGUAGES),
-                "asrProfiles": [PROFILE_ULTRA_FAST, PROFILE_REALTIME, PROFILE_QUALITY, PROFILE_CUSTOM],
-                "asrModels": self._asr_model_options(config),
+                "asrProfiles": [
+                    PROFILE_ULTRA_FAST,
+                    PROFILE_REALTIME,
+                    PROFILE_BALANCED,
+                    PROFILE_QUALITY,
+                    PROFILE_CUSTOM,
+                ],
+                "asrModels": asr_models,
+                "offlineAsrModels": [
+                    GIGAAM_MODEL_ID,
+                    "bzikst/faster-whisper-large-v3-russian",
+                    "large-v3",
+                ],
+                "profileRecommendedModels": {
+                    profile: model_orchestrator.recommend_asr_model(
+                        asr_profile=profile,
+                        language=language,
+                        current_model=current_model,
+                        available_models=policy_models,
+                    )
+                    for profile in [
+                        PROFILE_ULTRA_FAST,
+                        PROFILE_REALTIME,
+                        PROFILE_BALANCED,
+                        PROFILE_QUALITY,
+                    ]
+                },
                 "asrModes": [
                     {"id": "mix", "label": "MIX (master)"},
                     {"id": "split", "label": "SPLIT (all sources)"},
@@ -195,4 +232,3 @@ class BackendStateMixin:
                 "lastError": "",
             }
         return self.assistant_controller.snapshot()
-

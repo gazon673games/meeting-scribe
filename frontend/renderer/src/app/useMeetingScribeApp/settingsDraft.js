@@ -2,6 +2,9 @@ import { ASR_FIELDS, asrProfileRequiresStreaming } from "../../entities/settings
 
 export function mergeSettingsPatch(current, patch, options) {
   const next = { ...current, ...patch };
+  if (patch.wavEnabled === false) {
+    next.offlineOnStop = false;
+  }
   return asrProfileRequiresStreaming(next.profile, options)
     ? { ...next, streamingEnabled: true }
     : next;
@@ -22,6 +25,7 @@ export function applyProfileDefaults(current, profile, options) {
   return {
     ...current,
     profile,
+    model: String(options.profileRecommendedModels?.[profile] || current.model),
     computeType: String(defaultValue(defaults.compute_type, current.computeType)),
     overloadStrategy: String(defaultValue(defaults.overload_strategy, current.overloadStrategy)),
     streamingEnabled: profileStreamingEnabled(defaults, current.streamingEnabled, requiresStreaming),
@@ -47,7 +51,7 @@ function withProfileStreaming(current, profile, requiresStreaming) {
 }
 
 function profileStreamingEnabled(defaults, currentValue, requiresStreaming) {
-  return requiresStreaming ? true : Boolean(defaultValue(defaults.streaming_enabled, currentValue));
+  return requiresStreaming ? true : Boolean(defaultValue(defaults.streaming_enabled, false));
 }
 
 function defaultValue(value, fallback) {

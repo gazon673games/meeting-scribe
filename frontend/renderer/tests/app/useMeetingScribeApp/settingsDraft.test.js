@@ -58,6 +58,15 @@ describe("settings draft helpers", () => {
     });
   });
 
+  test("turns off stale streaming when moving from Ultra Fast to a non-streaming profile", () => {
+    const current = { ...draft(), profile: "Ultra Fast", streamingEnabled: true };
+
+    expect(applyProfileDefaults(current, "Quality", options)).toMatchObject({
+      profile: "Quality",
+      streamingEnabled: false
+    });
+  });
+
   test("locks profile defaults only for streaming-required profiles", () => {
     expect(applyLockedProfileDefaults({ ...draft(), profile: "Balanced" }, options).profile).toBe("Balanced");
     expect(applyLockedProfileDefaults({ ...draft(), profile: "Ultra Fast" }, options)).toMatchObject({

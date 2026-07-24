@@ -178,7 +178,41 @@ describe("useAppActions", () => {
       runOfflinePass: false,
       outputFile: "out.wav",
       language: "en",
-      model: "medium"
+      model: "medium",
+      offlineModelName: "gigaam-v3-e2e-rnnt"
     });
+  });
+
+  test("keeps stop and start lifecycle requests single-flight", async () => {
+    let finishStop;
+    const stopResult = new Promise((resolve) => {
+      finishStop = () => resolve({ running: false, state: "idle" });
+    });
+    client.request.mockImplementation((method) => {
+      if (method === "stop_session") return stopResult;
+      if (method === "start_session") return Promise.resolve({ running: true, state: "running" });
+      return Promise.resolve({});
+    });
+    const { render } = makeHarness();
+    const { result } = render(true);
+
+    let stopping;
+    act(() => {
+      stopping = result.current.startOrStop();
+      result.current.runBackendAction("start_session", {});
+    });
+
+    expect(result.current.sessionActionPending).toBe(true);
+    expect(client.request.mock.calls.filter(([method]) => method === "stop_session")).toHaveLength(1);
+    expect(client.request.mock.calls.filter(([method]) => method === "start_session")).toHaveLength(0);
+
+    await act(async () => {
+      finishStop();
+      await stopping;
+    });
+    expect(result.current.sessionActionPending).toBe(false);
+
+    await act(async () => result.current.runBackendAction("start_session", {}));
+    expect(client.request.mock.calls.filter(([method]) => method === "start_session")).toHaveLength(1);
   });
 });

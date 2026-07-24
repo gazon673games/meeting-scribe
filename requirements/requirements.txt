@@ -1,8 +1,9 @@
 SoundCard==0.4.5
 faster-whisper==1.2.1
-huggingface_hub==1.11.0
-numpy==2.4.4
+ctranslate2==4.8.1
+huggingface_hub==0.36.2
+numpy==2.3.5
 psutil==7.2.2
-sherpa-onnx==1.12.38
+sherpa-onnx==1.13.4
 sounddevice==0.5.5
 soundfile==0.13.1

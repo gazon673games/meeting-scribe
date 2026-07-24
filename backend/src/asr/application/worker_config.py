@@ -23,6 +23,7 @@ class TranscriptionWorkerConfig:
     log_speaker_labels: bool
     init_diarization: bool
     diarization_blocking_lookup: bool
+    hotwords: Optional[str] = None
     source_speaker_labels: Dict[str, str] = field(default_factory=dict)
 
     @classmethod
@@ -42,5 +43,6 @@ class TranscriptionWorkerConfig:
             log_speaker_labels=bool(settings.log_speaker_labels),
             init_diarization=bool(settings.diarization_enabled and not settings.diarization_sidecar_enabled),
             diarization_blocking_lookup=bool(settings.diarization_enabled and not settings.diarization_sidecar_enabled),
+            hotwords=settings.asr_hotwords,
             source_speaker_labels=dict(settings.source_speaker_labels or {}),
         )

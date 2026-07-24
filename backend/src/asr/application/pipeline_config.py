@@ -86,11 +86,13 @@ class ASRPipelineSettings:
     log_speaker_labels: bool = True
     asr_language: Optional[str] = "ru"
     asr_initial_prompt: Optional[str] = None
+    asr_hotwords: Optional[str] = None
     metrics_emit_interval_s: float = 1.0
     metrics_latency_window: int = 200
     streaming_enabled: bool = False
     streaming_chunk_interval_s: float = 1.0
     streaming_endpoint_silence_ms: float = 300.0
+    startup_timeout_s: float = 120.0
 
     @property
     def normalized_overload_strategy(self) -> OverloadStrategy:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+import threading
 import time
 from typing import Callable, Dict, Optional
 
@@ -44,14 +45,27 @@ class StreamingWhisperWorker:
         self._factory = asr_backend_factory
         self._asr: Optional[AsrBackendPort] = None
         self._trackers: Dict[str, ConfirmedPrefixTracker] = {}
+        self._init_done = threading.Event()
+        self.asr_init_error: Optional[str] = None
 
     def reset_runtime(self) -> None:
         self._trackers.clear()
+        self.asr_init_error = None
+        self._init_done.clear()
+
+    def wait_initialized(self, timeout_s: float) -> None:
+        if not self._init_done.wait(max(0.0, float(timeout_s))):
+            raise TimeoutError(f"Streaming ASR initialization timed out after {float(timeout_s):.0f}s")
+        if self.asr_init_error:
+            raise RuntimeError(self.asr_init_error)
 
     def run_safe(self) -> None:
         try:
             self.run()
         except Exception as e:
+            if not self._init_done.is_set():
+                self.asr_init_error = str(e)
+                self._init_done.set()
             self._log({"type": "error", "where": "streaming_worker", "error": str(e), "ts": time.time()})
         finally:
             # Release CUDA resources in the worker thread that owns them
@@ -74,10 +88,14 @@ class StreamingWhisperWorker:
                 num_workers=self._cfg.num_workers,
                 beam_size=1,
                 initial_prompt=self._cfg.initial_prompt,
+                hotwords=self._cfg.hotwords,
             )
             self._log({"type": "asr_init_ok", "model": self._cfg.model_name, "ts": time.time()})
+            self._init_done.set()
         except Exception as e:
+            self.asr_init_error = str(e)
             self._log({"type": "error", "where": "asr_init", "error": str(e), "ts": time.time()})
+            self._init_done.set()
             return
 
         while not self._stop.is_set():
@@ -90,6 +108,11 @@ class StreamingWhisperWorker:
     # ── processing ────────────────────────────────────────────────────
 
     def _process(self, chunk: StreamingChunk) -> None:
+        stateful_transcribe = getattr(self._asr, "transcribe_stream_chunk", None)
+        if callable(stateful_transcribe):
+            self._process_stateful(chunk, stateful_transcribe)
+            return
+
         stream = chunk.stream
         tracker = self._trackers.setdefault(
             stream, ConfirmedPrefixTracker(lookahead=self._cfg.lookahead)
@@ -134,6 +157,55 @@ class StreamingWhisperWorker:
                     "ts": time.time(),
                 })
 
+    def _process_stateful(self, chunk: StreamingChunk, transcribe) -> None:  # noqa: ANN001
+        audio = chunk.incremental_audio or chunk.audio
+        try:
+            result = transcribe(
+                chunk.stream,
+                np.asarray(audio.samples, dtype=np.float32),
+                is_final=bool(chunk.is_final),
+            )
+        except Exception as e:
+            self._log({
+                "type": "error",
+                "where": "streaming_transcribe",
+                "stream": chunk.stream,
+                "error": str(e),
+                "ts": time.time(),
+            })
+            return
+
+        words = _plain_text_words(str(result.get("text") or ""), float(chunk.t_start), float(chunk.t_end))
+        if chunk.is_final:
+            self._log({
+                "type": "streaming_final",
+                "stream": chunk.stream,
+                "words": words,
+                "t_start": chunk.t_start,
+                "t_end": chunk.t_end,
+                "ts": time.time(),
+            })
+        elif words:
+            self._log({
+                "type": "streaming_words",
+                "stream": chunk.stream,
+                "confirmed": [],
+                "tentative": words,
+                "t_start": chunk.t_start,
+                "t_end": chunk.t_end,
+                "ts": time.time(),
+            })
+
 
 def _word_to_dict(w: StreamingWord) -> dict:
     return {"text": w.text, "start": w.start_s, "end": w.end_s}
+
+
+def _plain_text_words(text: str, t_start: float, t_end: float) -> list[dict]:
+    parts = [part for part in str(text or "").strip().split() if part]
+    duration = max(0.0, float(t_end) - float(t_start))
+    step = duration / max(1, len(parts))
+    return [
+        {"text": word, "start": index * step, "end": (index + 1) * step}
+        for index, word in enumerate(parts)
+    ]

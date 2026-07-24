@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, TextIO
 
 BackendHandler = Callable[[str, Dict[str, Any] | None], Any]
 _DEFAULT_MAX_WORKERS = 6
+_SERIAL_LIFECYCLE_METHODS = frozenset({"start_session", "stop_session"})
 
 
 @dataclass
@@ -26,12 +27,16 @@ class JsonLineBridge:
     def serve_forever(self) -> None:
         self.emit_event("backend_ready", {"ts": time.time()})
         max_workers = _bridge_max_workers()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="bridge") as executor:
+        with (
+            concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="bridge") as executor,
+            concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="bridge-lifecycle") as lifecycle_executor,
+        ):
             for line in self.stdin:
                 line = line.strip()
                 if not line:
                     continue
-                executor.submit(self._handle_line, line)
+                target = lifecycle_executor if _request_method_from_line(line) in _SERIAL_LIFECYCLE_METHODS else executor
+                target.submit(self._handle_line, line)
 
     def emit_event(self, event_type: str, payload: Dict[str, Any] | None = None) -> None:
         self._write({"event": {"type": str(event_type), **dict(payload or {})}})
@@ -78,6 +83,14 @@ def _request_id_from_line(line: str) -> Any:
     except Exception:
         return None
     return request.get("id") if isinstance(request, dict) else None
+
+
+def _request_method_from_line(line: str) -> str:
+    try:
+        request = json.loads(line)
+    except Exception:
+        return ""
+    return str(request.get("method") or "") if isinstance(request, dict) else ""
 
 
 def _bridge_max_workers() -> int:

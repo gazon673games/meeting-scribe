@@ -8,6 +8,7 @@ export function AdvancedAsrSettings({
   draft,
   locked,
   modelOptions,
+  offlineModelOptions,
   overloadOptions,
   onAsrChange,
   onChange
@@ -43,6 +44,19 @@ export function AdvancedAsrSettings({
               ))}
             </select>
           </Field>
+          <Field label="Offline Model">
+            <select
+              disabled={locked}
+              value={draft.offlineModel}
+              onChange={(event) => onChange({ offlineModel: event.target.value })}
+            >
+              {offlineModelOptions.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
+            </select>
+          </Field>
           {ASR_RESOURCE_FIELDS.map((field) => (
             <Field key={field.key} label={field.label}>
               <input
@@ -72,6 +86,15 @@ export function AdvancedAsrSettings({
           </Field>
           <Field label="Output">
             <input disabled={locked} type="text" value={draft.outputFile} onChange={(event) => onChange({ outputFile: event.target.value })} />
+          </Field>
+          <Field label="Hotwords">
+            <input
+              disabled={locked}
+              placeholder="Java, JVM, Spring Boot, Kafka"
+              type="text"
+              value={draft.hotwords || ""}
+              onChange={(event) => onChange({ hotwords: event.target.value })}
+            />
           </Field>
           {ASR_TIMING_FIELDS.map((field) => (
             <Field key={field.key} label={field.label}>

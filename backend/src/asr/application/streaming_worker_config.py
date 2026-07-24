@@ -16,6 +16,7 @@ class StreamingWorkerConfig:
     cpu_threads: int
     num_workers: int
     initial_prompt: Optional[str]
+    hotwords: Optional[str] = None
     lookahead: int = 2
     queue_timeout_s: float = 0.1
 
@@ -29,4 +30,5 @@ class StreamingWorkerConfig:
             cpu_threads=int(settings.cpu_threads),
             num_workers=int(settings.num_workers),
             initial_prompt=settings.asr_initial_prompt,
+            hotwords=settings.asr_hotwords,
         )

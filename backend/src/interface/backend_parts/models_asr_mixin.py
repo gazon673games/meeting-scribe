@@ -78,18 +78,20 @@ class BackendAsrModelsMixin:
 
     def _recommended_model_record(self, name: str, models_dir: Any, downloads: Dict) -> Dict[str, Any]:
         from application.model_download import is_builtin_model, is_model_cached
+        from application.native_asr_models import is_native_asr_model
 
         cached = is_model_cached(name, models_dir=models_dir)
+        native = is_native_asr_model(name)
         return {
             "name": name,
             "label": name,
             "cached": cached,
             "compatible": cached,
-            "status": "compatible" if cached else "recommended",
+            "status": "compatible" if cached else ("missing_native" if native else "recommended"),
             "source": "recommended",
             "builtin": is_builtin_model(name),
             "recommended": True,
-            "downloadable": True,
+            "downloadable": not native,
             "deletable": False,
             **self._download_fields(name, downloads),
         }
@@ -114,10 +116,13 @@ class BackendAsrModelsMixin:
 
     def download_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from application.model_download import download_model_async, normalize_model_reference
+        from application.native_asr_models import is_native_asr_model
 
         name = str(params.get("name") or "").strip()
         if not name:
             raise ValueError("download_model requires params.name")
+        if is_native_asr_model(name):
+            raise ValueError("Native ASR models use their dedicated installer and cannot be downloaded as Faster Whisper models")
         name = normalize_model_reference(name)
         models_dir = self._models_dir_from_params(params)
         if self._download_record(name).get("state") == "downloading":
@@ -214,4 +219,3 @@ class BackendAsrModelsMixin:
                 seen.add(text)
                 out.append(text)
         return out
-

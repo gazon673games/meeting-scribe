@@ -2,7 +2,7 @@ export const ASR_PROFILE_ULTRA_FAST = "Ultra Fast";
 
 export const FALLBACK_OPTIONS = {
   languages: ["ru", "en", "auto"],
-  asrProfiles: [ASR_PROFILE_ULTRA_FAST, "Realtime", "Quality", "Custom"],
+  asrProfiles: [ASR_PROFILE_ULTRA_FAST, "Realtime", "Balanced", "Quality", "Custom"],
   asrModels: [
     "large-v3",
     "large-v3-turbo",
@@ -11,6 +11,7 @@ export const FALLBACK_OPTIONS = {
     "medium",
     "small"
   ],
+  offlineAsrModels: ["gigaam-v3-e2e-rnnt", "bzikst/faster-whisper-large-v3-russian", "large-v3"],
   asrModes: [
     { id: "mix", label: "MIX (master)" },
     { id: "split", label: "SPLIT (all sources)" }
