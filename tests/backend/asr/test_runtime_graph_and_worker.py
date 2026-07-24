@@ -22,12 +22,14 @@ from asr.infrastructure.audio_data import MonoAudio16kBuffer
 
 
 class _Handle:
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, worker: threading.Thread) -> None:
         self.name = name
+        self.worker = worker
         self.joined = False
 
     def join(self, timeout=None) -> None:  # noqa: ANN001
         self.joined = True
+        self.worker.join(timeout)
 
 
 class _Runner:
@@ -38,8 +40,10 @@ class _Runner:
         return threading.Event()
 
     def start_worker(self, *, name: str, target):
-        handle = _Handle(name)
+        worker = threading.Thread(target=target, name=name, daemon=True)
+        handle = _Handle(name, worker)
         self.started.append((name, target, handle))
+        worker.start()
         return handle
 
 
@@ -128,6 +132,7 @@ class ASRRuntimeGraphAndWorkerTests(unittest.TestCase):
                 dependencies=self._dependencies(runner),
                 event_queue=events,
             )
+            pipeline.start()
             pipeline.start()
             params = pipeline.graph.segmentation_params(settings)
             pipeline.stop()

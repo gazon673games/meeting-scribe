@@ -58,6 +58,10 @@ __all__ = [
 
 
 def is_model_cached(model_name: str, *, models_dir: str | Path | None = None) -> bool:
+    from application.native_asr_models import is_native_asr_model, is_native_asr_model_cached
+
+    if is_native_asr_model(model_name):
+        return is_native_asr_model_cached(model_name, models_dir=models_dir)
     model_ref = normalize_model_reference(model_name)
     if not model_ref:
         return False

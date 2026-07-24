@@ -34,6 +34,16 @@ class _StreamingBackend:
         self.closed = True
 
 
+class _StatefulStreamingBackend(_StreamingBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = []
+
+    def transcribe_stream_chunk(self, stream, samples, *, is_final):  # noqa: ANN001
+        self.calls.append((stream, len(samples), is_final))
+        return {"text": "native stream"}
+
+
 class StreamingWorkerAndLoggerTests(unittest.TestCase):
     def _chunk(self, *, final: bool = False) -> StreamingChunk:
         return StreamingChunk(
@@ -121,6 +131,35 @@ class StreamingWorkerAndLoggerTests(unittest.TestCase):
 
             self.assertTrue(logger.path.exists())
             self.assertIn('"segment"', logger.path.read_text(encoding="utf-8"))
+
+    def test_streaming_worker_uses_incremental_audio_for_stateful_backend(self) -> None:
+        logs = []
+        backend = _StatefulStreamingBackend()
+        worker = StreamingWhisperWorker(
+            config=StreamingWorkerConfig(
+                model_name="native",
+                language="ru",
+                device="cpu",
+                compute_type="int8",
+                cpu_threads=1,
+                num_workers=1,
+                initial_prompt=None,
+            ),
+            chunk_queue=queue.Queue(),
+            stop_event=threading.Event(),
+            log_event=logs.append,
+            asr_backend_factory=lambda **kwargs: backend,
+        )
+        worker._asr = backend
+        chunk = self._chunk(final=True)
+        chunk = StreamingChunk(
+            **{**chunk.__dict__, "incremental_audio": MonoAudio16kBuffer.from_array(np.ones(8, dtype=np.float32))}
+        )
+
+        worker._process(chunk)
+
+        self.assertEqual(backend.calls, [("mic", 8, True)])
+        self.assertTrue(any(event.get("type") == "streaming_final" for event in logs))
 
     def test_faster_whisper_adapter_transcribes_words_and_closes_model(self) -> None:
         class _Word:

@@ -4,12 +4,14 @@ from pathlib import Path
 from typing import Any
 
 from application.asr_session import ASRRuntime, ASRRuntimeFactory, ASRSessionSettings
+from application.native_asr_models import NEMOTRON_MODEL_ID, native_asr_model_dir
 from asr.application.pipeline import ASRPipeline
 from asr.application.pipeline_config import ASRPipelineDependencies, ASRPipelineSettings
 from asr.infrastructure.logger import ASRLogger
 from asr.infrastructure.runtime_workers import ThreadRealtimeWorkerRunner
 from asr.infrastructure.segmentation import AudioSegmenter
 from asr.infrastructure.worker_faster_whisper import FasterWhisperASR
+from asr.infrastructure.worker_sherpa_nemotron import SherpaNemotronASR
 from diarization.infrastructure.diar_backend_pyannote import PyannoteDiarizer
 from diarization.infrastructure.diarization_runtime import DefaultDiarizationRuntimeFactory
 from diarization.infrastructure.diarizer import OnlineDiarizer
@@ -64,15 +66,27 @@ class ASRPipelineFactory(ASRRuntimeFactory):
             log_backup_count=5,
             asr_language=settings.asr_language,
             asr_initial_prompt=settings.asr_initial_prompt,
+            asr_hotwords=settings.asr_hotwords,
             metrics_emit_interval_s=5.0,
             metrics_latency_window=200,
             streaming_enabled=bool(settings.streaming_enabled),
             streaming_chunk_interval_s=float(settings.streaming_chunk_interval_s),
             streaming_endpoint_silence_ms=float(settings.streaming_endpoint_silence_ms),
         )
+        def asr_backend_factory(**kwargs):  # noqa: ANN003
+            if str(kwargs.get("model_name") or "") == NEMOTRON_MODEL_ID:
+                return SherpaNemotronASR(
+                    model_dir=native_asr_model_dir(
+                        str(kwargs.get("model_name") or ""),
+                        project_root=Path(project_root),
+                    ),
+                    **kwargs,
+                )
+            return FasterWhisperASR(**kwargs)
+
         pipeline_dependencies = ASRPipelineDependencies(
             logger_factory=ASRLogger,
-            asr_backend_factory=FasterWhisperASR,
+            asr_backend_factory=asr_backend_factory,
             worker_runner=ThreadRealtimeWorkerRunner(),
             diarization_factory=DefaultDiarizationRuntimeFactory(
                 online_diarizer_factory=OnlineDiarizer,

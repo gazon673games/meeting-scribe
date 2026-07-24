@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+import threading
 import time
 from typing import Callable, Optional, Tuple
 
@@ -48,6 +49,7 @@ class TranscriptionWorkerRuntime:
         self._num_workers = int(config.num_workers)
         self._beam_size = int(config.beam_size)
         self._initial_prompt = config.initial_prompt
+        self._hotwords = config.hotwords
         self._adaptive_beam_enabled = bool(config.adaptive_beam_enabled)
         self._log_speaker_labels = bool(config.log_speaker_labels)
         self._init_diarization = bool(config.init_diarization)
@@ -60,15 +62,26 @@ class TranscriptionWorkerRuntime:
         )
         self._asr: Optional[AsrBackendPort] = None
         self.asr_init_error: Optional[str] = None
+        self._init_done = threading.Event()
 
     def reset_runtime(self) -> None:
         self._dedup.reset()
         self.asr_init_error = None
+        self._init_done.clear()
+
+    def wait_initialized(self, timeout_s: float) -> None:
+        if not self._init_done.wait(max(0.0, float(timeout_s))):
+            raise TimeoutError(f"ASR model initialization timed out after {float(timeout_s):.0f}s")
+        if self.asr_init_error:
+            raise RuntimeError(self.asr_init_error)
 
     def run_safe(self) -> None:
         try:
             self.run()
         except Exception as e:
+            if not self._init_done.is_set():
+                self.asr_init_error = str(e)
+                self._init_done.set()
             self._log_event({"type": "error", "where": "worker", "error": str(e), "ts": time.time()})
         finally:
             # Release CUDA resources in the worker thread that owns them
@@ -92,11 +105,14 @@ class TranscriptionWorkerRuntime:
                 num_workers=self._num_workers,
                 beam_size=self._beam_size,
                 initial_prompt=self._initial_prompt,
+                hotwords=self._hotwords,
             )
             self._log_event({"type": "asr_init_ok", "model": self._model_name, "ts": time.time()})
+            self._init_done.set()
         except Exception as e:
             self.asr_init_error = str(e)
             self._log_event({"type": "error", "where": "asr_init", "error": str(e), "ts": time.time()})
+            self._init_done.set()
             return
 
         if self._init_diarization:
@@ -189,13 +205,22 @@ class TranscriptionWorkerRuntime:
         asr_result = self._run_asr(seg, speaker, beam_to_use)
         if asr_result is None:
             return
-        text, asr_latency_s = asr_result
+        text, asr_latency_s, asr_metadata = asr_result
 
         text, removed = self._dedup.filter(seg.stream, text)
         total_lag_s = queue_wait_s + asr_latency_s
         self._metrics.record_latency(asr_latency_s=asr_latency_s, total_lag_s=total_lag_s)
         self._maybe_update_beam(seg_dur_s, asr_latency_s)
-        self._log_segment_event(seg, speaker, text, asr_latency_s, seg_dur_s, beam_to_use, removed)
+        self._log_segment_event(
+            seg,
+            speaker,
+            text,
+            asr_latency_s,
+            seg_dur_s,
+            beam_to_use,
+            removed,
+            asr_metadata,
+        )
         self._log_event({
             "type": "asr_segment_done",
             "stream": str(seg.stream),
@@ -217,11 +242,22 @@ class TranscriptionWorkerRuntime:
 
     def _run_asr(
         self, seg: Segment, speaker: str, beam_to_use: int
-    ) -> Optional[Tuple[str, float]]:
+    ) -> Optional[Tuple[str, float, dict]]:
         t0 = time.time()
         try:
             res = self._asr.transcribe(seg.audio.samples, beam_size=beam_to_use)
             text = (res.get("text") or "").strip()
+            metadata = {
+                key: res.get(key)
+                for key in (
+                    "language",
+                    "language_probability",
+                    "avg_logprob",
+                    "no_speech_probability",
+                    "compression_ratio",
+                )
+                if res.get(key) is not None
+            }
         except Exception as e:
             self._log_event({
                 "type": "segment",
@@ -235,7 +271,7 @@ class TranscriptionWorkerRuntime:
                 "ts": time.time(),
             })
             return None
-        return text, time.time() - t0
+        return text, time.time() - t0, metadata
 
     def _maybe_update_beam(self, seg_dur_s: float, asr_latency_s: float) -> None:
         if not self._adaptive_beam_enabled:
@@ -259,6 +295,7 @@ class TranscriptionWorkerRuntime:
         seg_dur_s: float,
         beam_to_use: int,
         removed: int,
+        asr_metadata: dict,
     ) -> None:
         self._log_event({
             "type": "segment",
@@ -277,6 +314,7 @@ class TranscriptionWorkerRuntime:
             "hard_overload": bool(self._over.hard_active),
             "lag_s": float(self._metrics.last_lag_s),
             "ts": time.time(),
+            **asr_metadata,
         })
 
     def _update_utterances(self, seg: Segment, speaker: str, text: str) -> None:

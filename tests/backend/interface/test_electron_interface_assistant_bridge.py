@@ -177,6 +177,32 @@ class ElectronInterfaceAssistantBridgeTests(unittest.TestCase):
         self.assertFalse(messages[2]["ok"])
         self.assertEqual(messages[2]["error"]["type"], "KeyError")
 
+    def test_jsonl_bridge_serializes_session_lifecycle_requests(self) -> None:
+        stdin = io.StringIO(
+            "\n".join(
+                [
+                    json.dumps({"id": "stop", "method": "stop_session", "params": {}}),
+                    json.dumps({"id": "start", "method": "start_session", "params": {}}),
+                    "",
+                ]
+            )
+        )
+        stdout = io.StringIO()
+        order: list[str] = []
+
+        def handler(method, _params):  # noqa: ANN001
+            if method == "stop_session":
+                order.append("stop_begin")
+                time.sleep(0.03)
+                order.append("stop_end")
+            else:
+                order.append(method)
+            return {"method": method}
+
+        JsonLineBridge(handler, stdin=stdin, stdout=stdout, stderr=io.StringIO()).serve_forever()
+
+        self.assertEqual(order, ["stop_begin", "stop_end", "start_session"])
+
     def test_jsonl_bridge_preserves_unicode_payloads(self) -> None:
         text = "\u041f\u0440\u0438\u0432\u0435\u0442, \u043c\u0438\u0440"
         reply_prefix = "\u041e\u0442\u0432\u0435\u0442:"
@@ -200,4 +226,3 @@ class ElectronInterfaceAssistantBridgeTests(unittest.TestCase):
 
         self.assertEqual(messages[1]["result"]["reply"], f"{reply_prefix} {text}")
         self.assertIn(text, raw_output)
-

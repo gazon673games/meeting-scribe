@@ -30,6 +30,7 @@ class FasterWhisperASR(AsrBackendPort):
 
     temperature: Optional[float] = 0.0
     initial_prompt: Optional[str] = None
+    hotwords: Optional[str] = None
     condition_on_previous_text: bool = True
     without_timestamps: bool = True
 
@@ -88,17 +89,34 @@ class FasterWhisperASR(AsrBackendPort):
 
         if self.initial_prompt:
             kwargs["initial_prompt"] = str(self.initial_prompt)
+        if getattr(self, "hotwords", None):
+            kwargs["hotwords"] = str(self.hotwords)
 
         segments, info = self._model.transcribe(x, **kwargs)
 
         text_parts = []
+        avg_logprobs = []
+        no_speech_probabilities = []
+        compression_ratios = []
         for s in segments:
             t = getattr(s, "text", "")
             if t:
                 text_parts.append(t)
+            if getattr(s, "avg_logprob", None) is not None:
+                avg_logprobs.append(float(s.avg_logprob))
+            if getattr(s, "no_speech_prob", None) is not None:
+                no_speech_probabilities.append(float(s.no_speech_prob))
+            if getattr(s, "compression_ratio", None) is not None:
+                compression_ratios.append(float(s.compression_ratio))
 
         text = "".join(text_parts).strip()
         out: Dict[str, Any] = {"text": text, "beam_size": bs}
+        if avg_logprobs:
+            out["avg_logprob"] = sum(avg_logprobs) / len(avg_logprobs)
+        if no_speech_probabilities:
+            out["no_speech_probability"] = max(no_speech_probabilities)
+        if compression_ratios:
+            out["compression_ratio"] = max(compression_ratios)
 
         try:
             out["language"] = getattr(info, "language", None)
@@ -123,6 +141,8 @@ class FasterWhisperASR(AsrBackendPort):
         }
         if self.language is not None:
             kwargs["language"] = self.language
+        if getattr(self, "hotwords", None):
+            kwargs["hotwords"] = str(self.hotwords)
 
         segments, _ = self._model.transcribe(x, **kwargs)
 

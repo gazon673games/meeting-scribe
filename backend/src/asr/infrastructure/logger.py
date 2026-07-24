@@ -15,14 +15,23 @@ from asr.application.ports import AsrLoggerPort
 class _EventFilter:
     """Drops high-frequency or disabled event types before they reach disk."""
 
-    def __init__(self, *, write_segment_events: bool, audio_seen_min_interval_s: float) -> None:
+    def __init__(
+        self,
+        *,
+        write_segment_events: bool,
+        audio_seen_min_interval_s: float,
+        write_streaming_intermediate_events: bool = False,
+    ) -> None:
         self._write_segments = write_segment_events
+        self._write_streaming_intermediate = write_streaming_intermediate_events
         self._audio_seen_min_s = float(audio_seen_min_interval_s)
         self._last_audio_seen: Dict[str, float] = {}
 
     def should_skip(self, rec: Dict[str, Any]) -> bool:
         typ = str(rec.get("type", ""))
         if typ == "segment" and not self._write_segments:
+            return True
+        if typ == "streaming_words" and not self._write_streaming_intermediate:
             return True
         if typ == "audio_seen":
             stream = str(rec.get("stream", ""))
@@ -43,6 +52,7 @@ class ASRLogger(AsrLoggerPort):
     backup_count: int = 5
     audio_seen_min_interval_s: float = 5.0
     write_segment_events: bool = False
+    write_streaming_intermediate_events: bool = False
 
     def __post_init__(self) -> None:
         log_dir = project_logs_dir(self.root, create=True)
@@ -52,6 +62,7 @@ class ASRLogger(AsrLoggerPort):
         self._filter = _EventFilter(
             write_segment_events=self.write_segment_events,
             audio_seen_min_interval_s=self.audio_seen_min_interval_s,
+            write_streaming_intermediate_events=self.write_streaming_intermediate_events,
         )
 
         logger_name = f"asr.session.{self.session_id}.{ts}"

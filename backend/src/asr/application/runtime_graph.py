@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import gc
 import queue
+import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional, Tuple
 
 from asr.application.events import ASREventPublisher
@@ -27,6 +28,7 @@ from asr.application.worker_config import TranscriptionWorkerConfig
 from asr.domain.segments import Segment
 from asr.domain.streaming import StreamingChunk
 from asr.infrastructure.streaming_segmenter import StreamingAudioSegmenter
+from asr.infrastructure.streaming_queue import CoalescingStreamingQueue
 from asr.infrastructure.streaming_worker import StreamingWhisperWorker
 from diarization.application.diarization import DiarizationPort
 from diarization.application.diarization_updates import DiarizationUpdateConfig, DiarizationUpdateRuntime
@@ -52,8 +54,14 @@ class ASRRuntimeGraph:
     diarization_worker: Optional[WorkerHandlePort] = None
     streaming_worker_runtime: Optional[StreamingWhisperWorker] = None
     streaming_worker_handle: Optional[WorkerHandlePort] = None
+    _running: bool = field(default=False, init=False, repr=False)
+    _lifecycle_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
 
     def start(self, *, settings: ASRPipelineSettings, session_id: str) -> None:
+        with self._lifecycle_lock:
+            if self._running:
+                return
+            self._running = True
         self.stop.clear()
         self.overload.reset()
         self.metrics.reset()
@@ -82,8 +90,13 @@ class ASRRuntimeGraph:
                 name="asr-diarization",
                 target=self.diarization_updates.run_safe,
             )
+        self._wait_for_asr_initialization(float(settings.startup_timeout_s))
 
     def stop_runtime(self) -> None:
+        with self._lifecycle_lock:
+            if not self._running:
+                return
+            self._running = False
         self.stop.set()
         if self.ingest_worker:
             self.ingest_worker.join()
@@ -108,6 +121,12 @@ class ASRRuntimeGraph:
         self.events.log({"type": "asr_stopped", "ts": time.time()})
         self.logger.close()
         gc.collect()
+
+    def _wait_for_asr_initialization(self, timeout_s: float) -> None:
+        runtime = self.worker if self.worker is not None else self.streaming_worker_runtime
+        if runtime is None:
+            return
+        runtime.wait_initialized(timeout_s)
 
     def segmentation_params(self, settings: ASRPipelineSettings) -> Tuple[float, float, float]:
         return self.overload.segmentation_params(
@@ -144,6 +163,7 @@ class ASRRuntimeGraph:
             "log_speaker_labels": settings.log_speaker_labels,
             "asr_language": settings.asr_language,
             "asr_initial_prompt": bool(settings.asr_initial_prompt),
+            "asr_hotwords": bool(settings.asr_hotwords),
             "streaming_enabled": settings.streaming_enabled,
             "ts": time.time(),
         }
@@ -236,7 +256,7 @@ def _build_streaming_path(
     stop: StopSignalPort,
     events: ASREventPublisher,
 ) -> Tuple[AudioSegmenterPort, None, StreamingWhisperWorker, None]:
-    chunk_queue: "queue.Queue[StreamingChunk]" = queue.Queue(maxsize=50)
+    chunk_queue = CoalescingStreamingQueue(maxsize=50)
     segmenter = StreamingAudioSegmenter(
         config=build_streaming_segmenter_config(settings),
         chunk_queue=chunk_queue,

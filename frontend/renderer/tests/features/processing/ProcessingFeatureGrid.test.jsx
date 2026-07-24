@@ -14,7 +14,7 @@ describe("ProcessingFeatureGrid", () => {
     const onChange = vi.fn();
     render(
       <ProcessingFeatureGrid
-        draft={{ asrMode: "mix", diarizationEnabled: false, profile: "Ultra Fast", streamingEnabled: false, wavEnabled: true }}
+        draft={{ asrMode: "mix", diarizationEnabled: false, offlineOnStop: false, profile: "Ultra Fast", streamingEnabled: false, wavEnabled: true }}
         locked={false}
         options={{ streamingLockedProfiles: ["Ultra Fast"] }}
         onChange={onChange}
@@ -24,10 +24,12 @@ describe("ProcessingFeatureGrid", () => {
     await user.click(screen.getByRole("button", { name: /Speaker Separation/i }));
     await user.click(screen.getByRole("button", { name: /Speaker ID/i }));
     await user.click(screen.getByRole("button", { name: /Record to File/i }));
+    await user.click(screen.getByRole("button", { name: /Offline Quality Pass/i }));
 
     expect(onChange).toHaveBeenCalledWith({ asrMode: "split" });
     expect(onChange).toHaveBeenCalledWith({ diarizationEnabled: true });
     expect(onChange).toHaveBeenCalledWith({ wavEnabled: false });
+    expect(onChange).toHaveBeenCalledWith({ offlineOnStop: true });
     expect(screen.getByRole("button", { name: /Word-by-Word/i })).toBeDisabled();
   });
 

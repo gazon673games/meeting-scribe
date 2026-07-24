@@ -44,6 +44,7 @@ class AsrBackendFactoryPort(Protocol):
         num_workers: int,
         beam_size: int,
         initial_prompt: Optional[str],
+        hotwords: Optional[str],
     ) -> AsrBackendPort:
         ...
 

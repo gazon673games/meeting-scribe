@@ -22,6 +22,12 @@ export function ProcessingFeatureGrid({ draft, locked, options, onChange }) {
       {diarMsg ? <p className="feature-grid-warning">{diarMsg}</p> : null}
       <FeatureToggle checked={draft.wavEnabled} disabled={locked} label="Record to File" onClick={() => onChange({ wavEnabled: !draft.wavEnabled })} />
       <FeatureToggle
+        checked={Boolean(draft.offlineOnStop)}
+        disabled={locked || !draft.wavEnabled}
+        label="Offline Quality Pass"
+        onClick={() => onChange({ offlineOnStop: !draft.offlineOnStop })}
+      />
+      <FeatureToggle
         checked={streamingLocked || draft.streamingEnabled}
         disabled={locked || streamingLocked}
         label="Word-by-Word"

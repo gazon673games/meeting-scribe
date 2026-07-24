@@ -46,6 +46,10 @@ export function SettingsDialogButton({
     options.computeTypes?.length ? options.computeTypes : FALLBACK_OPTIONS.computeTypes,
     draft.computeType
   );
+  const offlineModelOptions = uniqueOptions(
+    options.offlineAsrModels?.length ? options.offlineAsrModels : FALLBACK_OPTIONS.offlineAsrModels,
+    draft.offlineModel
+  );
   const overloadOptions = uniqueOptions(
     options.overloadStrategies?.length ? options.overloadStrategies : FALLBACK_OPTIONS.overloadStrategies,
     draft.overloadStrategy
@@ -105,6 +109,7 @@ export function SettingsDialogButton({
                 draft={draft}
                 locked={locked}
                 modelOptions={modelOptions}
+                offlineModelOptions={offlineModelOptions}
                 overloadOptions={overloadOptions}
                 onAsrChange={onAsrChange}
                 onChange={onChange}

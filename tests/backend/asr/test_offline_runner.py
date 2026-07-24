@@ -8,10 +8,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from asr.infrastructure.offline_runner import OfflineProfile, OfflineRunner
+from asr.infrastructure.offline_runner import OfflineProfile, OfflineRunner, _remove_text_overlap
 
 
 class OfflineRunnerTests(unittest.TestCase):
+    def test_remove_text_overlap_deduplicates_neighboring_chunks(self) -> None:
+        self.assertEqual(
+            _remove_text_overlap("one two three", "two three four"),
+            "four",
+        )
+
     def test_run_transcribes_segments_writes_outputs_and_unloads_model(self) -> None:
         created_models: list["FakeWhisperModel"] = []
 

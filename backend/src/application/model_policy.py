@@ -10,6 +10,7 @@ from application.asr_profiles import (
     PROFILE_REALTIME,
     PROFILE_ULTRA_FAST,
 )
+from application.native_asr_models import NEMOTRON_MODEL_ID
 
 ASR_MODEL_LARGE_V3 = "large-v3"
 ASR_MODEL_LARGE_V3_TURBO = "large-v3-turbo"
@@ -17,8 +18,10 @@ ASR_MODEL_RU_LARGE_V3 = "bzikst/faster-whisper-large-v3-russian"
 ASR_MODEL_RU_PODLODKA_TURBO = "bzikst/faster-whisper-podlodka-turbo"
 ASR_MODEL_MEDIUM = "medium"
 ASR_MODEL_SMALL = "small"
+ASR_MODEL_NEMOTRON_STREAMING = NEMOTRON_MODEL_ID
 
 ASR_MODEL_NAMES = (
+    ASR_MODEL_NEMOTRON_STREAMING,
     ASR_MODEL_LARGE_V3,
     ASR_MODEL_LARGE_V3_TURBO,
     ASR_MODEL_RU_LARGE_V3,
@@ -75,6 +78,8 @@ class ModelOrchestrator:
             return current if current in available else self._first_available(ASR_MODEL_NAMES, available, current)
 
         compatible = self._asr_candidates(mode=mode, language=language)
+        if mode == "ultra":
+            return self._first_available(compatible, available, current)
         if current in available and current in self._acceptable_current_models(mode=mode, language=language):
             return current
         return self._first_available(compatible, available, current)
@@ -107,6 +112,13 @@ class ModelOrchestrator:
         lang = str(language or "").strip().lower()
         ru_first = lang in {"ru", "russian"}
 
+        if mode == "ultra":
+            return (
+                ASR_MODEL_NEMOTRON_STREAMING,
+                ASR_MODEL_RU_PODLODKA_TURBO if ru_first else ASR_MODEL_LARGE_V3_TURBO,
+                ASR_MODEL_SMALL,
+            )
+
         if mode == "fast":
             if ru_first:
                 return (ASR_MODEL_RU_PODLODKA_TURBO, ASR_MODEL_LARGE_V3_TURBO, ASR_MODEL_SMALL, ASR_MODEL_MEDIUM)
@@ -125,6 +137,13 @@ class ModelOrchestrator:
         lang = str(language or "").strip().lower()
         ru_first = lang in {"ru", "russian"}
 
+        if mode == "ultra":
+            return (
+                ASR_MODEL_NEMOTRON_STREAMING,
+                ASR_MODEL_RU_PODLODKA_TURBO if ru_first else ASR_MODEL_LARGE_V3_TURBO,
+                ASR_MODEL_SMALL,
+            )
+
         if mode == "fast":
             if ru_first:
                 return (ASR_MODEL_RU_PODLODKA_TURBO, ASR_MODEL_LARGE_V3_TURBO, ASR_MODEL_SMALL)
@@ -141,7 +160,9 @@ class ModelOrchestrator:
 
     def _policy_mode(self, asr_profile: str) -> str:
         profile = str(asr_profile or "").strip().lower()
-        if profile in {PROFILE_ULTRA_FAST.lower(), PROFILE_REALTIME.lower()}:
+        if profile == PROFILE_ULTRA_FAST.lower():
+            return "ultra"
+        if profile == PROFILE_REALTIME.lower():
             return "fast"
         if profile == PROFILE_QUALITY.lower():
             return "quality"

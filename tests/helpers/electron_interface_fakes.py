@@ -170,10 +170,12 @@ class _FakeAsrRuntime:
     def __init__(self, event_queue) -> None:  # noqa: ANN001
         self.event_queue = event_queue
         self.started = False
+        self.start_calls = 0
         self.stopped = False
 
     def start(self) -> None:
         self.started = True
+        self.start_calls += 1
         self.event_queue.put_nowait(UtteranceEvent(text="hello from asr", stream="mic"))
 
     def stop(self) -> None:
@@ -189,4 +191,3 @@ class _FakeAsrRuntimeFactory:
         self.settings = settings
         self.runtime = _FakeAsrRuntime(event_queue)
         return self.runtime
-

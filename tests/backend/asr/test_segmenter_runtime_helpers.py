@@ -8,9 +8,11 @@ import numpy as np
 from asr.application.metrics import ASRMetrics
 from asr.application.segmentation import SegmenterConfig, StreamingSegmenterConfig
 from asr.domain.segments import Segment
+from asr.domain.streaming import StreamingChunk
 from asr.infrastructure import segmentation as batch_segmentation
 from asr.infrastructure import streaming_segmenter
 from asr.infrastructure.audio_data import MonoAudio16kBuffer
+from asr.infrastructure.streaming_queue import CoalescingStreamingQueue
 
 
 class _FakeVAD:
@@ -197,6 +199,30 @@ class SegmenterRuntimeHelperTests(unittest.TestCase):
         )
         segmenter_full._emit_chunk("mic", full_state, 0.1, is_final=False)
         self.assertTrue(any(event.get("type") == "streaming_chunk_dropped" for event in logs))
+
+    def test_streaming_queue_coalesces_intermediates_and_preserves_finals(self) -> None:
+        chunk_queue = CoalescingStreamingQueue(maxsize=1)
+
+        def chunk(*, final: bool, value: float) -> StreamingChunk:
+            audio = MonoAudio16kBuffer.from_array(np.full(4, value, dtype=np.float32))
+            return StreamingChunk(
+                stream="mic",
+                t_start=0.0,
+                t_end=value,
+                audio=audio,
+                is_final=final,
+                enqueue_ts=0.0,
+                incremental_audio=audio,
+            )
+
+        chunk_queue.put_nowait(chunk(final=False, value=1.0))
+        self.assertEqual(chunk_queue.put_nowait(chunk(final=False, value=2.0)), "coalesced")
+        chunk_queue.put_nowait(chunk(final=True, value=3.0))
+
+        final = chunk_queue.get(timeout=0.01)
+        self.assertTrue(final.is_final)
+        self.assertEqual(final.t_end, 3.0)
+        self.assertEqual(len(final.incremental_audio.samples), 12)
 
 
 if __name__ == "__main__":

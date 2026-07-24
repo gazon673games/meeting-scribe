@@ -13,6 +13,7 @@ from application.asr_profiles import (
 )
 from application.codex_config import CodexProfile
 from application.model_policy import (
+    ASR_MODEL_NEMOTRON_STREAMING,
     ASR_MODEL_LARGE_V3,
     ASR_MODEL_LARGE_V3_TURBO,
     ASR_MODEL_MEDIUM,
@@ -36,14 +37,14 @@ class ModelOrchestratorTests(unittest.TestCase):
 
         self.assertEqual(model, ASR_MODEL_RU_PODLODKA_TURBO)
 
-    def test_ultra_fast_ru_prefers_russian_turbo(self) -> None:
+    def test_ultra_fast_ru_prefers_native_streaming_model(self) -> None:
         model = self.orchestrator.recommend_asr_model(
             asr_profile=PROFILE_ULTRA_FAST,
             language="ru",
             current_model=ASR_MODEL_LARGE_V3,
         )
 
-        self.assertEqual(model, ASR_MODEL_RU_PODLODKA_TURBO)
+        self.assertEqual(model, ASR_MODEL_NEMOTRON_STREAMING)
 
     def test_ultra_fast_profile_defaults_require_streaming(self) -> None:
         defaults = profile_defaults(PROFILE_ULTRA_FAST)

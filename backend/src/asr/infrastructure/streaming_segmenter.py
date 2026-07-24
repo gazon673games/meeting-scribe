@@ -25,6 +25,7 @@ class _StreamState:
     last_chunk_ts: float
     residual: np.ndarray
     agc: Optional[PreGainAGC]
+    emitted_samples: int = 0
 
 
 class StreamingAudioSegmenter:
@@ -100,6 +101,7 @@ class StreamingAudioSegmenter:
                 vad=vad, buffer=[], speech_start_ts=None,
                 last_chunk_ts=0.0,
                 residual=np.zeros((0,), dtype=np.float32), agc=agc,
+                emitted_samples=0,
             )
         return self._streams[name]
 
@@ -154,6 +156,8 @@ class StreamingAudioSegmenter:
             return
 
         audio = np.concatenate(state.buffer).astype(np.float32, copy=False)
+        emitted_samples = min(max(0, int(state.emitted_samples)), int(audio.size))
+        incremental = audio[emitted_samples:]
         chunk = StreamingChunk(
             stream=stream,
             t_start=float(state.speech_start_ts),
@@ -161,9 +165,25 @@ class StreamingAudioSegmenter:
             audio=MonoAudio16kBuffer.from_array(audio),
             is_final=is_final,
             enqueue_ts=time.time(),
+            incremental_audio=MonoAudio16kBuffer.from_array(incremental),
         )
+        enqueued = False
         try:
-            self._chunk_q.put_nowait(chunk)
+            result = self._chunk_q.put_nowait(chunk)
+            enqueued = True
+            if result == "coalesced":
+                self._log_event({
+                    "type": "streaming_chunk_coalesced",
+                    "stream": stream,
+                    "ts": time.time(),
+                })
+            elif result == "final_overflow":
+                self._log_event({
+                    "type": "streaming_final_backlog",
+                    "stream": stream,
+                    "queue_size": int(self._chunk_q.qsize()),
+                    "ts": time.time(),
+                })
         except queue.Full:
             self._log_event({
                 "type": "streaming_chunk_dropped",
@@ -173,11 +193,14 @@ class StreamingAudioSegmenter:
             })
 
         state.last_chunk_ts = time.time()
+        if enqueued:
+            state.emitted_samples = int(audio.size)
 
-        if is_final:
+        if is_final and enqueued:
             state.speech_start_ts = None
             state.buffer = []
             state.last_chunk_ts = 0.0
+            state.emitted_samples = 0
 
 
 def _prepend_preroll(state: _StreamState) -> None:

@@ -41,19 +41,20 @@ def profile_defaults(profile: str) -> Dict[str, Any]:
         return {
             "compute_type": "int8_float16",
             "cpu_threads": 0,
-            "num_workers": 2,
-            "beam_size": 1,
-            "endpoint_silence_ms": 300.0,
-            "max_segment_s": 3.0,
-            "overlap_ms": 80.0,
+            "num_workers": 1,
+            "beam_size": 2,
+            "endpoint_silence_ms": 500.0,
+            "max_segment_s": 6.0,
+            "overlap_ms": 200.0,
             "vad_energy_threshold": 0.0055,
             "overload_strategy": "drop_old",
             "overload_enter_qsize": 12,
             "overload_exit_qsize": 5,
             "overload_hard_qsize": 18,
             "overload_beam_cap": 1,
-            "overload_max_segment_s": 2.5,
-            "overload_overlap_ms": 60.0,
+            "overload_max_segment_s": 3.0,
+            "overload_overlap_ms": 80.0,
+            "streaming_enabled": False,
         }
 
     if p == PROFILE_QUALITY.lower():
@@ -73,6 +74,7 @@ def profile_defaults(profile: str) -> Dict[str, Any]:
             "overload_beam_cap": 3,
             "overload_max_segment_s": 6.0,
             "overload_overlap_ms": 160.0,
+            "streaming_enabled": False,
         }
 
     return {
@@ -91,4 +93,5 @@ def profile_defaults(profile: str) -> Dict[str, Any]:
         "overload_beam_cap": 2,
         "overload_max_segment_s": 5.0,
         "overload_overlap_ms": 120.0,
+        "streaming_enabled": False,
     }
