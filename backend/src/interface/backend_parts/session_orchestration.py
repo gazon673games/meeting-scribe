@@ -60,12 +60,17 @@ def with_default_sherpa_model(owner: Any, params: Dict[str, Any]) -> Dict[str, A
 
 def download_then_start(owner: Any, controller: Any, merged: Dict[str, Any]) -> Dict[str, Any]:  # noqa: ANN401
     from application.model_download import is_model_cached, normalize_model_reference
+    from application.native_asr_models import is_native_asr_model
 
     model_name = str(merged.get("model", "")).strip()
     if not model_name:
         return controller.start_session(merged)
     normalized_model = normalize_model_reference(model_name)
     if not is_model_cached(normalized_model, models_dir=owner._models_dir()):
+        if is_native_asr_model(model_name):
+            raise RuntimeError(
+                f"Native ASR model '{model_name}' is not installed in {owner._models_dir()}"
+            )
         controller.begin_model_download(normalized_model)
         try:
             owner.download_model({"name": normalized_model, "modelsDir": str(owner._models_dir())})

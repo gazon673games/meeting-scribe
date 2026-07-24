@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from application.asr_language import initial_prompt_for_language, normalize_asr_language, runtime_asr_language
+from application.native_asr_models import NEMOTRON_MODEL_ID
 from application.asr_profiles import profile_defaults, profile_requires_streaming
 from application.asr_session import ASRSessionSettings
 from interface.session_controller_parts.helpers import (
@@ -25,7 +26,9 @@ def asr_settings_from_params(
     mode = "split" if mode_raw in {"1", "split", "sources"} else "mix"
     overload_strategy = str(params.get("overload_strategy", params.get("overloadStrategy", "drop_old"))).strip().lower()
     profile = str(params.get("profile", params.get("asr_profile", "")) or "").strip()
+    model_name = str(params.get("model", params.get("model_name", "medium")) or "medium")
     streaming_required = profile_requires_streaming(profile)
+    native_streaming_required = model_name == NEMOTRON_MODEL_ID
     streaming_defaults = profile_defaults(profile) if streaming_required else {}
     streaming_chunk_default = float(streaming_defaults.get("streaming_chunk_interval_s", 1.0))
     streaming_endpoint_default = float(streaming_defaults.get("streaming_endpoint_silence_ms", 300.0))
@@ -40,6 +43,7 @@ def asr_settings_from_params(
             bool(streaming_defaults.get("streaming_enabled", False)),
         )
         or streaming_required
+        or native_streaming_required
     )
     streaming_chunk_interval_s = safe_float_clamped(
         streaming_chunk_default
@@ -71,7 +75,7 @@ def asr_settings_from_params(
     return ASRSessionSettings(
         language=language,
         mode=mode,  # type: ignore[arg-type]
-        model_name=str(params.get("model", params.get("model_name", "medium")) or "medium"),
+        model_name=model_name,
         device=str(params.get("device", "cuda") or "cuda"),
         compute_type=str(params.get("compute_type", params.get("computeType", "float16")) or "float16"),
         cpu_threads=safe_int(params.get("cpu_threads", params.get("cpuThreads", 0)), 0, 0, 64),
@@ -110,6 +114,7 @@ def asr_settings_from_params(
         ),
         asr_language=runtime_asr_language(language),
         asr_initial_prompt=initial_prompt_for_language(language),
+        asr_hotwords=str(first_param(params, "hotwords", "asr_hotwords", default="") or "").strip() or None,
         source_speaker_labels=dict(source_speaker_labels or {}),
         diarization_enabled=bool(params.get("diarizationEnabled", params.get("diarization_enabled", False))),
         diar_backend=normalize_diar_backend(params.get("diarBackend", params.get("diar_backend", "online"))),
@@ -177,4 +182,3 @@ def asr_settings_from_params(
             1.0,
         ),
     )
-

@@ -26,10 +26,12 @@ class _AssistantUseCase:
 class _Runtime:
     def __init__(self) -> None:
         self.started = False
+        self.start_calls = 0
         self.stopped = False
 
     def start(self) -> None:
         self.started = True
+        self.start_calls += 1
 
     def stop(self) -> None:
         self.stopped = True
@@ -124,6 +126,7 @@ class ApplicationServiceTests(unittest.TestCase):
         self.assertTrue(result.degraded)
         self.assertEqual(len(result.errors), 1)
         self.assertEqual(factory.calls, 2)
+        self.assertEqual(result.asr.start_calls, 1)
 
 
 if __name__ == "__main__":

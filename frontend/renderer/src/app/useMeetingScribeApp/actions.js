@@ -7,6 +7,8 @@ import { removeSessionSource, upsertSessionSource } from "./sessionState";
 import { applyProfileDefaults, mergeSettingsPatch } from "./settingsDraft";
 import { mergeBackendStateSnapshot } from "./transcriptState";
 
+const SESSION_LIFECYCLE_METHODS = new Set(["start_session", "stop_session"]);
+
 export function useAppActions({
   appOptions,
   config,
@@ -23,6 +25,9 @@ export function useAppActions({
   setState,
   settingsDraft,
 }) {
+  const sessionActionRef = React.useRef(false);
+  const [sessionActionPending, setSessionActionPending] = React.useState(false);
+
   const updateSettings = React.useCallback((patch) => {
     setSettingsDraft((current) => mergeSettingsPatch(current, patch, appOptions));
     setSettingsDirty(true);
@@ -125,6 +130,14 @@ export function useAppActions({
   }, [config, setConfig, setError, setSavingSettings, setSettingsDirty, setState, settingsDraft]);
 
   const runBackendAction = React.useCallback(async (method, params = {}) => {
+    const sessionLifecycle = SESSION_LIFECYCLE_METHODS.has(method);
+    if (sessionLifecycle && sessionActionRef.current) {
+      return undefined;
+    }
+    if (sessionLifecycle) {
+      sessionActionRef.current = true;
+      setSessionActionPending(true);
+    }
     setError("");
     try {
       const result = await meetingScribeClient.request(method, params);
@@ -140,22 +153,37 @@ export function useAppActions({
       if (result?.warning) {
         setError(result.warning);
       }
+      return result;
     } catch (requestError) {
       setError(formatRequestError(requestError));
+      if (sessionLifecycle) {
+        try {
+          const currentState = await meetingScribeClient.request("get_state");
+          setState((current) => mergeBackendStateSnapshot(current, currentState));
+        } catch {
+          // Keep the original lifecycle error when state refresh is unavailable.
+        }
+      }
+      return undefined;
+    } finally {
+      if (sessionLifecycle) {
+        sessionActionRef.current = false;
+        setSessionActionPending(false);
+      }
     }
   }, [refresh, setError, setState]);
 
   const startOrStop = React.useCallback(() => {
     if (runState) {
-      runBackendAction("stop_session", {
-        runOfflinePass: false,
+      return runBackendAction("stop_session", {
+        runOfflinePass: Boolean(settingsDraft.offlineOnStop),
         outputFile: settingsDraft.outputFile,
         language: settingsDraft.language,
-        model: settingsDraft.model
+        model: settingsDraft.model,
+        offlineModelName: settingsDraft.offlineModel
       });
-      return;
     }
-    runBackendAction("start_session", draftToStartParams(settingsDraft));
+    return runBackendAction("start_session", draftToStartParams(settingsDraft));
   }, [runBackendAction, runState, settingsDraft]);
 
   return {
@@ -167,6 +195,7 @@ export function useAppActions({
     reloadApp,
     runBackendAction,
     saveSettings,
+    sessionActionPending,
     startAssistantLogin,
     startLocalModel,
     startOrStop,

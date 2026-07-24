@@ -3,9 +3,12 @@ import { Activity, Moon, Play, RefreshCw, Square, SquareTerminal, Sun } from "lu
 import { SettingsDialogButton } from "../settings/SettingsDialogButton";
 import { ColumnLayoutMenu } from "./ColumnLayoutMenu";
 
-export function TopBar({ canStart, canStop, loading, pipelineLayout, settingsPanel, status, asrMetrics, onOpenDebugConsole, onRefresh, onStartStop }) {
+export function TopBar({ canStart, canStop, loading, pipelineLayout, sessionActionPending, settingsPanel, status, asrMetrics, onOpenDebugConsole, onRefresh, onStartStop }) {
   const running = status === "recording";
-  const disabled = running ? !canStop : !canStart;
+  const disabled = Boolean(sessionActionPending) || (running ? !canStop : !canStart);
+  const actionLabel = sessionActionPending
+    ? running ? "Stopping..." : "Starting..."
+    : running ? "Stop" : "Start";
   const latencyMs = Math.max(0, Math.round(Number(asrMetrics.avgLatencyS || 0) * 1000));
   const statusView = loading
     ? { label: "Loading", tone: "muted" }
@@ -25,7 +28,7 @@ export function TopBar({ canStart, canStop, loading, pipelineLayout, settingsPan
       <div className="control-left">
         <button className={`record-button ${running ? "stop" : ""}`} disabled={disabled} onClick={onStartStop}>
           {running ? <Square size={16} /> : <Play size={16} />}
-          {running ? "Stop" : "Start"}
+          {actionLabel}
         </button>
 
         <div className="latency-pill">

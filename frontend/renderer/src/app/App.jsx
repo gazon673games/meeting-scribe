@@ -92,6 +92,7 @@ export function App() {
         canStop={app.canStop}
         loading={app.loading}
         pipelineLayout={pipelineLayout}
+        sessionActionPending={app.sessionActionPending}
         settingsPanel={{
           capabilities: app.capabilities,
           dirty: app.settingsDirty,

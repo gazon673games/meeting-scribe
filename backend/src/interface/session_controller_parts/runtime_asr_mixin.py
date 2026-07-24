@@ -61,7 +61,6 @@ class RuntimeAsrMixin:
             return self._last_warning
 
         self._asr_runtime = result.asr
-        self._asr_runtime.start()
         self._asr_running = True
         self._active_asr_session_id = str(getattr(result.asr, "session_id", "") or generated_session_id())
         self._transcription_state.finish_start(degraded=result.attempt.degraded, attempt_label=result.attempt.label)

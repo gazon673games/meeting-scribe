@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 from asr.domain.audio import MonoAudio16k
 
@@ -27,6 +27,7 @@ class StreamingChunk:
     audio: MonoAudio16k
     is_final: bool
     enqueue_ts: float
+    incremental_audio: Optional[MonoAudio16k] = None
 
 
 class ConfirmedPrefixTracker:

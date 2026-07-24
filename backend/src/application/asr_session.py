@@ -39,6 +39,7 @@ class ASRSessionSettings:
     overload_overlap_ms: float
     asr_language: Optional[str]
     asr_initial_prompt: Optional[str]
+    asr_hotwords: Optional[str] = None
     source_speaker_labels: Dict[str, str] = field(default_factory=dict)
     diarization_enabled: bool = False
     diar_backend: DiarBackend = "online"

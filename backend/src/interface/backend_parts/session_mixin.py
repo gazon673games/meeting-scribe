@@ -96,8 +96,10 @@ class BackendSessionMixin:
         controller = self._require_session_controller()
         config = self._read_config()
         ui = config.get("ui", {}) if isinstance(config.get("ui"), dict) else {}
+        asr = config.get("asr", {}) if isinstance(config.get("asr"), dict) else {}
         merged = {
             "runOfflinePass": bool(ui.get("offline_on_stop", False)),
+            "offlineModelName": str(asr.get("offline_model", ui.get("model", "large-v3")) or "large-v3"),
             **dict(params),
         }
         return controller.stop_session(merged)
