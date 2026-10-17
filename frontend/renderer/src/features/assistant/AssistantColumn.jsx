@@ -44,15 +44,19 @@ export function AssistantColumn({
   }, [assistant.selectedProfileId]);
 
   const selectedProfile = selectProfile(profiles, profileId);
+  const localModelStatus = localLlmStatus?.[profileId] || null;
+  const observedLocalStatus = React.useMemo(() => localModelStatus ? { ...localModelStatus, ts: Date.now() } : null, [localModelStatus]);
   const response = assistant.lastResponse || {};
   const context = buildAssistantContext({
     assistant,
+    assistantPing,
     contextReady,
     disabled,
-    localLlmStatus,
+    localModelStatus: observedLocalStatus,
     profileId,
     selectedProfile,
   });
+  const providerUnavailable = context.providerState.providerAvailable === false;
 
   const handleInvoke = (params) => {
     const label = params.requestText || ACTION_LABELS[params.action] || "";
@@ -68,29 +72,35 @@ export function AssistantColumn({
   };
 
   return (
-    <PipelinePanel title="AI Assistant" active={assistant.busy} className="assistant-column" headerControls={layoutControls} headerProps={headerProps} showIndicator>
-      <AssistantProfileSelect disabled={disabled} profileId={profileId} profiles={profiles} onProfileChange={handleProfileChange} />
+    <PipelinePanel title="AI Assistant" active={assistant.busy} className={`assistant-column${providerUnavailable ? " assistant-unavailable" : ""}`} headerControls={layoutControls} headerProps={headerProps} showIndicator>
+      <div className="assistant-controls">
+        <AssistantProfileSelect disabled={disabled} profileId={profileId} profiles={profiles} onProfileChange={handleProfileChange} />
 
-      <AssistantRuntimeBar
-        assistantPing={assistantPing}
-        disabled={disabled}
-        onPing={onPing}
-        onStartLocalModel={onStartLocalModel}
-        onStopLocalModel={onStopLocalModel}
-        profileId={profileId}
-        runtime={context}
-      />
+        <AssistantRuntimeBar
+          assistantPing={assistantPing}
+          disabled={disabled}
+          onPing={onPing}
+          onStartLocalModel={onStartLocalModel}
+          onStopLocalModel={onStopLocalModel}
+          profileId={profileId}
+          runtime={context}
+        />
 
-      <AssistantQuickActions disabled={context.actionsDisabled} profileId={profileId} onInvoke={handleInvoke} />
+        {!providerUnavailable && contextReady ? <AssistantQuickActions disabled={context.actionsDisabled} profileId={profileId} onInvoke={handleInvoke} /> : null}
+        {!providerUnavailable && !contextReady ? <p className="control-hint">Quick actions become available when the transcript has text.</p> : null}
+      </div>
       <AssistantResponse
-        assistant={assistant}
+        assistant={context.providerState}
         busy={assistant.busy}
         messages={chatMessages}
         onAuthorize={() => onAuthorize?.(context.selectedProviderId)}
       />
-      <AssistantStats assistant={assistant} response={response} selectedProfile={selectedProfile} />
+      <details className="panel-details assistant-details">
+        <summary>Session details</summary>
+        <AssistantStats assistant={assistant} response={response} selectedProfile={selectedProfile} />
+      </details>
       <AssistantPromptBox
-        disabled={disabled}
+        disabled={disabled || providerUnavailable}
         submitDisabled={context.submitDisabled}
         text={text}
         onTextChange={setText}
@@ -133,19 +143,48 @@ function selectProfile(profiles, profileId) {
   return profiles.find((profile) => profile.id === profileId) || {};
 }
 
-function buildAssistantContext({ assistant, contextReady, disabled, localLlmStatus, profileId, selectedProfile }) {
+function buildAssistantContext({ assistant, assistantPing, contextReady, disabled, localModelStatus, profileId, selectedProfile }) {
   const noProfile = !profileId;
   const selectedProviderId = selectedProfile.providerId || selectedProfile.provider || assistant.providerId || "codex";
   const isCodexProfile = (selectedProfile.provider || selectedProfile.providerId || "codex") === "codex";
-  const llmStatus = !isCodexProfile ? (localLlmStatus?.[profileId] || null) : null;
+  const llmStatus = !isCodexProfile ? localModelStatus : null;
+  const provider = assistant.providers?.find((item) => item.id === selectedProviderId);
+  const providerState = provider ? {
+    ...assistant,
+    providerAvailable: provider.available,
+    providerMessage: provider.message,
+    providerSuggestion: provider.suggestion,
+    providerErrorCode: provider.errorCode,
+    providerLoginSupported: provider.loginSupported,
+  } : { ...assistant, providerAvailable: assistant.providerId === selectedProviderId ? assistant.providerAvailable : undefined };
+  if (llmStatus?.state === "running") {
+    providerState.providerAvailable = true;
+  } else if (llmStatus?.state) {
+    providerState.providerAvailable = false;
+    providerState.providerMessage = llmStatus.state === "starting" ? "Model is starting..." : llmStatus.state === "error" ? llmStatus.message || "Model failed to start." : "Model is stopped.";
+  }
+  if (assistantPing?.ts && assistantPing.ts >= (llmStatus?.ts || 0) && !assistantPing.busy && assistantPing.providerId === selectedProviderId && (!assistantPing.profileId || assistantPing.profileId === profileId)) {
+    providerState.providerAvailable = assistantPing.ok;
+    providerState.providerMessage = assistantPing.message;
+    providerState.providerSuggestion = assistantPing.suggestion;
+    providerState.providerErrorCode = assistantPing.errorCode;
+  }
+  if (providerState.providerAvailable === undefined) {
+    providerState.providerMessage = "Connection not checked";
+    providerState.providerSuggestion = isCodexProfile ? "Use Ping to check the selected provider, or send a request." : "Start the selected model or use Ping to check its connection.";
+  }
+  if (providerState.providerAvailable === false && !isCodexProfile && !providerState.providerSuggestion) {
+    providerState.providerSuggestion = "Start the selected model, or check its connection in Settings.";
+  }
   return {
+    providerState,
     selectedProviderId,
     isCodexProfile,
     llmStatus,
     llmRunning: llmStatus?.state === "running",
     llmStarting: llmStatus?.state === "starting",
-    actionsDisabled: disabled || !contextReady || noProfile,
-    submitDisabled: disabled || noProfile,
+    actionsDisabled: disabled || !contextReady || noProfile || providerState.providerAvailable === false,
+    submitDisabled: disabled || noProfile || providerState.providerAvailable === false,
   };
 }
 
@@ -201,6 +240,10 @@ function AssistantRuntimeBar({
         </button>
       )}
       <LocalLlmStatusText status={runtime.llmStatus} />
+      <button className="assistant-ping-btn" disabled={disabled || assistantPing?.busy} onClick={() => onPing?.(runtime.selectedProviderId, profileId)} type="button" title="Check the selected model connection">
+        <Radio size={13} />Ping
+      </button>
+      <AssistantPingStatus idleRequiresTs ping={assistantPing?.profileId === profileId ? assistantPing : null} />
     </div>
   );
 }

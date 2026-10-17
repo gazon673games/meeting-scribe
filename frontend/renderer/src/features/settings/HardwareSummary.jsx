@@ -8,7 +8,7 @@ export function HardwareSummary({ hardware }) {
   const gpus = Array.isArray(hardware?.gpus) ? hardware.gpus : [];
 
   return (
-    <CollapsibleSection title="Current Hardware" defaultOpen={true}>
+    <CollapsibleSection title="System information" defaultOpen={false} summary={cpu.name || "CPU, memory and GPU"}>
       <div className="hardware-grid">
         <HardwareTile icon={Cpu} label="CPU" value={cpu.name || "CPU"} meta={`${Number(cpu.logicalCores || 0) || "-"} logical cores`} />
         <HardwareTile icon={HardDrive} label="Memory" value={formatBytes(memory.totalBytes)} meta="Total RAM" />

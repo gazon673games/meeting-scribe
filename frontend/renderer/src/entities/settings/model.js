@@ -7,12 +7,14 @@ export {
   ASSISTANT_REASONING_OPTIONS,
   DIARIZATION_BACKENDS,
   DIARIZATION_PROVIDERS,
-  FALLBACK_OPTIONS
+  FALLBACK_OPTIONS,
+  THEME_OPTIONS
 } from "./modelParts/constants";
 export {
   asrProfileRequiresStreaming,
   buildProxyUrl,
-  normalizeAssistantProfiles
+  normalizeAssistantProfiles,
+  normalizeTheme
 } from "./modelParts/helpers";
 export {
   applySettingsToConfig,

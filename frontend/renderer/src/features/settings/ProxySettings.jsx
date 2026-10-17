@@ -1,6 +1,5 @@
 import { Network } from "lucide-react";
 
-import { buildProxyUrl } from "../../entities/settings/model";
 import { CollapsibleSection } from "../../shared/ui/CollapsibleSection";
 import { Field } from "../../shared/ui/Field";
 
@@ -23,7 +22,7 @@ export function ProxySettings({ draft, onChange }) {
           <b />
         </button>
 
-        <div className="settings-grid proxy-grid">
+        <div className="settings-grid proxy-address-grid">
           <Field label="Scheme">
             <select
               disabled={!enabled}
@@ -54,6 +53,8 @@ export function ProxySettings({ draft, onChange }) {
               onChange={(event) => onChange({ assistantProxyPort: event.target.value.replace(/\D/g, "") })}
             />
           </Field>
+        </div>
+        <div className="settings-grid proxy-credentials-grid">
           <Field label="Username">
             <input
               autoComplete="off"
@@ -76,7 +77,7 @@ export function ProxySettings({ draft, onChange }) {
 
         <div className="proxy-note">
           <Network size={13} />
-          <span>Used through HTTP_PROXY, HTTPS_PROXY and ALL_PROXY.</span>
+          <span>Route assistant requests through this proxy. Model downloads have a separate proxy option.</span>
         </div>
       </div>
     </CollapsibleSection>

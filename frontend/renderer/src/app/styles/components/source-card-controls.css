@@ -9,7 +9,7 @@
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  min-height: 108px;
+  min-height: 86px;
   overflow: hidden;
   padding: 12px;
   background: var(--panel-bg-soft);
@@ -128,11 +128,11 @@
 }
 
 .audio-meter div.warm {
-  background: #facc15;
+  background: var(--meter-warm);
 }
 
 .audio-meter div.hot {
-  background: #f97316;
+  background: var(--meter-hot);
 }
 
 .select-shell {
@@ -216,6 +216,10 @@
 .source-card .select-shell select {
   height: 29px;
   color: var(--text);
+}
+
+.source-card .select-shell.has-display-label select {
+  color: transparent;
 }
 
 .source-static-value {

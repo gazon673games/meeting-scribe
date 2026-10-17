@@ -1,5 +1,11 @@
 export const ASR_PROFILE_ULTRA_FAST = "Ultra Fast";
 
+export const THEME_OPTIONS = [
+  { id: "dark", label: "Dark" },
+  { id: "light", label: "Light" },
+  { id: "grimdark", label: "Grimdark" }
+];
+
 export const FALLBACK_OPTIONS = {
   languages: ["ru", "en", "auto"],
   asrProfiles: [ASR_PROFILE_ULTRA_FAST, "Realtime", "Balanced", "Quality", "Custom"],

@@ -16,6 +16,8 @@ function formatSpeed(bps) {
 export function ProcessingStats({ asrMetrics, draft, session, summary }) {
   const downloading = session.state === "downloading_model";
   const dl = session.modelDownload || {};
+  const hasAsrDrops = Number(asrMetrics.segDroppedTotal || 0) > 0 || Number(asrMetrics.segSkippedTotal || 0) > 0;
+  const hasAudioDrops = Number(session.drops?.droppedOutBlocks || 0) > 0 || Number(session.drops?.droppedTapBlocks || 0) > 0;
   return (
     <div className="settings-strip">
       <StatLine label="Active Model" value={summary.model || draft.model || "-"} />
@@ -32,8 +34,8 @@ export function ProcessingStats({ asrMetrics, draft, session, summary }) {
       ) : (
         <>
           <StatLine label="ASR Latency" value={`${formatNumber(asrMetrics.avgLatencyS)}s`} accent="green" />
-          <StatLine label="ASR Drops" value={`${asrMetrics.segDroppedTotal ?? 0}/${asrMetrics.segSkippedTotal ?? 0}`} accent="blue" />
-          <StatLine label="Audio Drops" value={`${session.drops?.droppedOutBlocks ?? 0}/${session.drops?.droppedTapBlocks ?? 0}`} />
+          <StatLine label="ASR Drops" value={`${asrMetrics.segDroppedTotal ?? 0}/${asrMetrics.segSkippedTotal ?? 0}`} accent={hasAsrDrops ? "warn" : ""} />
+          <StatLine label="Audio Drops" value={`${session.drops?.droppedOutBlocks ?? 0}/${session.drops?.droppedTapBlocks ?? 0}`} accent={hasAudioDrops ? "warn" : ""} />
         </>
       )}
     </div>

@@ -13,6 +13,8 @@ build/
 dist/
 coverage/
 .coverage
+.ruff_cache/
+.pytest_cache/
 capture_mix.wav
 tmp/
 .tmp_tests/
@@ -25,3 +27,13 @@ build/electron-renderer/
 
 # model weights
 models/
+.opencode
+
+# Local agent instructions, standards and review artifacts
+AGENTS.md
+.agents/
+.codex/
+docs/**/*[Aa][Uu][Dd][Ii][Tt]*
+docs/**/*[Ss][Tt][Aa][Nn][Dd][Aa][Rr][Dd]*
+docs/**/*[Rr][Ee][Ff][Aa][Cc][Tt][Oo][Rr]*
+docs/**/*[Rr][Ee][Vv][Ii][Ee][Ww]*

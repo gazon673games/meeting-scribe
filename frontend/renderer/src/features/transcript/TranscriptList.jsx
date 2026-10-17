@@ -64,7 +64,11 @@ export function TranscriptList({ lines, running }) {
         />
       ))}
       {!lines.length && !running ? (
-        <div className="transcript-empty">Transcript stream</div>
+        <div className="transcript-empty">
+          <span>Transcript stream</span>
+          <strong>Waiting for speech</strong>
+          <p>Enable an audio source and press Start. Recognized speech will appear here.</p>
+        </div>
       ) : null}
       {running ? <TypingRow /> : null}
     </div>

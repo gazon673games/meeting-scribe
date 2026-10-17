@@ -1,11 +1,11 @@
-import { Gem, Rocket, Zap } from "lucide-react";
+import { SelectShell } from "../../shared/ui/forms/SelectShell";
 
 const DEFAULT_QUALITY_PROFILES = ["Ultra Fast", "Realtime", "Quality"];
 const PROFILE_META = {
-  "Ultra Fast": { label: "Ultra Fast", icon: Rocket },
-  Realtime: { label: "Fast", icon: Zap },
-  Balanced: { label: "Balanced" },
-  Quality: { label: "High Quality", icon: Gem }
+  "Ultra Fast": { label: "Ultra Fast", description: "Prioritize low latency for live captions." },
+  Realtime: { label: "Fast", description: "Live transcription with a focus on responsiveness." },
+  Balanced: { label: "Balanced", description: "Balance transcription quality and responsiveness." },
+  Quality: { label: "High Quality", description: "Prioritize recognition quality over response speed." }
 };
 
 export function QualityProfileSelector({ disabled, profiles, selectedProfile, onProfileChange }) {
@@ -14,21 +14,14 @@ export function QualityProfileSelector({ disabled, profiles, selectedProfile, on
     .map((profile) => ({ profile, ...(PROFILE_META[profile] || { label: profile }) }));
 
   return (
-    <div className="quality-stack">
-      {qualityProfiles.map((item) => {
-        const Icon = item.icon;
-        return (
-          <button
-            key={item.profile}
-            className={selectedProfile === item.profile ? "selected" : ""}
-            disabled={disabled}
-            onClick={() => onProfileChange(item.profile)}
-          >
-            <span>{item.label}</span>
-            {Icon ? <Icon size={15} /> : null}
-          </button>
-        );
-      })}
+    <div className="quality-selector">
+      <SelectShell>
+        <select aria-label="Processing mode" disabled={disabled} value={selectedProfile} onChange={(event) => onProfileChange(event.target.value)}>
+          {selectedProfile && !qualityProfiles.some((item) => item.profile === selectedProfile) ? <option value={selectedProfile}>{selectedProfile}</option> : null}
+          {qualityProfiles.map((item) => <option key={item.profile} value={item.profile}>{item.label}</option>)}
+        </select>
+      </SelectShell>
+      <p className="control-hint">{disabled ? "Stop recording to change the processing mode." : PROFILE_META[selectedProfile]?.description || "Custom transcription settings."}</p>
     </div>
   );
 }

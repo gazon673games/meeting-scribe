@@ -3,7 +3,8 @@ import {
   ASSISTANT_REASONING_OPTIONS,
   DIARIZATION_BACKENDS,
   DIARIZATION_PROVIDERS,
-  FALLBACK_OPTIONS
+  FALLBACK_OPTIONS,
+  THEME_OPTIONS
 } from "./constants";
 
 const DEFAULT_ASSISTANT_PROFILES = [
@@ -73,7 +74,8 @@ export function boolWithDefault(value, fallback) {
 }
 
 export function normalizeTheme(value) {
-  return String(value || "").trim().toLowerCase() === "light" ? "light" : "dark";
+  const theme = String(value || "").trim().toLowerCase();
+  return THEME_OPTIONS.some((option) => option.id === theme) ? theme : "dark";
 }
 
 export function parseProxy(value) {

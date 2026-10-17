@@ -1,4 +1,5 @@
 @import "./styles/foundation.css";
+@import "./styles/themes.css";
 @import "./styles/settings.css";
 @import "./styles/debug-console.css";
 @import "./styles/pipeline-layout.css";

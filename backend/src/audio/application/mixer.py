@@ -89,7 +89,8 @@ def render_source_block(
         block_src = block_src[:, None]
     block_src = pad_or_crop_n(block_src, engine_format.blocksize)
 
-    block_eng = channel_map_to_engine(block_src, int(src_fmt.channels), engine_format.channels)
+    # Capture devices can return a different channel count than their configured format.
+    block_eng = channel_map_to_engine(block_src, int(block_src.shape[1]), engine_format.channels)
 
     if state.delay_frames > 0:
         block_eng = apply_delay_block(state, block_eng, engine_format.blocksize, engine_format.channels)

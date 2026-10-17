@@ -62,7 +62,7 @@ export function SourceCard({
   };
 
   return (
-    <article className="source-card">
+    <article className={`source-card${source?.enabled ? " source-active" : " source-inactive"}`}>
       <div className="source-head">
         <div className="source-title">
           {icon}
@@ -85,9 +85,11 @@ export function SourceCard({
         </div>
       </div>
 
-      <div className="audio-meter">
-        <div className={meterClass} style={{ width: `${source?.enabled ? level : 0}%` }} />
-      </div>
+      {source?.enabled ? (
+        <div aria-label={`${title} audio level`} aria-valuemax={100} aria-valuemin={0} aria-valuenow={level} className="audio-meter" role="meter">
+          <div className={meterClass} style={{ width: `${level}%` }} />
+        </div>
+      ) : null}
 
       <SourceCardDevicePicker
         Picker={Picker}

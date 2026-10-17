@@ -1,4 +1,5 @@
 import { X } from "lucide-react";
+import { useColorTheme } from "../entities/settings/useColorTheme";
 
 import { AssistantColumn } from "../features/assistant/AssistantColumn";
 import { AudioInputs } from "../features/audio-inputs/AudioInputs";
@@ -13,6 +14,7 @@ import "./styles.css";
 
 export function App() {
   const app = useMeetingScribeApp();
+  const theme = useColorTheme({ theme: app.settingsDraft.theme, persist: !app.loading });
   const pipelineColumns = [
     {
       id: "audio-inputs",
@@ -86,13 +88,15 @@ export function App() {
   const pipelineLayout = usePipelineLayout(pipelineColumns);
 
   return (
-    <main className="app-shell" data-theme={app.settingsDraft.theme || "dark"}>
+    <main className="app-shell" data-theme={theme}>
       <TopBar
+        backendStatus={app.backendStatus}
         canStart={app.canStart}
         canStop={app.canStop}
         loading={app.loading}
         pipelineLayout={pipelineLayout}
         sessionActionPending={app.sessionActionPending}
+        startUnavailableReason={app.startUnavailableReason}
         settingsPanel={{
           capabilities: app.capabilities,
           dirty: app.settingsDirty,

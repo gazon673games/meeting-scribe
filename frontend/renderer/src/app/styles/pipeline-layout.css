@@ -13,6 +13,7 @@
 }
 
 .transcript-column {
+  container: transcript-column / inline-size;
   background: var(--app-bg);
 }
 
@@ -57,7 +58,7 @@
 .column-resizer:hover::after,
 .column-resizer:focus-visible::after {
   background: var(--accent);
-  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.35);
+  box-shadow: 0 0 0 1px var(--accent-soft);
 }
 
 .column-resizer:focus-visible {
