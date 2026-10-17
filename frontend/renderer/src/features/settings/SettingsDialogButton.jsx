@@ -5,6 +5,7 @@ import { FALLBACK_OPTIONS, uniqueOptions } from "../../entities/settings/model";
 import { AdvancedAsrSettings } from "./AdvancedAsrSettings";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { AssistantSettings } from "./AssistantSettings";
+import { CaptureSettings } from "./CaptureSettings";
 import { DiarizationSettings } from "./DiarizationSettings";
 import { HardwareSummary } from "./HardwareSummary";
 import { ModelsSection } from "./ModelsSection";
@@ -24,6 +25,7 @@ export function SettingsDialogButton({
   onSave
 }) {
   const [open, setOpen] = React.useState(false);
+  const titleId = React.useId();
 
   React.useEffect(() => {
     if (!open) return undefined;
@@ -79,14 +81,14 @@ export function SettingsDialogButton({
         <div className="settings-modal-backdrop" role="presentation" onMouseDown={() => setOpen(false)}>
           <section
             aria-modal="true"
+            aria-labelledby={titleId}
             className="settings-modal"
             role="dialog"
             onMouseDown={(event) => event.stopPropagation()}
           >
             <header className="settings-modal-head">
               <div>
-                <span>Settings</span>
-                <h2>Runtime & ASR</h2>
+                <h2 id={titleId}>Settings</h2>
               </div>
               <button aria-label="Close settings" className="icon-button" type="button" onClick={() => setOpen(false)}>
                 <X size={16} />
@@ -95,6 +97,10 @@ export function SettingsDialogButton({
 
             <div className="settings-modal-body">
               <AppearanceSettings
+                theme={draft.theme}
+                onChange={onChange}
+              />
+              <CaptureSettings
                 capabilities={capabilities}
                 perProcessAudio={draft.perProcessAudio}
                 screenCaptureProtection={draft.screenCaptureProtection}
@@ -103,29 +109,30 @@ export function SettingsDialogButton({
               <HardwareSummary hardware={hardware} />
               <ProxySettings draft={draft} onChange={onChange} />
               <AssistantSettings draft={draft} onChange={onChange} />
-              <AdvancedAsrSettings
-                computeOptions={computeOptions}
-                deviceOptions={deviceOptions}
-                draft={draft}
-                locked={locked}
-                modelOptions={modelOptions}
-                offlineModelOptions={offlineModelOptions}
-                overloadOptions={overloadOptions}
-                onAsrChange={onAsrChange}
-                onChange={onChange}
-              />
-              <DiarizationSettings draft={draft} locked={locked} options={options} onChange={onChange} />
+              <div className="settings-group">
+                <h3 className="settings-group-title">Runtime & ASR</h3>
+                <AdvancedAsrSettings
+                  computeOptions={computeOptions}
+                  deviceOptions={deviceOptions}
+                  draft={draft}
+                  locked={locked}
+                  modelOptions={modelOptions}
+                  offlineModelOptions={offlineModelOptions}
+                  overloadOptions={overloadOptions}
+                  onAsrChange={onAsrChange}
+                  onChange={onChange}
+                />
+                <DiarizationSettings draft={draft} locked={locked} options={options} onChange={onChange} />
+              </div>
               <ModelsSection draft={draft} open={open} onChange={onChange} />
             </div>
 
             <footer className="settings-modal-foot">
-              <button className="save-button secondary" disabled={!dirty || saving} onClick={onSave} type="button">
-                {dirty ? <Save size={15} /> : <Check size={15} />}
-                {saving ? "Saving" : dirty ? "Save Settings" : "Saved"}
-              </button>
-              <button className="save-button" type="button" onClick={handleReloadApp}>
+              <span className="settings-save-status" role="status">{saving ? "Saving..." : dirty ? "Unsaved changes" : <><Check size={14} /> Saved</>}</span>
+              {dirty ? <button className="save-button secondary" disabled={saving} onClick={onSave} type="button"><Save size={15} />Save Settings</button> : null}
+              <button className="save-button" disabled={saving} title="Save settings and reload the app window." type="button" onClick={handleReloadApp}>
                 <RefreshCw size={15} />
-                Save & Refresh
+                Save & Refresh Window
               </button>
             </footer>
           </section>

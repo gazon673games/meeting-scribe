@@ -54,19 +54,6 @@
   padding: 10px;
 }
 
-.debug-process-card.good {
-  border-color: rgba(34, 197, 94, 0.34);
-}
-
-.debug-process-card.warn {
-  border-color: rgba(234, 179, 8, 0.42);
-}
-
-.debug-process-card.error {
-  border-color: var(--error-border);
-  background: var(--error-bg);
-}
-
 .debug-process-icon {
   width: 28px;
   height: 28px;
@@ -107,10 +94,25 @@
 }
 
 .debug-process-copy span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   color: var(--subtle);
   font-size: 11px;
   text-transform: uppercase;
 }
+
+.debug-status-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.debug-status-dot.good { background: var(--success); }
+.debug-status-dot.warn { background: var(--warn); }
+.debug-status-dot.error { background: var(--danger); }
 
 .debug-process-copy p {
   margin: 0;
@@ -121,7 +123,7 @@
 .debug-log-panel {
   min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
@@ -147,6 +149,64 @@
   font-size: 12px;
 }
 
+.debug-log-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.debug-log-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-bg-strong);
+  color: var(--subtle);
+  cursor: pointer;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.debug-log-actions button:hover {
+  background: var(--hover-bg);
+  color: var(--text);
+}
+
+.debug-log-actions button[aria-pressed="true"] {
+  border-color: var(--warn-border);
+}
+
+.debug-log-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 170px;
+  gap: 10px;
+  border-bottom: 1px solid var(--border-soft);
+  padding: 10px 12px;
+}
+
+.debug-log-filters :is(input, select) {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--app-bg);
+  color: var(--control-text);
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.debug-log-filters input::placeholder {
+  color: var(--muted);
+}
+
+.debug-log-filters :is(input, select):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .debug-log-list {
   min-height: 0;
   overflow: auto;
@@ -162,15 +222,15 @@
   border-bottom: 1px solid var(--border-soft);
   padding: 7px 10px;
   color: var(--control-text);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .debug-log-row.good {
-  color: #86efac;
+  color: var(--success-text);
 }
 
 .debug-log-row.warn {
-  color: #fde68a;
+  color: var(--warn-text);
 }
 
 .debug-log-row.error {
@@ -181,9 +241,18 @@
 .debug-log-row strong,
 .debug-log-row span {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  line-height: 1.55;
+}
+
+.debug-log-columns {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel-bg-strong);
+  color: var(--muted);
+  font-family: inherit;
 }
 
 .debug-log-row time {

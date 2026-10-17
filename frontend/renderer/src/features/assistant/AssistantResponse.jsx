@@ -1,10 +1,11 @@
 import React from "react";
-import { LogIn } from "lucide-react";
+import { Info, LogIn } from "lucide-react";
 
 export function AssistantResponse({ assistant, busy, messages, onAuthorize }) {
   const bottomRef = React.useRef(null);
   const providerUnavailable = assistant?.enabled && assistant?.providerAvailable === false;
-  const providerMessage = assistant?.providerMessage || "Assistant provider is unavailable";
+  const providerUnchecked = assistant?.enabled && assistant?.providerAvailable === undefined;
+  const providerMessage = assistant?.providerMessage || (providerUnchecked ? "Connection not checked" : "Assistant provider is unavailable");
   const providerSuggestion = assistant?.providerSuggestion || "";
   const canAuthorize =
     providerUnavailable &&
@@ -17,13 +18,16 @@ export function AssistantResponse({ assistant, busy, messages, onAuthorize }) {
   }, [messages, busy]);
 
   return (
-    <div className="assistant-response assistant-chat">
+    <div className={`assistant-response assistant-chat${(providerUnavailable || providerUnchecked || assistant?.enabled === false) && !messages.length ? " assistant-chat-unavailable" : ""}`}>
       {messages.length === 0 ? (
         <div className="assistant-chat-empty">
-          {providerUnavailable ? (
+          {providerUnavailable || providerUnchecked || assistant?.enabled === false ? (
             <>
-              <p className="muted">{providerMessage}</p>
-              {providerSuggestion ? <em className="assistant-provider-hint">{providerSuggestion}</em> : null}
+              <p className="muted assistant-provider-notice">
+                <Info aria-hidden="true" size={16} />
+                <span>{assistant?.enabled === false ? "Assistant is disabled" : providerMessage}</span>
+              </p>
+              {assistant?.enabled === false ? <em className="assistant-provider-hint">Enable the assistant in Settings to use this panel.</em> : providerSuggestion ? <em className="assistant-provider-hint">{providerSuggestion}</em> : null}
               {canAuthorize ? (
                 <div className="assistant-provider-actions">
                   <button className="assistant-auth-button" disabled={busy} onClick={onAuthorize} type="button">

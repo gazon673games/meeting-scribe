@@ -25,14 +25,17 @@ export function ProcessingFeatureGrid({ draft, locked, options, onChange }) {
         checked={Boolean(draft.offlineOnStop)}
         disabled={locked || !draft.wavEnabled}
         label="Offline Quality Pass"
+        description={!draft.wavEnabled ? "Enable Record to File first." : locked ? "Available after recording stops." : undefined}
         onClick={() => onChange({ offlineOnStop: !draft.offlineOnStop })}
       />
       <FeatureToggle
         checked={streamingLocked || draft.streamingEnabled}
         disabled={locked || streamingLocked}
         label="Word-by-Word"
+        description={streamingLocked ? "Required by the selected processing mode." : undefined}
         onClick={() => onChange({ streamingEnabled: !draft.streamingEnabled })}
       />
+      {locked ? <p className="control-hint">Stop recording to change these features.</p> : null}
     </div>
   );
 }

@@ -19,12 +19,6 @@
   margin-top: 0;
 }
 
-.quality-stack {
-  display: grid;
-  gap: 6px;
-}
-
-.quality-stack button,
 .feature-toggle,
 .action-button,
 .save-button,
@@ -36,16 +30,6 @@
   cursor: pointer;
 }
 
-.quality-stack button {
-  height: 38px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 12px;
-  font-size: 14px;
-}
-
-.quality-stack button.selected,
 .save-button {
   border-color: var(--accent);
   background: var(--accent);
@@ -68,9 +52,9 @@
   margin: 0;
   padding: 5px 8px;
   border-radius: 5px;
-  background: color-mix(in srgb, var(--warn, #f0a500) 15%, transparent);
-  border: 1px solid color-mix(in srgb, var(--warn, #f0a500) 40%, transparent);
-  color: var(--warn, #f0a500);
+  background: color-mix(in srgb, var(--warn) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  color: var(--warn);
   font-size: 11px;
   line-height: 1.4;
 }
@@ -175,7 +159,7 @@
 
 .model-download-bar-fill {
   height: 100%;
-  background: var(--accent, #5b8fff);
+  background: var(--accent);
   border-radius: 2px;
 }
 
@@ -238,7 +222,62 @@
 }
 
 .stat-line.blue strong {
-  color: #3b82f6;
+  color: var(--info-strong);
+}
+
+.feature-toggle:has(small) {
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+.feature-toggle small {
+  display: block;
+  margin-top: 3px;
+  color: var(--subtle);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.control-hint {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.panel-details {
+  min-width: 0;
+  border-top: 1px solid var(--border-soft);
+  margin-top: 18px;
+  padding-top: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.panel-details summary {
+  cursor: pointer;
+  line-height: 1.5;
+}
+
+.panel-details summary:hover {
+  color: var(--text);
+}
+
+.panel-details .settings-strip {
+  border-top: 0;
+  margin-top: 12px;
+  padding-top: 0;
+}
+
+.details-warning {
+  display: block;
+  margin-top: 4px;
+  color: var(--warn);
+}
+
+.stat-line.warn strong {
+  color: var(--warn);
 }
 
 .field {

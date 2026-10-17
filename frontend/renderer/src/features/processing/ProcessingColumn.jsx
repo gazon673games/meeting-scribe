@@ -53,8 +53,11 @@ export function ProcessingColumn({
       <SectionLabel>Features</SectionLabel>
       <ProcessingFeatureGrid draft={draft} locked={locked} options={options} onChange={onChange} />
 
-      <ProcessingStats asrMetrics={asrMetrics} draft={draft} session={session} summary={summary} />
-      <ResourceUsage usage={resourceUsage} />
+      <details className="panel-details processing-details" open={session.state === "downloading_model" ? true : undefined}>
+        <summary>Runtime & resources{Number(asrMetrics.segDroppedTotal || 0) + Number(asrMetrics.segSkippedTotal || 0) + Number(session.drops?.droppedOutBlocks || 0) + Number(session.drops?.droppedTapBlocks || 0) > 0 ? <span className="details-warning">Drops detected</span> : null}</summary>
+        <ProcessingStats asrMetrics={asrMetrics} draft={draft} session={session} summary={summary} />
+        <ResourceUsage usage={resourceUsage} />
+      </details>
     </PipelinePanel>
   );
 }

@@ -38,22 +38,22 @@
 }
 
 .model-status-cached {
-  background: rgba(34, 197, 94, 0.15);
-  color: #22c55e;
+  background: var(--success-soft);
+  color: var(--success);
 }
 
 .model-status-downloading {
-  background: rgba(59, 130, 246, 0.15);
-  color: #60a5fa;
+  background: var(--info-soft);
+  color: var(--info);
 }
 
 .model-status-error {
-  background: rgba(239, 68, 68, 0.15);
-  color: #f87171;
+  background: var(--status-error-bg);
+  color: var(--status-error-text);
 }
 
 .model-status-missing {
-  background: rgba(100, 116, 139, 0.15);
+  background: var(--neutral-soft);
   color: var(--muted);
 }
 
@@ -102,7 +102,7 @@
 }
 
 .models-error {
-  color: #f87171;
+  color: var(--status-error-text);
 }
 
 .model-metadata-panel {

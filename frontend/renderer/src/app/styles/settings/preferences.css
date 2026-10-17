@@ -15,7 +15,7 @@
 .theme-segmented {
   width: fit-content;
   display: inline-grid;
-  grid-template-columns: repeat(2, minmax(104px, 1fr));
+  grid-template-columns: repeat(3, minmax(104px, 1fr));
   gap: 4px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -59,16 +59,20 @@
   width: auto;
 }
 
-.proxy-grid {
-  grid-template-columns: minmax(90px, 0.5fr) minmax(160px, 1fr) minmax(90px, 0.5fr) repeat(2, minmax(120px, 0.75fr));
+.settings-grid.proxy-address-grid {
+  grid-template-columns: minmax(90px, 0.6fr) minmax(180px, 2fr) minmax(90px, 0.6fr);
+}
+
+.settings-grid.proxy-credentials-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .proxy-note {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  color: var(--faint);
-  font-size: 11px;
+  color: var(--muted);
+  font-size: 12px;
   line-height: 1.35;
 }
 
@@ -124,7 +128,7 @@
 
 .hardware-tile svg {
   flex: 0 0 auto;
-  color: #60a5fa;
+  color: var(--info);
 }
 
 .hardware-tile div {

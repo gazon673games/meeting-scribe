@@ -1,5 +1,6 @@
 import React from "react";
-import { Activity, AlertTriangle, Cpu, Database, Trash2 } from "lucide-react";
+import { Activity, AlertTriangle, Cpu, Database, Pause, Play, Trash2 } from "lucide-react";
+import { useColorTheme } from "../entities/settings/useColorTheme";
 
 import { meetingScribeClient } from "../shared/api/meetingScribeClient";
 import { formatBytes } from "../shared/lib/format";
@@ -36,6 +37,11 @@ const SUMMARY_HANDLERS = {
 
 export function DebugConsoleApp() {
   const [events, setEvents] = React.useState([]);
+  const [runtimeEvents, setRuntimeEvents] = React.useState([]);
+  const [pausedEvents, setPausedEvents] = React.useState(null);
+  const [search, setSearch] = React.useState("");
+  const [filter, setFilter] = React.useState("all");
+  const theme = useColorTheme();
   const [backendStatus, setBackendStatus] = React.useState({ ready: false, running: false, lastError: "" });
   const [resourceUsage, setResourceUsage] = React.useState({ app: {}, system: {}, gpus: [] });
 
@@ -44,6 +50,7 @@ export function DebugConsoleApp() {
     meetingScribeClient.recentBackendEvents().then((result) => {
       if (!cancelled) {
         setEvents((current) => mergeEventLists((result || []).slice(-MAX_EVENTS).reverse(), current));
+        setRuntimeEvents((current) => mergeEventLists((result || []).slice(-MAX_EVENTS).reverse(), current));
       }
     }).catch(() => {});
     return () => {
@@ -54,6 +61,7 @@ export function DebugConsoleApp() {
   React.useEffect(() => {
     return meetingScribeClient.onBackendEvent((event) => {
       setEvents((current) => mergeEventLists([event], current));
+      setRuntimeEvents((current) => mergeEventLists([event], current));
     });
   }, []);
 
@@ -79,20 +87,23 @@ export function DebugConsoleApp() {
   }, []);
 
   const processes = React.useMemo(
-    () => buildProcessRows({ backendStatus, events, resourceUsage }),
-    [backendStatus, events, resourceUsage]
+    () => buildProcessRows({ backendStatus, events: runtimeEvents, resourceUsage }),
+    [backendStatus, runtimeEvents, resourceUsage]
+  );
+  const displayedEvents = pausedEvents || events;
+  const query = search.trim().toLocaleLowerCase();
+  const filteredEvents = displayedEvents.filter((event) =>
+    (filter === "all" || eventTone(event) === filter) &&
+    (!query || `${event.type || ""} ${eventSummary(event)} ${eventTitle(event)}`.toLocaleLowerCase().includes(query))
   );
 
   return (
-    <main className="debug-console-shell" data-theme="dark">
+    <main className="debug-console-shell" data-theme={theme}>
       <header className="debug-console-head">
         <div>
           <span>Diagnostics</span>
           <h1>ASR / Speaker ID Console</h1>
         </div>
-        <button className="icon-button" title="Clear visible logs" type="button" onClick={() => setEvents([])}>
-          <Trash2 size={15} />
-        </button>
       </header>
 
       <section className="debug-process-grid">
@@ -102,7 +113,7 @@ export function DebugConsoleApp() {
             <div className="debug-process-copy">
               <div>
                 <strong>{process.label}</strong>
-                <span>{process.status}</span>
+                <span><i className={`debug-status-dot ${process.tone}`} />{process.status}</span>
               </div>
               <p title={process.detail}>{process.detail || "-"}</p>
             </div>
@@ -113,11 +124,24 @@ export function DebugConsoleApp() {
       <section className="debug-log-panel">
         <div className="debug-log-head">
           <strong>Live Logs</strong>
-          <span>{events.length} events</span>
+          <span>{filteredEvents.length === displayedEvents.length ? `${displayedEvents.length} events` : `${filteredEvents.length} of ${displayedEvents.length} events`}</span>
+          <div className="debug-log-actions">
+            <button aria-pressed={pausedEvents !== null} type="button" onClick={() => setPausedEvents((current) => current === null ? [...events] : null)}>
+              {pausedEvents === null ? <Pause size={13} /> : <Play size={13} />}{pausedEvents === null ? "Pause view" : "Resume"}
+            </button>
+            <button title="Clear visible logs" type="button" onClick={() => { setEvents([]); if (pausedEvents !== null) setPausedEvents([]); }}><Trash2 size={13} />Clear logs</button>
+          </div>
+        </div>
+        <div className="debug-log-filters">
+          <input aria-label="Search logs" placeholder="Search events or details..." type="search" value={search} onChange={(event) => setSearch(event.target.value)} />
+          <select aria-label="Filter log events" value={filter} onChange={(event) => setFilter(event.target.value)}>
+            <option value="all">All events</option><option value="error">Errors</option><option value="warn">Processing</option><option value="good">Speaker updates</option>
+          </select>
         </div>
         <div className="debug-log-list">
-          {events.length ? events.map((event, index) => <LogRow event={event} index={index} key={`${event.ts || index}:${event.type}:${index}`} />) : (
-            <div className="debug-log-empty">No backend events yet.</div>
+          <div className="debug-log-row debug-log-columns"><span>Time</span><span>Event</span><span>Details</span></div>
+          {filteredEvents.length ? filteredEvents.map((event, index) => <LogRow event={event} key={`${event.ts || index}:${event.type}:${index}`} />) : (
+            <div className="debug-log-empty">{displayedEvents.length ? "No events match your filters." : "No backend events yet."}</div>
           )}
         </div>
       </section>
@@ -174,7 +198,7 @@ function buildProcessRows({ backendStatus, events, resourceUsage }) {
       label: "Backend",
       status: backendStatus.running ? (backendStatus.ready ? "ready" : "starting") : "stopped",
       detail: backendStatus.lastError || `PID ${resourceUsage.app?.backendPid || "-"}`,
-      tone: backendStatus.running ? "good" : "error",
+      tone: backendStatus.running ? backendStatus.ready ? "good" : "warn" : "error",
       icon: <Database size={18} />
     },
     { id: "asr", label: "ASR", icon: <Activity size={18} />, ...asr },
@@ -243,9 +267,9 @@ function foldStatusEvents(events, initialStatus, reducer) {
 
 function applyAsrEvent(status, event) {
   if (event.type === "error") {
-    return String(event.where || "").startsWith("diar")
-      ? status
-      : statusRecord("error", event.error || event.message || "ASR error", "error");
+    return String(event.where || "").toLowerCase().startsWith("asr")
+      ? statusRecord("error", event.error || event.message || "ASR error", "error")
+      : status;
   }
   const handler = ASR_EVENT_HANDLERS[event.type];
   return handler ? handler(event, status) : status;

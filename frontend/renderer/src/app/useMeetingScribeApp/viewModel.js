@@ -25,6 +25,7 @@ export function buildAppViewModel(state, settingsDraft, config) {
     options: snapshot.options,
     session: snapshot.session,
     sources,
+    startUnavailableReason: startUnavailableReason(snapshot.capabilities, snapshot.session, sources),
     status,
     summary: snapshot.summary,
     transcript
@@ -51,7 +52,15 @@ function hasTranscriptText(transcript) {
 }
 
 function canStartSession(capabilities, session, sources) {
-  return Boolean(capabilities.sessionControl && sources.length > 0 && !session.running && session.state !== "downloading_model");
+  return Boolean(capabilities.sessionControl && sources.some((source) => Boolean(source?.enabled)) && !session.running && session.state !== "downloading_model");
+}
+
+function startUnavailableReason(capabilities, session, sources) {
+  if (!capabilities.sessionControl) return "Session control is unavailable.";
+  if (session.state === "downloading_model") return "Wait for the transcription model to finish downloading.";
+  if (!sources.length) return "Add an audio source to start.";
+  if (!sources.some((source) => Boolean(source?.enabled))) return "Enable an audio source to start.";
+  return "";
 }
 
 function canStopSession(capabilities, session) {
