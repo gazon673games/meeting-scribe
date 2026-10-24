@@ -1,10 +1,17 @@
-import { PipelinePanel } from "../../shared/ui/pipeline/PipelinePanel";
-import { LatencyMeta } from "./LatencyMeta";
-import { TranscriptList } from "./TranscriptList";
-import { TranscriptToolbar } from "./TranscriptToolbar";
+import { PipelinePanel } from '../../shared/ui/pipeline/PipelinePanel';
+import { LatencyMeta } from './LatencyMeta';
+import { TranscriptList } from './TranscriptList';
+import { TranscriptToolbar } from './TranscriptToolbar';
 
-export function TranscriptColumn({ headerProps, layoutControls, lines, session, status, onClear }) {
-  const running = status === "recording";
+export const TranscriptColumn = ({
+  headerProps,
+  layoutControls,
+  lines,
+  session,
+  status,
+  onClear,
+}) => {
+  const running = status === 'recording';
   return (
     <PipelinePanel
       title="Live Transcript"
@@ -18,4 +25,4 @@ export function TranscriptColumn({ headerProps, layoutControls, lines, session, 
       <TranscriptList lines={lines} running={running} />
     </PipelinePanel>
   );
-}
+};

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import TextIO
 
 from application.local_paths import project_human_logs_dir
 from transcription.application.transcript_context import trim_text_tail
+
+_logger = logging.getLogger(__name__)
 
 
 class FileTranscriptContextReader:
@@ -13,38 +16,50 @@ class FileTranscriptContextReader:
         self,
         *,
         project_root: Path,
-        human_log_path: Optional[Path],
-        human_log_fh: Any,
+        human_log_path: Path | None,
+        human_log_fh: TextIO | None,
         max_chars: int,
     ) -> str:
-        path = _resolve_human_log_path(project_root=project_root, human_log_path=human_log_path)
+        path = _resolve_human_log_path(
+            project_root=project_root, human_log_path=human_log_path
+        )
         if path is None or not path.exists():
-            return ""
+            return ''
 
         try:
             if human_log_fh is not None:
                 human_log_fh.flush()
-        except Exception:
-            pass
+        except (OSError, ValueError):
+            _logger.debug(
+                'Best-effort operation failed in read_human_log_tail',
+                exc_info=True,
+            )
 
         max_chars = max(2000, int(max_chars))
         max_bytes = max_chars * 4 + 4096
 
         try:
-            with path.open("rb") as fh:
+            with path.open('rb') as fh:
                 fh.seek(0, os.SEEK_END)
                 size = fh.tell()
                 start = max(0, int(size) - int(max_bytes))
                 fh.seek(start, os.SEEK_SET)
                 raw = fh.read()
-        except Exception:
-            return ""
+        except OSError:
+            _logger.warning(
+                'Could not read transcript context from %s', path, exc_info=True
+            )
+            return ''
 
-        text = raw.decode("utf-8", errors="ignore")
-        return trim_text_tail(text, max_chars=max_chars).replace("[context tail]", "[log tail]", 1)
+        text = raw.decode('utf-8', errors='ignore')
+        return trim_text_tail(text, max_chars=max_chars).replace(
+            '[context tail]', '[log tail]', 1
+        )
 
 
-def _resolve_human_log_path(*, project_root: Path, human_log_path: Optional[Path]) -> Optional[Path]:
+def _resolve_human_log_path(
+    *, project_root: Path, human_log_path: Path | None
+) -> Path | None:
     if human_log_path is not None and Path(human_log_path).exists():
         return Path(human_log_path)
 
@@ -53,8 +68,11 @@ def _resolve_human_log_path(*, project_root: Path, human_log_path: Optional[Path
         return None
 
     try:
-        files = [x for x in logs_dir.glob("chat_*.txt") if x.is_file()]
+        files = [x for x in logs_dir.glob('chat_*.txt') if x.is_file()]
         files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    except Exception:
+    except OSError:
+        _logger.warning(
+            'Could not find transcript logs in %s', logs_dir, exc_info=True
+        )
         return None
     return files[0] if files else None

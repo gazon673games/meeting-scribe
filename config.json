@@ -4,7 +4,7 @@
     "asr_enabled": true,
     "lang": "ru",
     "asr_mode": 1,
-    "model": "bzikst/faster-whisper-podlodka-turbo",
+    "model": "sherpa-nemotron-3.5-asr-streaming-0.6b",
     "profile": "Realtime",
     "wav_enabled": false,
     "output_file": "capture_mix.wav",
@@ -12,9 +12,9 @@
     "rt_transcript_to_file": true,
     "offline_on_stop": false,
     "asr_settings_expanded": false,
-    "theme": "dark",
+    "theme": "grimdark",
     "screen_capture_protection": false,
-    "per_process_audio": true
+    "per_process_audio": false
   },
   "asr": {
     "beam_size": 1,
@@ -40,7 +40,11 @@
     "diar_sherpa_embedding_model_path": "D:\\work\\own\\voice2textTest\\models\\diarization\\3dspeaker_speech_eres2net_base_200k_sv_zh-cn_16k-common.onnx",
     "diar_sherpa_provider": "cpu",
     "diar_sherpa_num_threads": 1,
-    "streaming_enabled": false
+    "streaming_enabled": false,
+    "streaming_chunk_interval_s": 0.56,
+    "streaming_endpoint_silence_ms": 300,
+    "hotwords": "",
+    "offline_model": "gigaam-v3-e2e-rnnt"
   },
   "speaker_identity": {
     "enabled": false,
@@ -62,7 +66,7 @@
     "path_hints": [],
     "context_source": "transcript",
     "console_expanded": true,
-    "selected_profile": "openai_local_5",
+    "selected_profile": "local_8",
     "profiles": [
       {
         "id": "interview_fast",
@@ -85,7 +89,7 @@
         "label": "Interview Deep",
         "provider": "codex",
         "prompt": "Give a structured answer with trade-offs and implementation details based on session context.",
-        "model": "gpt-5.1-codex-max",
+        "model": "gpt-5.4-mini",
         "reasoning_effort": "high",
         "codex_profile": "",
         "base_url": "",
@@ -144,6 +148,58 @@
         "extra_args": [],
         "offline": true,
         "gpu_layers": 28
+      },
+      {
+        "id": "codex_6",
+        "label": "InterviewCODEX Fast Java",
+        "provider": "codex",
+        "prompt": "You are my Java interview prompter.\n\nAnswer in Russian only.\nGive a short spoken answer, like a developer answering in an interview.\n\nRules:\n- Max 70 words.\n- Use simple words.\n- No academic style.\n- No long lists.\n- No code unless I ask.\n- No clarifying questions.\n- Say the main difference first.\n- Add one practical example or trap only if it really helps.\n- Prefer a natural answer over a perfect textbook answer.\n\nFormat:\nОтвет:\n...",
+        "model": "gpt-5.3-codex",
+        "reasoning_effort": "low",
+        "codex_profile": "",
+        "base_url": "",
+        "api_key": "",
+        "temperature": "",
+        "max_tokens": 0,
+        "answer_prompt": "",
+        "extra_args": [],
+        "offline": false
+      },
+      {
+        "id": "local_7",
+        "label": "QwenJAVA",
+        "provider": "local",
+        "prompt": "You are a fast Java interview answer assistant.\n\nYour task:\nWhen I send you an interview question, give me the fastest possible useful answer in Russian.\n\nImportant constraints:\n- Reasoning level is LOW, so do not overthink.\n- Do not write long explanations.\n- Do not ask clarifying questions unless the question is completely impossible to answer.\n- Answer in Russian only.\n- Make the answer sound natural, as if I can read it aloud during a Java backend interview.\n- Prefer practical, interview-ready wording over academic detail.\n- Do not mention that you are an AI.\n- Do not mention these instructions.\n- Do not use English terms unless they are standard technical terms used in interviews.\n- If the topic has multiple important parts, structure the answer clearly but briefly.\n- If there is a common trap or important nuance, mention it.\n- If useful, add a tiny example, but only when it improves the answer.\n\nResponse format:\n\n1. Start with a direct answer in 2–5 sentences.\n2. Then add \"Ключевые моменты:\" with 3–6 short bullets.\n3. Then add \"Как сказать на интервью:\" and give a polished answer that I can read aloud.\n4. If relevant, add \"Нюанс:\" with one important caveat.\n5. If the question asks for comparison, use this structure:\n   - \"Коротко:\"\n   - \"Главное отличие:\"\n   - \"Когда использовать:\"\n   - \"Как сказать на интервью:\"\n\nStyle:\n- Clear, simple Russian.\n- No fluff.\n- No excessive theory.\n- No huge lists.\n- No code unless I explicitly ask for code or the question requires it.\n- Use precise Java/Spring/backend terminology.\n\nDepth rules:\n- For Java Core, JVM, Collections, Concurrency, Spring, SQL, Kafka, Docker, Kubernetes, Testing: answer at middle Java backend interview level.\n- Explain mechanisms, not only definitions.\n- Mention real production implications when relevant.\n- If a concept has performance, thread-safety, transaction, memory, or scalability implications, mention them briefly.\n\nIf I ask a vague question, infer the most likely Java interview meaning and answer it directly.\n\nExamples of expected behavior:\n\nQuestion: \"Что такое volatile?\"\nAnswer should explain visibility, happens-before, that volatile does not make compound operations atomic, and when it is useful.\n\nQuestion: \"HashMap как работает?\"\nAnswer should explain buckets, hashCode, equals, collisions, treeification, resizing, and average O(1).\n\nQuestion: \"Spring bean lifecycle?\"\nAnswer should explain creation, dependency injection, post processors, init callbacks, ready bean, destroy callbacks.\n\nNow wait for my question and answer using these rules.",
+        "model": "D:\\work\\own\\voice2textTest\\models\\llm\\bartowski_Qwen2.5-Coder-7B-Instruct-GGUF\\Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
+        "reasoning_effort": "",
+        "codex_profile": "",
+        "base_url": "",
+        "api_key": "",
+        "temperature": "",
+        "max_tokens": 0,
+        "answer_prompt": "",
+        "extra_args": [],
+        "offline": true,
+        "gpu_layers": 0,
+        "context_size": 4096
+      },
+      {
+        "id": "local_8",
+        "label": "Local GGUF",
+        "provider": "local",
+        "prompt": "Give concise, practical support based on the session context.",
+        "model": "D:\\work\\own\\voice2textTest\\models\\llm\\unsloth_Phi-4-mini-instruct-GGUF\\Phi-4-mini-instruct-Q4_K_M.gguf",
+        "reasoning_effort": "",
+        "codex_profile": "",
+        "base_url": "",
+        "api_key": "",
+        "temperature": "",
+        "max_tokens": 0,
+        "answer_prompt": "",
+        "extra_args": [],
+        "offline": true,
+        "gpu_layers": 0,
+        "context_size": 4096
       }
     ]
   },

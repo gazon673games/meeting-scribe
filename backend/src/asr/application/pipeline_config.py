@@ -2,17 +2,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
 
 from asr.application.ports import (
-    AudioSegmenterFactoryPort,
     AsrBackendFactoryPort,
     AsrLoggerFactoryPort,
+    AudioSegmenterFactoryPort,
     RealtimeWorkerRunnerPort,
 )
-from asr.application.segmentation import SegmenterConfig, StreamingSegmenterConfig
+from asr.application.segmentation import (
+    SegmenterConfig,
+    StreamingSegmenterConfig,
+)
 from asr.domain.types import Mode, OverloadStrategy
-from diarization.application.diarization import DiarizationConfig, DiarizationRuntimeFactoryPort
+from diarization.application.diarization import (
+    DiarizationConfig,
+    DiarizationRuntimeFactoryPort,
+)
 from diarization.domain.types import DiarBackend
 
 
@@ -27,13 +32,13 @@ class ASRPipelineDependencies:
 
 @dataclass(frozen=True)
 class ASRPipelineSettings:
-    language: str = "ru"
-    mode: Mode = "mix"
-    source_names: Optional[List[str]] = None
-    source_speaker_labels: Dict[str, str] = field(default_factory=dict)
-    asr_model_name: str = "large-v3"
-    device: str = "cuda"
-    compute_type: str = "int8_float16"
+    language: str = 'ru'
+    mode: Mode = 'mix'
+    source_names: list[str] | None = None
+    source_speaker_labels: dict[str, str] = field(default_factory=dict)
+    asr_model_name: str = 'large-v3'
+    device: str = 'cuda'
+    compute_type: str = 'int8_float16'
     cpu_threads: int = 0
     num_workers: int = 1
     beam_size: int = 5
@@ -49,7 +54,7 @@ class ASRPipelineSettings:
     vad_min_end_silence_ms: int = 220
     min_segment_ms: int = 650
     diarization_enabled: bool = False
-    diar_backend: DiarBackend = "pyannote"
+    diar_backend: DiarBackend = 'pyannote'
     diar_sim_threshold: float = 0.74
     diar_min_segment_s: float = 1.0
     diar_window_s: float = 120.0
@@ -57,8 +62,8 @@ class ASRPipelineSettings:
     diar_step_s: float = 10.0
     diarization_sidecar_enabled: bool = True
     diarization_queue_size: int = 50
-    diar_sherpa_embedding_model_path: str = ""
-    diar_sherpa_provider: str = "cpu"
+    diar_sherpa_embedding_model_path: str = ''
+    diar_sherpa_provider: str = 'cpu'
     diar_sherpa_num_threads: int = 1
     agc_enabled: bool = True
     agc_target_rms: float = 0.06
@@ -68,7 +73,7 @@ class ASRPipelineSettings:
     text_dedup_window: int = 80
     adaptive_beam_enabled: bool = True
     adaptive_beam_min: int = 1
-    adaptive_beam_max: Optional[int] = None
+    adaptive_beam_max: int | None = None
     overload_enter_qsize: int = 18
     overload_exit_qsize: int = 6
     overload_hard_drop_qsize: int = 28
@@ -76,7 +81,7 @@ class ASRPipelineSettings:
     overload_beam_cap: int = 2
     overload_overlap_ms: float = 120.0
     overload_max_segment_s: float = 5.0
-    overload_strategy: OverloadStrategy = "drop_old"
+    overload_strategy: OverloadStrategy = 'drop_old'
     utterance_enabled: bool = True
     utterance_gap_s: float = 0.85
     utterance_max_s: float = 18.0
@@ -84,9 +89,9 @@ class ASRPipelineSettings:
     log_max_bytes: int = 25 * 1024 * 1024
     log_backup_count: int = 5
     log_speaker_labels: bool = True
-    asr_language: Optional[str] = "ru"
-    asr_initial_prompt: Optional[str] = None
-    asr_hotwords: Optional[str] = None
+    asr_language: str | None = 'ru'
+    asr_initial_prompt: str | None = None
+    asr_hotwords: str | None = None
     metrics_emit_interval_s: float = 1.0
     metrics_latency_window: int = 200
     streaming_enabled: bool = False
@@ -96,11 +101,19 @@ class ASRPipelineSettings:
 
     @property
     def normalized_overload_strategy(self) -> OverloadStrategy:
-        return "keep_all" if str(self.overload_strategy).strip().lower() == "keep_all" else "drop_old"
+        return (
+            'keep_all'
+            if str(self.overload_strategy).strip().lower() == 'keep_all'
+            else 'drop_old'
+        )
 
     @property
     def resolved_adaptive_beam_max(self) -> int:
-        max_beam = int(self.adaptive_beam_max) if self.adaptive_beam_max is not None else int(self.beam_size)
+        max_beam = (
+            int(self.adaptive_beam_max)
+            if self.adaptive_beam_max is not None
+            else int(self.beam_size)
+        )
         return max(1, max_beam)
 
 
@@ -121,7 +134,9 @@ def build_segmenter_config(settings: ASRPipelineSettings) -> SegmenterConfig:
     )
 
 
-def build_streaming_segmenter_config(settings: ASRPipelineSettings) -> StreamingSegmenterConfig:
+def build_streaming_segmenter_config(
+    settings: ASRPipelineSettings,
+) -> StreamingSegmenterConfig:
     return StreamingSegmenterConfig(
         chunk_interval_s=float(settings.streaming_chunk_interval_s),
         endpoint_silence_ms=float(settings.streaming_endpoint_silence_ms),
@@ -140,10 +155,12 @@ def build_streaming_segmenter_config(settings: ASRPipelineSettings) -> Streaming
     )
 
 
-def build_diarization_config(settings: ASRPipelineSettings, *, project_root: Optional[Any] = None) -> DiarizationConfig:
+def build_diarization_config(
+    settings: ASRPipelineSettings, *, project_root: Path | None = None
+) -> DiarizationConfig:
     temp_dir = None
     if project_root is not None:
-        temp_dir = Path(project_root) / "tmp" / "nemo"
+        temp_dir = Path(project_root) / 'tmp' / 'nemo'
     return DiarizationConfig(
         enabled=bool(settings.diarization_enabled),
         backend=settings.diar_backend,
@@ -155,7 +172,9 @@ def build_diarization_config(settings: ASRPipelineSettings, *, project_root: Opt
         device=str(settings.device),
         temp_dir=temp_dir,
         source_speaker_labels=dict(settings.source_speaker_labels or {}),
-        sherpa_embedding_model_path=str(settings.diar_sherpa_embedding_model_path or ""),
-        sherpa_provider=str(settings.diar_sherpa_provider or "cpu"),
+        sherpa_embedding_model_path=str(
+            settings.diar_sherpa_embedding_model_path or ''
+        ),
+        sherpa_provider=str(settings.diar_sherpa_provider or 'cpu'),
         sherpa_num_threads=max(1, int(settings.diar_sherpa_num_threads)),
     )

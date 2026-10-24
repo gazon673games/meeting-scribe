@@ -1,38 +1,31 @@
-import React from "react";
+import React from 'react';
 
-import { normalizeTheme } from "./model";
+import { normalizeTheme } from './model';
+import { readStorage, writeStorage } from '../../shared/lib/browserStorage';
 
-const THEME_STORAGE_KEY = "meeting-scribe.color-theme.v1";
+const THEME_STORAGE_KEY = 'meeting-scribe.color-theme.v1';
 
-function readTheme() {
-  try {
-    return normalizeTheme(window.localStorage.getItem(THEME_STORAGE_KEY));
-  } catch {
-    return "dark";
-  }
-}
+const readTheme = () => normalizeTheme(readStorage(THEME_STORAGE_KEY));
 
-export function useColorTheme({ theme, persist = false } = {}) {
+export const useColorTheme = ({ theme, persist = false } = {}) => {
   const [cachedTheme, setCachedTheme] = React.useState(readTheme);
   const colorTheme = theme === undefined ? cachedTheme : normalizeTheme(theme);
 
   React.useEffect(() => {
     if (!persist) return;
-    try {
-      window.localStorage.setItem(THEME_STORAGE_KEY, colorTheme);
-    } catch {
-      // Theme selection still works when local storage is unavailable.
-    }
+    writeStorage(THEME_STORAGE_KEY, colorTheme);
   }, [colorTheme, persist]);
 
   React.useEffect(() => {
-    if (theme !== undefined) return;
+    if (theme !== undefined) return undefined;
     const syncTheme = (event) => {
-      if (event.key === THEME_STORAGE_KEY || event.key === null) setCachedTheme(readTheme());
+      if (event.key === THEME_STORAGE_KEY || event.key === null) {
+        setCachedTheme(readTheme());
+      }
     };
-    window.addEventListener("storage", syncTheme);
-    return () => window.removeEventListener("storage", syncTheme);
+    window.addEventListener('storage', syncTheme);
+    return () => window.removeEventListener('storage', syncTheme);
   }, [theme]);
 
   return colorTheme;
-}
+};

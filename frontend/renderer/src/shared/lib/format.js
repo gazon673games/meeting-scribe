@@ -1,22 +1,24 @@
-export function formatDelay(value) {
+export const formatDelay = (value) => {
   const number = Number(value || 0);
   if (!Number.isFinite(number)) {
-    return "0";
+    return '0';
   }
-  return Math.abs(number - Math.round(number)) < 1e-6 ? String(Math.round(number)) : number.toFixed(2);
-}
+  return Math.abs(number - Math.round(number)) < 1e-6
+    ? String(Math.round(number))
+    : number.toFixed(2);
+};
 
-export function formatNumber(value) {
+export const formatNumber = (value) => {
   const number = Number(value || 0);
-  return Number.isFinite(number) ? number.toFixed(2) : "0.00";
-}
+  return Number.isFinite(number) ? number.toFixed(2) : '0.00';
+};
 
-export function formatBytes(value) {
+export const formatBytes = (value) => {
   const bytes = Number(value || 0);
   if (!Number.isFinite(bytes) || bytes <= 0) {
-    return "-";
+    return '-';
   }
-  const units = ["B", "KB", "MB", "GB", "TB"];
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   let next = bytes;
   let unitIndex = 0;
   while (next >= 1024 && unitIndex < units.length - 1) {
@@ -25,12 +27,23 @@ export function formatBytes(value) {
   }
   const precision = unitIndex >= 3 ? 1 : 0;
   return `${next.toFixed(precision)} ${units[unitIndex]}`;
-}
+};
 
-export function formatTime(ts) {
+export const formatTime = (ts) => {
   const date = new Date(Number(ts || 0) * 1000);
   if (Number.isNaN(date.getTime())) {
-    return "--:--";
+    return '--:--';
   }
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-}
+  return date.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+};
+
+export const modelBasename = (model) => {
+  const value = String(model || '');
+  const slash = Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\'));
+  const filename = slash >= 0 ? value.slice(slash + 1) : value;
+  return filename.replace(/\.gguf$/i, '');
+};

@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+# ruff: noqa: E402
+# Runtime bootstrap must configure import paths before application imports.
 import argparse
 import json
-from pathlib import Path
+import math
 import sys
 import time
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from functools import partial
+from pathlib import Path
 
 import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-SRC_ROOT = PROJECT_ROOT / "backend" / "src"
+SRC_ROOT = PROJECT_ROOT / 'backend' / 'src'
 src_text = str(SRC_ROOT)
 if src_text not in sys.path:
     sys.path.insert(0, src_text)
@@ -22,11 +26,11 @@ from asr.infrastructure.vad import EnergyVAD
 @dataclass
 class Scenario:
     name: str
-    frames: List[np.ndarray]
-    labels: List[bool]
+    frames: list[np.ndarray]
+    labels: list[bool]
 
 
-@dataclass
+@dataclass(frozen=True)
 class ConfusionMetrics:
     tp: int
     fp: int
@@ -38,21 +42,24 @@ class ConfusionMetrics:
     accuracy: float
 
 
-@dataclass
+@dataclass(frozen=True)
 class SegmentMetrics:
     total_segments: int
     detected_segments: int
     segment_recall: float
     missed_segments: int
-    onset_delay_ms_avg: Optional[float]
-    onset_delay_ms_p95: Optional[float]
-    release_tail_ms_avg: Optional[float]
-    release_tail_ms_p95: Optional[float]
-    early_cut_ms_avg: Optional[float]
-    early_cut_ms_p95: Optional[float]
+    onset_delay_ms_avg: float | None
+    onset_delay_ms_p95: float | None
+    release_tail_ms_avg: float | None
+    release_tail_ms_p95: float | None
+    early_cut_ms_avg: float | None
+    early_cut_ms_p95: float | None
+    onset_delays_ms: tuple[float, ...] = ()
+    release_tails_ms: tuple[float, ...] = ()
+    early_cuts_ms: tuple[float, ...] = ()
 
 
-@dataclass
+@dataclass(frozen=True)
 class ScenarioResult:
     name: str
     duration_s: float
@@ -67,7 +74,7 @@ def _safe_ratio(num: float, den: float) -> float:
     return float(num) / float(den) if den else 0.0
 
 
-def _percentile(values: Sequence[float], q: float) -> Optional[float]:
+def _percentile(values: Sequence[float], q: float) -> float | None:
     if not values:
         return None
     arr = np.asarray(values, dtype=np.float64)
@@ -85,11 +92,13 @@ class _ScenarioBuilder:
         self.frame_len = int(round(self.sample_rate * self.frame_ms / 1000.0))
         self._rng = np.random.default_rng(seed)
         self._sample_cursor = 0
-        self.frames: List[np.ndarray] = []
-        self.labels: List[bool] = []
+        self.frames: list[np.ndarray] = []
+        self.labels: list[bool] = []
 
     def _time_axis(self) -> np.ndarray:
-        idx = np.arange(self.frame_len, dtype=np.float32) + float(self._sample_cursor)
+        idx = np.arange(self.frame_len, dtype=np.float32) + float(
+            self._sample_cursor
+        )
         return idx / float(self.sample_rate)
 
     def _push(self, frame: np.ndarray, *, speech: bool) -> None:
@@ -100,9 +109,17 @@ class _ScenarioBuilder:
     def add_silence(self, duration_s: float) -> None:
         count = int(round(float(duration_s) * 1000.0 / float(self.frame_ms)))
         for _ in range(count):
-            self._push(np.zeros((self.frame_len,), dtype=np.float32), speech=False)
+            self._push(
+                np.zeros((self.frame_len,), dtype=np.float32), speech=False
+            )
 
-    def add_high_freq_noise(self, duration_s: float, *, amplitude: float = 0.004, freq_hz: float = 6000.0) -> None:
+    def add_high_freq_noise(
+        self,
+        duration_s: float,
+        *,
+        amplitude: float = 0.004,
+        freq_hz: float = 6000.0,
+    ) -> None:
         count = int(round(float(duration_s) * 1000.0 / float(self.frame_ms)))
         for _ in range(count):
             t = self._time_axis()
@@ -110,7 +127,9 @@ class _ScenarioBuilder:
             carrier = _sine(freq_hz, t + phase_jitter.astype(np.float32))
             hiss = 0.12 * self._rng.standard_normal(self.frame_len)
             frame = float(amplitude) * (carrier + hiss)
-            self._push(np.clip(frame, -1.0, 1.0).astype(np.float32), speech=False)
+            self._push(
+                np.clip(frame, -1.0, 1.0).astype(np.float32), speech=False
+            )
 
     def add_voiced_speech(
         self,
@@ -138,57 +157,136 @@ class _ScenarioBuilder:
                 hiss_t = self._time_axis()
                 hiss = (
                     float(bg_noise_amp)
-                    * (_sine(6000.0, hiss_t) + 0.15 * self._rng.standard_normal(self.frame_len))
+                    * (
+                        _sine(6000.0, hiss_t)
+                        + 0.15 * self._rng.standard_normal(self.frame_len)
+                    )
                 ).astype(np.float32)
             frame = float(amplitude) * envelope * (speech + breath) + hiss
-            self._push(np.clip(frame, -1.0, 1.0).astype(np.float32), speech=True)
+            self._push(
+                np.clip(frame, -1.0, 1.0).astype(np.float32), speech=True
+            )
 
 
-def _build_scenarios(*, sample_rate: int, frame_ms: int) -> List[Scenario]:
-    scenarios: List[Scenario] = []
+@dataclass(frozen=True)
+class ScenarioRecipe:
+    name: str
+    seed: int
+    steps: tuple[Callable[[_ScenarioBuilder], None], ...]
 
-    b = _ScenarioBuilder(sample_rate=sample_rate, frame_ms=frame_ms, seed=101)
-    b.add_silence(3.0)
-    scenarios.append(Scenario(name="silence_only", frames=b.frames, labels=b.labels))
 
-    b = _ScenarioBuilder(sample_rate=sample_rate, frame_ms=frame_ms, seed=102)
-    b.add_high_freq_noise(3.0, amplitude=0.0045)
-    scenarios.append(Scenario(name="high_freq_noise", frames=b.frames, labels=b.labels))
+_SCENARIO_RECIPES = (
+    ScenarioRecipe(
+        'silence_only',
+        seed=101,
+        steps=(partial(_ScenarioBuilder.add_silence, duration_s=3.0),),
+    ),
+    ScenarioRecipe(
+        'high_freq_noise',
+        seed=102,
+        steps=(
+            partial(
+                _ScenarioBuilder.add_high_freq_noise,
+                duration_s=3.0,
+                amplitude=0.0045,
+            ),
+        ),
+    ),
+    ScenarioRecipe(
+        'clear_speech_bursts',
+        seed=103,
+        steps=(
+            partial(_ScenarioBuilder.add_silence, duration_s=0.8),
+            partial(
+                _ScenarioBuilder.add_voiced_speech,
+                duration_s=1.2,
+                amplitude=0.055,
+                f0_hz=220.0,
+            ),
+            partial(_ScenarioBuilder.add_silence, duration_s=1.0),
+            partial(
+                _ScenarioBuilder.add_voiced_speech,
+                duration_s=1.0,
+                amplitude=0.05,
+                f0_hz=260.0,
+            ),
+            partial(_ScenarioBuilder.add_silence, duration_s=0.9),
+        ),
+    ),
+    ScenarioRecipe(
+        'near_threshold_speech',
+        seed=104,
+        steps=(
+            partial(_ScenarioBuilder.add_silence, duration_s=1.0),
+            partial(
+                _ScenarioBuilder.add_voiced_speech,
+                duration_s=1.2,
+                amplitude=0.028,
+                f0_hz=240.0,
+            ),
+            partial(_ScenarioBuilder.add_silence, duration_s=1.0),
+        ),
+    ),
+    ScenarioRecipe(
+        'noise_then_speech',
+        seed=105,
+        steps=(
+            partial(
+                _ScenarioBuilder.add_high_freq_noise,
+                duration_s=2.2,
+                amplitude=0.004,
+            ),
+            partial(
+                _ScenarioBuilder.add_voiced_speech,
+                duration_s=1.1,
+                amplitude=0.05,
+                f0_hz=220.0,
+                bg_noise_amp=0.0012,
+            ),
+            partial(_ScenarioBuilder.add_silence, duration_s=0.9),
+        ),
+    ),
+    ScenarioRecipe(
+        'noisy_meeting_like',
+        seed=106,
+        steps=(
+            partial(_ScenarioBuilder.add_silence, duration_s=0.6),
+            partial(
+                _ScenarioBuilder.add_voiced_speech,
+                duration_s=0.9,
+                amplitude=0.042,
+                f0_hz=210.0,
+                bg_noise_amp=0.0015,
+            ),
+            partial(_ScenarioBuilder.add_silence, duration_s=0.9),
+            partial(
+                _ScenarioBuilder.add_voiced_speech,
+                duration_s=0.8,
+                amplitude=0.04,
+                f0_hz=260.0,
+                bg_noise_amp=0.0015,
+            ),
+            partial(_ScenarioBuilder.add_silence, duration_s=0.8),
+        ),
+    ),
+)
 
-    b = _ScenarioBuilder(sample_rate=sample_rate, frame_ms=frame_ms, seed=103)
-    b.add_silence(0.8)
-    b.add_voiced_speech(1.2, amplitude=0.055, f0_hz=220.0)
-    b.add_silence(1.0)
-    b.add_voiced_speech(1.0, amplitude=0.050, f0_hz=260.0)
-    b.add_silence(0.9)
-    scenarios.append(Scenario(name="clear_speech_bursts", frames=b.frames, labels=b.labels))
 
-    b = _ScenarioBuilder(sample_rate=sample_rate, frame_ms=frame_ms, seed=104)
-    b.add_silence(1.0)
-    b.add_voiced_speech(1.2, amplitude=0.028, f0_hz=240.0)
-    b.add_silence(1.0)
-    scenarios.append(Scenario(name="near_threshold_speech", frames=b.frames, labels=b.labels))
-
-    b = _ScenarioBuilder(sample_rate=sample_rate, frame_ms=frame_ms, seed=105)
-    b.add_high_freq_noise(2.2, amplitude=0.0040)
-    b.add_voiced_speech(1.1, amplitude=0.050, f0_hz=220.0, bg_noise_amp=0.0012)
-    b.add_silence(0.9)
-    scenarios.append(Scenario(name="noise_then_speech", frames=b.frames, labels=b.labels))
-
-    b = _ScenarioBuilder(sample_rate=sample_rate, frame_ms=frame_ms, seed=106)
-    b.add_silence(0.6)
-    b.add_voiced_speech(0.9, amplitude=0.042, f0_hz=210.0, bg_noise_amp=0.0015)
-    b.add_silence(0.9)
-    b.add_voiced_speech(0.8, amplitude=0.040, f0_hz=260.0, bg_noise_amp=0.0015)
-    b.add_silence(0.8)
-    scenarios.append(Scenario(name="noisy_meeting_like", frames=b.frames, labels=b.labels))
-
+def _build_scenarios(*, sample_rate: int, frame_ms: int) -> list[Scenario]:
+    scenarios = []
+    for recipe in _SCENARIO_RECIPES:
+        builder = _ScenarioBuilder(
+            sample_rate=sample_rate, frame_ms=frame_ms, seed=recipe.seed
+        )
+        for apply_step in recipe.steps:
+            apply_step(builder)
+        scenarios.append(Scenario(recipe.name, builder.frames, builder.labels))
     return scenarios
 
 
-def _find_segments(labels: Sequence[bool]) -> List[Tuple[int, int]]:
-    segments: List[Tuple[int, int]] = []
-    start: Optional[int] = None
+def _find_segments(labels: Sequence[bool]) -> list[tuple[int, int]]:
+    segments: list[tuple[int, int]] = []
+    start: int | None = None
     for idx, val in enumerate(labels):
         if val and start is None:
             start = idx
@@ -200,7 +298,12 @@ def _find_segments(labels: Sequence[bool]) -> List[Tuple[int, int]]:
     return segments
 
 
-def _confusion(labels: Sequence[bool], preds: Sequence[bool], *, mask: Optional[Sequence[bool]] = None) -> ConfusionMetrics:
+def _confusion(
+    labels: Sequence[bool],
+    preds: Sequence[bool],
+    *,
+    mask: Sequence[bool] | None = None,
+) -> ConfusionMetrics:
     tp = fp = fn = tn = 0
     for idx, (truth, pred) in enumerate(zip(labels, preds)):
         if mask is not None and not mask[idx]:
@@ -218,10 +321,21 @@ def _confusion(labels: Sequence[bool], preds: Sequence[bool], *, mask: Optional[
     recall = _safe_ratio(tp, tp + fn)
     f1 = _safe_ratio(2.0 * precision * recall, precision + recall)
     accuracy = _safe_ratio(tp + tn, tp + fp + fn + tn)
-    return ConfusionMetrics(tp=tp, fp=fp, fn=fn, tn=tn, precision=precision, recall=recall, f1=f1, accuracy=accuracy)
+    return ConfusionMetrics(
+        tp=tp,
+        fp=fp,
+        fn=fn,
+        tn=tn,
+        precision=precision,
+        recall=recall,
+        f1=f1,
+        accuracy=accuracy,
+    )
 
 
-def _boundary_mask(labels: Sequence[bool], *, tolerance_frames: int) -> List[bool]:
+def _boundary_mask(
+    labels: Sequence[bool], *, tolerance_frames: int
+) -> list[bool]:
     keep = [True] * len(labels)
     if tolerance_frames <= 0:
         return keep
@@ -236,7 +350,9 @@ def _boundary_mask(labels: Sequence[bool], *, tolerance_frames: int) -> List[boo
     return keep
 
 
-def _segment_metrics(labels: Sequence[bool], preds: Sequence[bool], *, frame_ms: int) -> SegmentMetrics:
+def _segment_metrics(
+    labels: Sequence[bool], preds: Sequence[bool], *, frame_ms: int
+) -> SegmentMetrics:
     true_segments = _find_segments(labels)
     if not true_segments:
         return SegmentMetrics(
@@ -252,23 +368,34 @@ def _segment_metrics(labels: Sequence[bool], preds: Sequence[bool], *, frame_ms:
             early_cut_ms_p95=None,
         )
 
-    onset_delays: List[float] = []
-    release_tails: List[float] = []
-    early_cuts: List[float] = []
+    onset_delays: list[float] = []
+    release_tails: list[float] = []
+    early_cuts: list[float] = []
     detected = 0
 
     for idx, (start, end) in enumerate(true_segments):
-        next_start = true_segments[idx + 1][0] if idx + 1 < len(true_segments) else len(labels)
+        next_start = (
+            true_segments[idx + 1][0]
+            if idx + 1 < len(true_segments)
+            else len(labels)
+        )
         overlap = any(preds[pos] for pos in range(start, end))
         if overlap:
             detected += 1
-            first_pred = next((pos for pos in range(start, end) if preds[pos]), None)
+            first_pred = next(
+                (pos for pos in range(start, end) if preds[pos]), None
+            )
             if first_pred is not None:
                 onset_delays.append(float((first_pred - start) * frame_ms))
 
-            last_pred_in_seg = next((pos for pos in range(end - 1, start - 1, -1) if preds[pos]), None)
+            last_pred_in_seg = next(
+                (pos for pos in range(end - 1, start - 1, -1) if preds[pos]),
+                None,
+            )
             if last_pred_in_seg is not None and last_pred_in_seg < (end - 1):
-                early_cuts.append(float((end - 1 - last_pred_in_seg) * frame_ms))
+                early_cuts.append(
+                    float((end - 1 - last_pred_in_seg) * frame_ms)
+                )
             else:
                 early_cuts.append(0.0)
 
@@ -285,19 +412,26 @@ def _segment_metrics(labels: Sequence[bool], preds: Sequence[bool], *, frame_ms:
         detected_segments=detected,
         segment_recall=_safe_ratio(detected, total_segments),
         missed_segments=total_segments - detected,
-        onset_delay_ms_avg=(float(np.mean(onset_delays)) if onset_delays else None),
+        onset_delay_ms_avg=(
+            float(np.mean(onset_delays)) if onset_delays else None
+        ),
         onset_delay_ms_p95=_percentile(onset_delays, 95.0),
-        release_tail_ms_avg=(float(np.mean(release_tails)) if release_tails else None),
+        release_tail_ms_avg=(
+            float(np.mean(release_tails)) if release_tails else None
+        ),
         release_tail_ms_p95=_percentile(release_tails, 95.0),
         early_cut_ms_avg=(float(np.mean(early_cuts)) if early_cuts else None),
         early_cut_ms_p95=_percentile(early_cuts, 95.0),
+        onset_delays_ms=tuple(onset_delays),
+        release_tails_ms=tuple(release_tails),
+        early_cuts_ms=tuple(early_cuts),
     )
 
 
 def _evaluate_scenario(
     scenario: Scenario,
     *,
-    vad_factory,
+    vad_factory: Callable[[], EnergyVAD],
     frame_ms: int,
     boundary_tolerance_ms: int,
 ) -> ScenarioResult:
@@ -311,8 +445,12 @@ def _evaluate_scenario(
     tolerant = _confusion(scenario.labels, preds, mask=mask)
     seg = _segment_metrics(scenario.labels, preds, frame_ms=frame_ms)
 
-    fp_frames = sum(1 for truth, pred in zip(scenario.labels, preds) if (not truth) and pred)
-    fn_frames = sum(1 for truth, pred in zip(scenario.labels, preds) if truth and (not pred))
+    fp_frames = sum(
+        1 for truth, pred in zip(scenario.labels, preds) if (not truth) and pred
+    )
+    fn_frames = sum(
+        1 for truth, pred in zip(scenario.labels, preds) if truth and (not pred)
+    )
 
     return ScenarioResult(
         name=scenario.name,
@@ -325,7 +463,9 @@ def _evaluate_scenario(
     )
 
 
-def _aggregate_confusion(metrics: Iterable[ConfusionMetrics]) -> ConfusionMetrics:
+def _aggregate_confusion(
+    metrics: Iterable[ConfusionMetrics],
+) -> ConfusionMetrics:
     tp = fp = fn = tn = 0
     for metric in metrics:
         tp += int(metric.tp)
@@ -336,10 +476,26 @@ def _aggregate_confusion(metrics: Iterable[ConfusionMetrics]) -> ConfusionMetric
     recall = _safe_ratio(tp, tp + fn)
     f1 = _safe_ratio(2.0 * precision * recall, precision + recall)
     accuracy = _safe_ratio(tp + tn, tp + fp + fn + tn)
-    return ConfusionMetrics(tp=tp, fp=fp, fn=fn, tn=tn, precision=precision, recall=recall, f1=f1, accuracy=accuracy)
+    return ConfusionMetrics(
+        tp=tp,
+        fp=fp,
+        fn=fn,
+        tn=tn,
+        precision=precision,
+        recall=recall,
+        f1=f1,
+        accuracy=accuracy,
+    )
 
 
-def _benchmark(scenarios: Sequence[Scenario], *, vad_factory, frame_ms: int, loops: int, warmup_loops: int) -> Dict[str, float]:
+def _benchmark(
+    scenarios: Sequence[Scenario],
+    *,
+    vad_factory: Callable[[], EnergyVAD],
+    frame_ms: int,
+    loops: int,
+    warmup_loops: int,
+) -> dict[str, float]:
     corpus = [frame for scenario in scenarios for frame in scenario.frames]
     corpus_frames = len(corpus)
     corpus_audio_s = float(corpus_frames * frame_ms) / 1000.0
@@ -363,18 +519,18 @@ def _benchmark(scenarios: Sequence[Scenario], *, vad_factory, frame_ms: int, loo
     realtime_factor = _safe_ratio(elapsed_s, total_audio_s)
 
     return {
-        "loops": int(max(1, loops)),
-        "corpus_frames": int(corpus_frames),
-        "corpus_audio_s": float(corpus_audio_s),
-        "elapsed_s": float(elapsed_s),
-        "total_audio_s": float(total_audio_s),
-        "ms_per_frame": float(ms_per_frame),
-        "x_realtime": float(x_realtime),
-        "realtime_factor": float(realtime_factor),
+        'loops': int(max(1, loops)),
+        'corpus_frames': int(corpus_frames),
+        'corpus_audio_s': float(corpus_audio_s),
+        'elapsed_s': float(elapsed_s),
+        'total_audio_s': float(total_audio_s),
+        'ms_per_frame': float(ms_per_frame),
+        'x_realtime': float(x_realtime),
+        'realtime_factor': float(realtime_factor),
     }
 
 
-def _build_vad_factory(args: argparse.Namespace):
+def _build_vad_factory(args: argparse.Namespace) -> Callable[[], EnergyVAD]:
     def factory() -> EnergyVAD:
         return EnergyVAD(
             sample_rate=int(args.sample_rate),
@@ -400,98 +556,215 @@ def _build_vad_factory(args: argparse.Namespace):
 
 
 def _make_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Synthetic quality + performance eval for EnergyVAD.")
-    parser.add_argument("--sample-rate", type=int, default=16000)
-    parser.add_argument("--frame-ms", type=int, default=20)
-    parser.add_argument("--energy-threshold", type=float, default=0.006)
-    parser.add_argument("--adaptive", dest="adaptive", action="store_true", default=True)
-    parser.add_argument("--no-adaptive", dest="adaptive", action="store_false")
-    parser.add_argument("--noise-mult", type=float, default=3.0)
-    parser.add_argument("--noise-alpha", type=float, default=0.05)
-    parser.add_argument("--hangover-ms", type=int, default=400)
-    parser.add_argument("--min-speech-ms", type=int, default=350)
-    parser.add_argument("--band-ratio-min", type=float, default=0.35)
-    parser.add_argument("--voiced-min", type=float, default=0.12)
-    parser.add_argument("--band-ratio-weight", type=float, default=0.55)
-    parser.add_argument("--voiced-weight", type=float, default=0.45)
-    parser.add_argument("--pre-speech-ms", type=int, default=120)
-    parser.add_argument("--min-end-silence-ms", type=int, default=220)
-    parser.add_argument("--voiced-every-n-frames", type=int, default=2)
-    parser.add_argument("--voiced-only-near-thr", dest="voiced_only_near_thr", action="store_true", default=True)
-    parser.add_argument("--always-compute-voiced", dest="voiced_only_near_thr", action="store_false")
-    parser.add_argument("--near-thr-ratio", type=float, default=0.70)
-    parser.add_argument("--boundary-tolerance-ms", type=int, default=400)
-    parser.add_argument("--benchmark-loops", type=int, default=100)
-    parser.add_argument("--warmup-loops", type=int, default=5)
-    parser.add_argument("--json", action="store_true")
-    parser.add_argument("--min-tolerant-f1", type=float, default=None)
-    parser.add_argument("--min-segment-recall", type=float, default=None)
-    parser.add_argument("--min-x-realtime", type=float, default=None)
-    parser.add_argument("--max-ms-per-frame", type=float, default=None)
+    parser = argparse.ArgumentParser(
+        description='Synthetic quality + performance eval for EnergyVAD.'
+    )
+    parser.add_argument('--sample-rate', type=int, default=16000)
+    parser.add_argument('--frame-ms', type=int, default=20)
+    parser.add_argument('--energy-threshold', type=float, default=0.006)
+    parser.add_argument(
+        '--adaptive', dest='adaptive', action='store_true', default=True
+    )
+    parser.add_argument('--no-adaptive', dest='adaptive', action='store_false')
+    parser.add_argument('--noise-mult', type=float, default=3.0)
+    parser.add_argument('--noise-alpha', type=float, default=0.05)
+    parser.add_argument('--hangover-ms', type=int, default=400)
+    parser.add_argument('--min-speech-ms', type=int, default=350)
+    parser.add_argument('--band-ratio-min', type=float, default=0.35)
+    parser.add_argument('--voiced-min', type=float, default=0.12)
+    parser.add_argument('--band-ratio-weight', type=float, default=0.55)
+    parser.add_argument('--voiced-weight', type=float, default=0.45)
+    parser.add_argument('--pre-speech-ms', type=int, default=120)
+    parser.add_argument('--min-end-silence-ms', type=int, default=220)
+    parser.add_argument('--voiced-every-n-frames', type=int, default=2)
+    parser.add_argument(
+        '--voiced-only-near-thr',
+        dest='voiced_only_near_thr',
+        action='store_true',
+        default=True,
+    )
+    parser.add_argument(
+        '--always-compute-voiced',
+        dest='voiced_only_near_thr',
+        action='store_false',
+    )
+    parser.add_argument('--near-thr-ratio', type=float, default=0.70)
+    parser.add_argument('--boundary-tolerance-ms', type=int, default=400)
+    parser.add_argument('--benchmark-loops', type=int, default=100)
+    parser.add_argument('--warmup-loops', type=int, default=5)
+    parser.add_argument('--json', action='store_true')
+    parser.add_argument('--min-tolerant-f1', type=float, default=None)
+    parser.add_argument('--min-segment-recall', type=float, default=None)
+    parser.add_argument('--min-x-realtime', type=float, default=None)
+    parser.add_argument('--max-ms-per-frame', type=float, default=None)
     return parser
 
 
-def _threshold_failures(report: Dict[str, object], args: argparse.Namespace) -> List[str]:
-    failures: List[str] = []
-    summary = report["summary"]
-    benchmark = report["benchmark"]
+def _threshold_failures(
+    report: dict[str, object], args: argparse.Namespace
+) -> list[str]:
+    failures: list[str] = []
+    summary = report['summary']
+    benchmark = report['benchmark']
 
-    tolerant_f1 = float(summary["tolerant"]["f1"])
-    segment_recall = float(summary["segments"]["segment_recall"])
-    x_realtime = float(benchmark["x_realtime"])
-    ms_per_frame = float(benchmark["ms_per_frame"])
+    tolerant_f1 = float(summary['tolerant']['f1'])
+    segment_recall = float(summary['segments']['segment_recall'])
+    x_realtime = float(benchmark['x_realtime'])
+    ms_per_frame = float(benchmark['ms_per_frame'])
 
-    if args.min_tolerant_f1 is not None and tolerant_f1 < float(args.min_tolerant_f1):
-        failures.append(f"tolerant_f1 {tolerant_f1:.4f} < {float(args.min_tolerant_f1):.4f}")
-    if args.min_segment_recall is not None and segment_recall < float(args.min_segment_recall):
-        failures.append(f"segment_recall {segment_recall:.4f} < {float(args.min_segment_recall):.4f}")
-    if args.min_x_realtime is not None and x_realtime < float(args.min_x_realtime):
-        failures.append(f"x_realtime {x_realtime:.2f} < {float(args.min_x_realtime):.2f}")
-    if args.max_ms_per_frame is not None and ms_per_frame > float(args.max_ms_per_frame):
-        failures.append(f"ms_per_frame {ms_per_frame:.6f} > {float(args.max_ms_per_frame):.6f}")
+    if args.min_tolerant_f1 is not None and tolerant_f1 < float(
+        args.min_tolerant_f1
+    ):
+        failures.append(
+            f'tolerant_f1 {tolerant_f1:.4f} < {float(args.min_tolerant_f1):.4f}'
+        )
+    if args.min_segment_recall is not None and segment_recall < float(
+        args.min_segment_recall
+    ):
+        failures.append(
+            f'segment_recall {segment_recall:.4f} < {float(args.min_segment_recall):.4f}'
+        )
+    if args.min_x_realtime is not None and x_realtime < float(
+        args.min_x_realtime
+    ):
+        failures.append(
+            f'x_realtime {x_realtime:.2f} < {float(args.min_x_realtime):.2f}'
+        )
+    if args.max_ms_per_frame is not None and ms_per_frame > float(
+        args.max_ms_per_frame
+    ):
+        failures.append(
+            f'ms_per_frame {ms_per_frame:.6f} > {float(args.max_ms_per_frame):.6f}'
+        )
 
     return failures
 
 
-def _format_report(report: Dict[str, object]) -> str:
-    lines: List[str] = []
-    summary = report["summary"]
-    benchmark = report["benchmark"]
-    scenarios = report["scenarios"]
+def _format_report(report: dict[str, object]) -> str:
+    lines: list[str] = []
+    summary = report['summary']
+    benchmark = report['benchmark']
+    scenarios = report['scenarios']
 
-    lines.append("EnergyVAD synthetic eval")
+    lines.append('EnergyVAD synthetic eval')
     lines.append(
-        f"raw_f1={summary['raw']['f1']:.4f} tolerant_f1={summary['tolerant']['f1']:.4f} "
-        f"segment_recall={summary['segments']['segment_recall']:.4f}"
+        f'raw_f1={summary["raw"]["f1"]:.4f} tolerant_f1={summary["tolerant"]["f1"]:.4f} '
+        f'segment_recall={summary["segments"]["segment_recall"]:.4f}'
     )
     lines.append(
-        f"onset_avg_ms={summary['segments']['onset_delay_ms_avg']} "
-        f"release_tail_avg_ms={summary['segments']['release_tail_ms_avg']} "
-        f"early_cut_avg_ms={summary['segments']['early_cut_ms_avg']}"
+        f'onset_avg_ms={summary["segments"]["onset_delay_ms_avg"]} '
+        f'release_tail_avg_ms={summary["segments"]["release_tail_ms_avg"]} '
+        f'early_cut_avg_ms={summary["segments"]["early_cut_ms_avg"]}'
     )
     lines.append(
-        f"ms_per_frame={benchmark['ms_per_frame']:.6f} "
-        f"x_realtime={benchmark['x_realtime']:.2f} "
-        f"rtf={benchmark['realtime_factor']:.6f}"
+        f'ms_per_frame={benchmark["ms_per_frame"]:.6f} '
+        f'x_realtime={benchmark["x_realtime"]:.2f} '
+        f'rtf={benchmark["realtime_factor"]:.6f}'
     )
-    lines.append("")
-    lines.append("Per scenario:")
+    lines.append('')
+    lines.append('Per scenario:')
     for scenario in scenarios:
         lines.append(
-            f"- {scenario['name']}: raw_f1={scenario['raw']['f1']:.4f} "
-            f"tolerant_f1={scenario['tolerant']['f1']:.4f} "
-            f"seg_recall={scenario['segments']['segment_recall']:.4f} "
-            f"fp_ms={scenario['false_positive_ms']:.1f} fn_ms={scenario['false_negative_ms']:.1f}"
+            f'- {scenario["name"]}: raw_f1={scenario["raw"]["f1"]:.4f} '
+            f'tolerant_f1={scenario["tolerant"]["f1"]:.4f} '
+            f'seg_recall={scenario["segments"]["segment_recall"]:.4f} '
+            f'fp_ms={scenario["false_positive_ms"]:.1f} fn_ms={scenario["false_negative_ms"]:.1f}'
         )
-    return "\n".join(lines)
+    return '\n'.join(lines)
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def _aggregate_segments(
+    scenario_results: Sequence[ScenarioResult],
+) -> SegmentMetrics:
+    segment_totals = [
+        result.segments
+        for result in scenario_results
+        if result.segments.total_segments > 0
+    ]
+    onset_vals = [
+        value for segment in segment_totals for value in segment.onset_delays_ms
+    ]
+    release_vals = [
+        value
+        for segment in segment_totals
+        for value in segment.release_tails_ms
+    ]
+    early_cut_vals = [
+        value for segment in segment_totals for value in segment.early_cuts_ms
+    ]
+
+    detected_segments = sum(seg.detected_segments for seg in segment_totals)
+    total_segments = sum(seg.total_segments for seg in segment_totals)
+    return SegmentMetrics(
+        total_segments=int(total_segments),
+        detected_segments=int(detected_segments),
+        segment_recall=_safe_ratio(detected_segments, total_segments),
+        missed_segments=int(total_segments - detected_segments),
+        onset_delay_ms_avg=(float(np.mean(onset_vals)) if onset_vals else None),
+        onset_delay_ms_p95=_percentile(onset_vals, 95.0),
+        release_tail_ms_avg=(
+            float(np.mean(release_vals)) if release_vals else None
+        ),
+        release_tail_ms_p95=_percentile(release_vals, 95.0),
+        early_cut_ms_avg=(
+            float(np.mean(early_cut_vals)) if early_cut_vals else None
+        ),
+        early_cut_ms_p95=_percentile(early_cut_vals, 95.0),
+        onset_delays_ms=tuple(onset_vals),
+        release_tails_ms=tuple(release_vals),
+        early_cuts_ms=tuple(early_cut_vals),
+    )
+
+
+def _segment_record(metrics: SegmentMetrics) -> dict:
+    record = asdict(metrics)
+    for key in ('onset_delays_ms', 'release_tails_ms', 'early_cuts_ms'):
+        del record[key]
+    return record
+
+
+def _scenario_record(result: ScenarioResult) -> dict:
+    record = asdict(result)
+    record['segments'] = _segment_record(result.segments)
+    return record
+
+
+def main(argv: Sequence[str] | None = None) -> int:
     parser = _make_parser()
     args = parser.parse_args(argv)
+    if any(
+        isinstance(value, float) and not math.isfinite(value)
+        for value in vars(args).values()
+    ):
+        parser.error('Numeric arguments must be finite')
+    for name, value in (
+        ('--min-tolerant-f1', args.min_tolerant_f1),
+        ('--min-segment-recall', args.min_segment_recall),
+    ):
+        if value is not None and not 0 <= value <= 1:
+            parser.error(f'{name} must be between zero and one')
+    for name, value in (
+        ('--energy-threshold', args.energy_threshold),
+        ('--min-x-realtime', args.min_x_realtime),
+        ('--max-ms-per-frame', args.max_ms_per_frame),
+    ):
+        if value is not None and value < 0:
+            parser.error(f'{name} must be nonnegative')
+    if args.sample_rate <= 0 or args.frame_ms <= 0:
+        parser.error('--sample-rate and --frame-ms must be positive')
+    if round(args.sample_rate * args.frame_ms / 1000) < 1:
+        parser.error('Frame duration must contain at least one sample')
+    if args.benchmark_loops < 1 or args.warmup_loops < 0:
+        parser.error(
+            'Benchmark loops must be positive; warmup loops nonnegative'
+        )
+    if args.boundary_tolerance_ms < 0:
+        parser.error('--boundary-tolerance-ms must be nonnegative')
 
     vad_factory = _build_vad_factory(args)
-    scenarios = _build_scenarios(sample_rate=int(args.sample_rate), frame_ms=int(args.frame_ms))
+    scenarios = _build_scenarios(
+        sample_rate=int(args.sample_rate), frame_ms=int(args.frame_ms)
+    )
 
     scenario_results = [
         _evaluate_scenario(
@@ -503,28 +776,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         for scenario in scenarios
     ]
 
-    raw_summary = _aggregate_confusion(result.raw for result in scenario_results)
-    tolerant_summary = _aggregate_confusion(result.tolerant for result in scenario_results)
+    raw_summary = _aggregate_confusion(
+        result.raw for result in scenario_results
+    )
+    tolerant_summary = _aggregate_confusion(
+        result.tolerant for result in scenario_results
+    )
 
-    segment_totals = [result.segments for result in scenario_results if result.segments.total_segments > 0]
-    onset_vals = [value for seg in segment_totals for value in ([seg.onset_delay_ms_avg] if seg.onset_delay_ms_avg is not None else [])]
-    release_vals = [value for seg in segment_totals for value in ([seg.release_tail_ms_avg] if seg.release_tail_ms_avg is not None else [])]
-    early_cut_vals = [value for seg in segment_totals for value in ([seg.early_cut_ms_avg] if seg.early_cut_ms_avg is not None else [])]
-
-    detected_segments = sum(seg.detected_segments for seg in segment_totals)
-    total_segments = sum(seg.total_segments for seg in segment_totals)
-    segment_summary = {
-        "total_segments": int(total_segments),
-        "detected_segments": int(detected_segments),
-        "segment_recall": _safe_ratio(detected_segments, total_segments),
-        "missed_segments": int(total_segments - detected_segments),
-        "onset_delay_ms_avg": (float(np.mean(onset_vals)) if onset_vals else None),
-        "onset_delay_ms_p95": _percentile(onset_vals, 95.0),
-        "release_tail_ms_avg": (float(np.mean(release_vals)) if release_vals else None),
-        "release_tail_ms_p95": _percentile(release_vals, 95.0),
-        "early_cut_ms_avg": (float(np.mean(early_cut_vals)) if early_cut_vals else None),
-        "early_cut_ms_p95": _percentile(early_cut_vals, 95.0),
-    }
+    segment_summary = _segment_record(_aggregate_segments(scenario_results))
 
     benchmark = _benchmark(
         scenarios,
@@ -534,52 +793,52 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         warmup_loops=int(args.warmup_loops),
     )
 
-    report: Dict[str, object] = {
-        "config": {
-            "sample_rate": int(args.sample_rate),
-            "frame_ms": int(args.frame_ms),
-            "energy_threshold": float(args.energy_threshold),
-            "adaptive": bool(args.adaptive),
-            "noise_mult": float(args.noise_mult),
-            "noise_alpha": float(args.noise_alpha),
-            "hangover_ms": int(args.hangover_ms),
-            "min_speech_ms": int(args.min_speech_ms),
-            "band_ratio_min": float(args.band_ratio_min),
-            "voiced_min": float(args.voiced_min),
-            "band_ratio_weight": float(args.band_ratio_weight),
-            "voiced_weight": float(args.voiced_weight),
-            "pre_speech_ms": int(args.pre_speech_ms),
-            "min_end_silence_ms": int(args.min_end_silence_ms),
-            "voiced_every_n_frames": int(args.voiced_every_n_frames),
-            "voiced_only_near_thr": bool(args.voiced_only_near_thr),
-            "near_thr_ratio": float(args.near_thr_ratio),
-            "boundary_tolerance_ms": int(args.boundary_tolerance_ms),
+    report: dict[str, object] = {
+        'config': {
+            'sample_rate': int(args.sample_rate),
+            'frame_ms': int(args.frame_ms),
+            'energy_threshold': float(args.energy_threshold),
+            'adaptive': bool(args.adaptive),
+            'noise_mult': float(args.noise_mult),
+            'noise_alpha': float(args.noise_alpha),
+            'hangover_ms': int(args.hangover_ms),
+            'min_speech_ms': int(args.min_speech_ms),
+            'band_ratio_min': float(args.band_ratio_min),
+            'voiced_min': float(args.voiced_min),
+            'band_ratio_weight': float(args.band_ratio_weight),
+            'voiced_weight': float(args.voiced_weight),
+            'pre_speech_ms': int(args.pre_speech_ms),
+            'min_end_silence_ms': int(args.min_end_silence_ms),
+            'voiced_every_n_frames': int(args.voiced_every_n_frames),
+            'voiced_only_near_thr': bool(args.voiced_only_near_thr),
+            'near_thr_ratio': float(args.near_thr_ratio),
+            'boundary_tolerance_ms': int(args.boundary_tolerance_ms),
         },
-        "summary": {
-            "raw": asdict(raw_summary),
-            "tolerant": asdict(tolerant_summary),
-            "segments": segment_summary,
+        'summary': {
+            'raw': asdict(raw_summary),
+            'tolerant': asdict(tolerant_summary),
+            'segments': segment_summary,
         },
-        "benchmark": benchmark,
-        "scenarios": [asdict(result) for result in scenario_results],
+        'benchmark': benchmark,
+        'scenarios': [_scenario_record(result) for result in scenario_results],
     }
 
     failures = _threshold_failures(report, args)
     if failures:
-        report["failures"] = failures
+        report['failures'] = failures
 
     if args.json:
         print(json.dumps(report, ensure_ascii=True, indent=2))
     else:
         print(_format_report(report))
         if failures:
-            print("")
-            print("Threshold failures:")
+            print('')
+            print('Threshold failures:')
             for failure in failures:
-                print(f"- {failure}")
+                print(f'- {failure}')
 
     return 1 if failures else 0
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     raise SystemExit(main())

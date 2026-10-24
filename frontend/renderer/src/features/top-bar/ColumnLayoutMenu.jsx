@@ -1,7 +1,14 @@
-import React from "react";
-import { ArrowDown, ArrowUp, Columns3, Eye, EyeOff, RotateCcw } from "lucide-react";
+import React from 'react';
+import {
+  ArrowDown,
+  ArrowUp,
+  Columns3,
+  Eye,
+  EyeOff,
+  RotateCcw,
+} from 'lucide-react';
 
-export function ColumnLayoutMenu({ layout }) {
+export const ColumnLayoutMenu = ({ layout }) => {
   const [open, setOpen] = React.useState(false);
   const menuRef = React.useRef(null);
 
@@ -16,8 +23,9 @@ export function ColumnLayoutMenu({ layout }) {
       }
     };
 
-    window.addEventListener("pointerdown", closeOnOutsidePointer);
-    return () => window.removeEventListener("pointerdown", closeOnOutsidePointer);
+    window.addEventListener('pointerdown', closeOnOutsidePointer);
+    return () =>
+      window.removeEventListener('pointerdown', closeOnOutsidePointer);
   }, [open]);
 
   if (!layout) {
@@ -28,7 +36,12 @@ export function ColumnLayoutMenu({ layout }) {
 
   return (
     <div className="column-menu" ref={menuRef}>
-      <button className="icon-button" title="Columns" type="button" onClick={() => setOpen((current) => !current)}>
+      <button
+        className="icon-button"
+        title="Columns"
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+      >
         <Columns3 size={16} />
       </button>
 
@@ -38,13 +51,20 @@ export function ColumnLayoutMenu({ layout }) {
             const isHidden = hidden.has(column.id);
             const visibleCount = layout.visibleIds.length;
             return (
-              <div className={`column-menu-row ${isHidden ? "hidden" : ""}`} key={column.id}>
+              <div
+                className={`column-menu-row ${isHidden ? 'hidden' : ''}`}
+                key={column.id}
+              >
                 <button
                   className="column-menu-icon"
                   disabled={!isHidden && visibleCount <= 1}
-                  title={isHidden ? "Show" : "Hide"}
+                  title={isHidden ? 'Show' : 'Hide'}
                   type="button"
-                  onClick={() => (isHidden ? layout.showColumn(column.id) : layout.hideColumn(column.id))}
+                  onClick={() =>
+                    isHidden
+                      ? layout.showColumn(column.id)
+                      : layout.hideColumn(column.id)
+                  }
                 >
                   {isHidden ? <EyeOff size={14} /> : <Eye size={14} />}
                 </button>
@@ -71,7 +91,11 @@ export function ColumnLayoutMenu({ layout }) {
             );
           })}
 
-          <button className="column-menu-reset" type="button" onClick={layout.resetLayout}>
+          <button
+            className="column-menu-reset"
+            type="button"
+            onClick={layout.resetLayout}
+          >
             <RotateCcw size={14} />
             <span>Reset</span>
           </button>
@@ -79,4 +103,4 @@ export function ColumnLayoutMenu({ layout }) {
       ) : null}
     </div>
   );
-}
+};

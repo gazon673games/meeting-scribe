@@ -3,7 +3,6 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
 
 import numpy as np
 
@@ -14,7 +13,7 @@ from diarization.application.ports import OnlineDiarizerPort
 class _Cluster:
     label: str
     centroid: np.ndarray  # (d,)
-    n: int
+    count: int
     last_ts: float
 
 
@@ -38,11 +37,11 @@ class _ResemblyzerBackend:
     def __init__(self) -> None:
         try:
             from resemblyzer import VoiceEncoder  # type: ignore
-        except Exception as e:
+        except Exception as error:
             raise RuntimeError(
                 "Speaker diarization requires 'resemblyzer'. Install it:\n"
-                "  pip install resemblyzer torch\n"
-                f"Import error: {type(e).__name__}: {e}"
+                '  pip install resemblyzer torch\n'
+                f'Import error: {type(error).__name__}: {error}'
             )
         self._enc = VoiceEncoder()
 
@@ -61,8 +60,12 @@ class _NeMoBackend:
     Requires: diarization/diar_backend_nemo.py
     """
 
-    def __init__(self, device: str = "cuda", temp_dir: Optional[Any] = None) -> None:
-        from diarization.infrastructure.diar_backend_nemo import NeMoTitaNetEmbedder
+    def __init__(
+        self, device: str = 'cuda', temp_dir: Path | str | None = None
+    ) -> None:
+        from diarization.infrastructure.diar_backend_nemo import (
+            NeMoTitaNetEmbedder,
+        )
 
         temp_path = Path(temp_dir) if temp_dir is not None else None
         self._emb = NeMoTitaNetEmbedder(device=device, temp_dir=temp_path)
@@ -72,8 +75,12 @@ class _NeMoBackend:
 
 
 class _SherpaOnnxBackend:
-    def __init__(self, *, model_path: str, provider: str = "cpu", num_threads: int = 1) -> None:
-        from diarization.infrastructure.diar_backend_sherpa import SherpaOnnxSpeakerEmbeddingBackend
+    def __init__(
+        self, *, model_path: str, provider: str = 'cpu', num_threads: int = 1
+    ) -> None:
+        from diarization.infrastructure.diar_backend_sherpa import (
+            SherpaOnnxSpeakerEmbeddingBackend,
+        )
 
         self._emb = SherpaOnnxSpeakerEmbeddingBackend(
             model_path=model_path,
@@ -106,30 +113,39 @@ class OnlineDiarizer(OnlineDiarizerPort):
     window_s: float = 120.0  # window for estimating n_speakers
 
     # backend selection
-    backend: str = "resemblyzer"  # "resemblyzer" | "nemo" | "sherpa_onnx"
-    device: str = "cuda"
-    temp_dir: Optional[Any] = None
-    sherpa_model_path: str = ""
-    sherpa_provider: str = "cpu"
+    backend: str = 'resemblyzer'  # "resemblyzer" | "nemo" | "sherpa_onnx"
+    device: str = 'cuda'
+    temp_dir: Path | str | None = None
+    sherpa_model_path: str = ''
+    sherpa_provider: str = 'cpu'
     sherpa_num_threads: int = 1
 
     def __post_init__(self) -> None:
-        self._backend: Optional[object] = None
-        self._clusters: List[_Cluster] = []
-        self._events: List[Tuple[float, str]] = []  # (ts, label) for window estimate
-        self._last_error: Optional[str] = None  # NEW: store last embed/init error text
+        self._backend: (
+            _ResemblyzerBackend | _NeMoBackend | _SherpaOnnxBackend | None
+        ) = None
+        self._clusters: list[_Cluster] = []
+        self._label_counter = 0
+        self._events: list[
+            tuple[float, str]
+        ] = []  # (ts, label) for window estimate
+        self._last_error: str | None = None
 
-    def last_error(self) -> Optional[str]:
+    def last_error(self) -> str | None:
         return self._last_error
 
-    def _lazy_backend(self):
+    def _lazy_backend(
+        self,
+    ) -> _ResemblyzerBackend | _NeMoBackend | _SherpaOnnxBackend:
         if self._backend is not None:
             return self._backend
 
-        b = (self.backend or "resemblyzer").strip().lower()
-        if b == "nemo":
-            self._backend = _NeMoBackend(device=self.device, temp_dir=self.temp_dir)
-        elif b == "sherpa_onnx":
+        backend_name = (self.backend or 'resemblyzer').strip().lower()
+        if backend_name == 'nemo':
+            self._backend = _NeMoBackend(
+                device=self.device, temp_dir=self.temp_dir
+            )
+        elif backend_name == 'sherpa_onnx':
             self._backend = _SherpaOnnxBackend(
                 model_path=self.sherpa_model_path,
                 provider=self.sherpa_provider,
@@ -140,52 +156,64 @@ class OnlineDiarizer(OnlineDiarizerPort):
         return self._backend
 
     def _next_label(self) -> str:
-        return f"S{len(self._clusters) + 1}"
+        self._label_counter += 1
+        return f'S{self._label_counter}'
 
     def _prune(self, now: float) -> None:
-        if self.prune_after_s <= 0:
-            return
-        keep: List[_Cluster] = []
-        for c in self._clusters:
-            if (now - c.last_ts) <= self.prune_after_s:
-                keep.append(c)
-        self._clusters = keep
+        if self.prune_after_s > 0:
+            self._clusters = [
+                cluster
+                for cluster in self._clusters
+                if now - cluster.last_ts <= self.prune_after_s
+            ]
 
         if self.window_s > 0:
             cutoff = now - self.window_s
-            self._events = [(t, l) for (t, l) in self._events if t >= cutoff]
+            self._events = [
+                (timestamp, speaker_label)
+                for timestamp, speaker_label in self._events
+                if timestamp >= cutoff
+            ]
+        else:
+            self._events.clear()
 
-    def assign(self, audio_16k: np.ndarray, ts: Optional[float] = None) -> Tuple[str, Optional[int]]:
+    def assign(
+        self, audio_16k: np.ndarray, ts: float | None = None
+    ) -> tuple[str, int | None]:
         """Returns: (speaker_label, n_speakers_estimate_or_None)"""
         label, n_speakers, _, _ = self.assign_with_debug(audio_16k, ts)
         return (label, n_speakers)
 
-    def clusters_snapshot(self) -> List[dict]:
-        out: List[dict] = []
-        for cluster in self._clusters:
-            out.append(
-                {
-                    "label": str(cluster.label),
-                    "centroid": np.asarray(cluster.centroid, dtype=np.float32).copy(),
-                    "count": int(cluster.n),
-                    "last_ts": float(cluster.last_ts),
-                }
-            )
-        return out
+    def clusters_snapshot(self) -> list[dict]:
+        return [
+            {
+                'label': str(cluster.label),
+                'centroid': np.asarray(
+                    cluster.centroid, dtype=np.float32
+                ).copy(),
+                'count': cluster.count,
+                'last_ts': float(cluster.last_ts),
+            }
+            for cluster in self._clusters
+        ]
 
-    def estimate_n_speakers(self, now: Optional[float] = None) -> Optional[int]:
+    def estimate_n_speakers(self, now: float | None = None) -> int | None:
         if self.window_s <= 0:
             return None
-        t = float(now if now is not None else time.time())
-        cutoff = t - float(self.window_s)
-        labels = {l for (ts, l) in self._events if ts >= cutoff and l != "S?"}
+        timestamp = float(now if now is not None else time.time())
+        cutoff = timestamp - float(self.window_s)
+        labels = {
+            speaker_label
+            for (ts, speaker_label) in self._events
+            if ts >= cutoff and speaker_label != 'S?'
+        }
         if not labels:
             return None
-        return int(len(labels))
+        return len(labels)
 
     def assign_with_debug(
-        self, audio_16k: np.ndarray, ts: Optional[float] = None
-    ) -> tuple[str, Optional[int], float, bool]:
+        self, audio_16k: np.ndarray, ts: float | None = None
+    ) -> tuple[str, int | None, float, bool]:
         """
         Returns: (label, n_speakers, best_sim, created_new_cluster)
         """
@@ -193,47 +221,64 @@ class OnlineDiarizer(OnlineDiarizerPort):
         dur_s = float(np.asarray(audio_16k).shape[0]) / 16000.0
         if dur_s < float(self.min_segment_s):
             self._prune(now)
-            return ("S?", self.estimate_n_speakers(now), -1.0, False)
+            return ('S?', self.estimate_n_speakers(now), -1.0, False)
 
         try:
-            emb = self._lazy_backend().embed(audio_16k)  # type: ignore[attr-defined]
+            embedding = self._lazy_backend().embed(audio_16k)
             self._last_error = None
-        except Exception as e:
-            self._last_error = f"{type(e).__name__}: {e}"
+        except Exception as error:
+            self._last_error = f'{type(error).__name__}: {error}'
             self._prune(now)
-            return (f"S_ERR:{type(e).__name__}", self.estimate_n_speakers(now), -1.0, False)
+            return (
+                f'S_ERR:{type(error).__name__}',
+                self.estimate_n_speakers(now),
+                -1.0,
+                False,
+            )
 
-        emb = _l2norm(np.asarray(emb, dtype=np.float32))
+        embedding = _l2norm(np.asarray(embedding, dtype=np.float32))
         self._prune(now)
 
         if not self._clusters:
             label = self._next_label()
-            self._clusters.append(_Cluster(label=label, centroid=emb, n=1, last_ts=now))
-            self._events.append((now, label))
+            self._clusters.append(
+                _Cluster(label=label, centroid=embedding, count=1, last_ts=now)
+            )
+            if self.window_s > 0:
+                self._events.append((now, label))
             return (label, self.estimate_n_speakers(now), 1.0, True)
 
-        best_i = -1
-        best_sim = -1.0
-        for i, c in enumerate(self._clusters):
-            sim = _cos_sim(emb, c.centroid)
-            if sim > best_sim:
-                best_sim = sim
-                best_i = i
+        best_cluster = None
+        best_similarity = -1.0
+        for cluster in self._clusters:
+            similarity = _cos_sim(embedding, cluster.centroid)
+            if similarity > best_similarity:
+                best_similarity = similarity
+                best_cluster = cluster
 
         created = False
-        if best_i >= 0 and best_sim >= float(self.similarity_threshold):
-            c = self._clusters[best_i]
-            c.centroid = _l2norm((c.centroid * float(c.n) + emb) / float(c.n + 1))
-            c.n += 1
-            c.last_ts = now
-            label = c.label
+        if best_cluster is not None and best_similarity >= float(
+            self.similarity_threshold
+        ):
+            best_cluster.centroid = _l2norm(
+                (best_cluster.centroid * best_cluster.count + embedding)
+                / (best_cluster.count + 1)
+            )
+            best_cluster.count += 1
+            best_cluster.last_ts = now
+            label = best_cluster.label
         else:
             if len(self._clusters) < int(self.max_speakers):
                 label = self._next_label()
-                self._clusters.append(_Cluster(label=label, centroid=emb, n=1, last_ts=now))
+                self._clusters.append(
+                    _Cluster(
+                        label=label, centroid=embedding, count=1, last_ts=now
+                    )
+                )
                 created = True
             else:
-                label = self._clusters[best_i].label if best_i >= 0 else "S?"
+                label = best_cluster.label if best_cluster is not None else 'S?'
 
-        self._events.append((now, label))
-        return (label, self.estimate_n_speakers(now), float(best_sim), created)
+        if self.window_s > 0:
+            self._events.append((now, label))
+        return (label, self.estimate_n_speakers(now), best_similarity, created)

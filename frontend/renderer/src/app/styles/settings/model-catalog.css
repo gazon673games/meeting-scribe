@@ -70,7 +70,9 @@
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  transition: color 0.1s, border-color 0.1s;
+  transition:
+    color 0.1s,
+    border-color 0.1s;
 }
 
 .model-row-btn:hover {
@@ -159,7 +161,11 @@
   border-radius: 4px;
   background: var(--panel-bg);
   color: var(--text);
-  font: 11px/1.45 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font:
+    11px/1.45 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    'Liberation Mono',
+    monospace;
   padding: 8px;
 }
-

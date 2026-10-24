@@ -6,10 +6,10 @@ from interface.backend_parts.session_mixin import BackendSessionMixin
 from interface.backend_parts.state_mixin import BackendStateMixin
 
 __all__ = [
-    "BackendBaseMixin",
-    "BackendModelStateMixin",
-    "BackendAsrModelsMixin",
-    "BackendExtraModelsMixin",
-    "BackendSessionMixin",
-    "BackendStateMixin",
+    'BackendBaseMixin',
+    'BackendModelStateMixin',
+    'BackendAsrModelsMixin',
+    'BackendExtraModelsMixin',
+    'BackendSessionMixin',
+    'BackendStateMixin',
 ]

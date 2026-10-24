@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import logging
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from tools.batch_scribe_parts.audio import read_wav_float32, to_16k_mono_wav
+
+if TYPE_CHECKING:
+    from asr.infrastructure.offline_runner import OfflineProfile
+
+_logger = logging.getLogger(__name__)
 
 
 class Scribe:
@@ -14,14 +20,14 @@ class Scribe:
 
     def __init__(
         self,
-        profile,
+        profile: OfflineProfile,
         *,
         diar: bool = False,
-        diar_backend: str = "online",
+        diar_backend: str = 'online',
         diar_sim_threshold: float = 0.74,
-        diar_device: Optional[str] = None,
-        sherpa_model_path: str = "",
-        sherpa_provider: str = "cpu",
+        diar_device: str | None = None,
+        sherpa_model_path: str = '',
+        sherpa_provider: str = 'cpu',
         sherpa_num_threads: int = 1,
     ) -> None:
         self._profile = profile
@@ -34,81 +40,103 @@ class Scribe:
         self._sherpa_num_threads = sherpa_num_threads
         self._model = None
 
-    def __enter__(self) -> "Scribe":
+    def __enter__(self) -> Scribe:
         from faster_whisper import WhisperModel  # type: ignore
 
         p = self._profile
-        model_kwargs: Dict[str, Any] = {"device": p.device, "compute_type": p.compute_type}
-        cpu_threads = getattr(p, "cpu_threads", None)
-        num_workers = getattr(p, "num_workers", None)
+        model_kwargs: dict[str, Any] = {
+            'device': p.device,
+            'compute_type': p.compute_type,
+        }
+        cpu_threads = p.cpu_threads
+        num_workers = p.num_workers
         if cpu_threads is not None:
-            model_kwargs["cpu_threads"] = max(0, int(cpu_threads))
+            model_kwargs['cpu_threads'] = max(0, int(cpu_threads))
         if num_workers is not None:
-            model_kwargs["num_workers"] = max(1, int(num_workers))
+            model_kwargs['num_workers'] = max(1, int(num_workers))
         try:
             self._model = WhisperModel(p.model_name, **model_kwargs)
-        except Exception as exc:
+        except Exception as error:
             raise RuntimeError(
-                "Unable to load ASR model "
+                'Unable to load ASR model '
                 f"'{p.model_name}'. The model may be missing from the local cache, "
-                "the local path may be invalid, or the machine may be offline. "
-                "Download the model in the app first, run once with network access, "
-                "or pass a valid local model path / --models-dir."
-            ) from exc
+                'the local path may be invalid, or the machine may be offline. '
+                'Download the model in the app first, run once with network access, '
+                'or pass a valid local model path / --models-dir.'
+            ) from error
         return self
 
-    def __exit__(self, *_) -> None:
+    def __exit__(self, error_type=None, error=None, traceback=None) -> None:
         if self._model is not None:
             try:
                 self._model.model.unload_model()
             except Exception:
-                pass
-            del self._model
+                _logger.warning('Cannot unload batch ASR model', exc_info=True)
+                if error_type is None:
+                    raise
+                return
             self._model = None
 
     @staticmethod
-    def _segment_record(segment) -> Optional[dict]:  # noqa: ANN001
-        text = (getattr(segment, "text", "") or "").strip()
+    def _segment_record(segment) -> dict | None:  # noqa: ANN001
+        text = (getattr(segment, 'text', '') or '').strip()
         if not text:
             return None
-        return {"t0": float(segment.start), "t1": float(segment.end), "text": text}
+        return {
+            't0': float(segment.start),
+            't1': float(segment.end),
+            'text': text,
+        }
 
     @staticmethod
-    def _word_records(segment) -> List[dict]:  # noqa: ANN001
-        records: List[dict] = []
-        for word in (getattr(segment, "words", None) or []):
-            text = (getattr(word, "word", "") or "").strip()
-            start = getattr(word, "start", None)
-            end = getattr(word, "end", None)
+    def _word_records(segment) -> list[dict]:  # noqa: ANN001
+        records: list[dict] = []
+        for word in getattr(segment, 'words', None) or []:
+            text = (getattr(word, 'word', '') or '').strip()
+            start = getattr(word, 'start', None)
+            end = getattr(word, 'end', None)
             if text and start is not None and end is not None:
-                records.append({"t0": float(start), "t1": float(end), "text": text, "unit": "word"})
+                records.append(
+                    {
+                        't0': float(start),
+                        't1': float(end),
+                        'text': text,
+                        'unit': 'word',
+                    }
+                )
         return records
 
     def _transcribe_kwargs(self, *, word_by_word: bool = False) -> dict:
         p = self._profile
-        kwargs: dict = dict(getattr(p, "extra_transcribe_options", {}) or {})
+        kwargs: dict[str, Any] = dict(p.extra_transcribe_options)
         kwargs.update(
             beam_size=p.beam_size,
             vad_filter=p.vad_filter,
             condition_on_previous_text=p.condition_on_previous_text,
         )
-        temperature = getattr(p, "temperature", None)
+        temperature = p.temperature
         if temperature is not None:
-            kwargs["temperature"] = float(temperature)
+            kwargs['temperature'] = float(temperature)
         if p.language:
-            kwargs["language"] = p.language
+            kwargs['language'] = p.language
         if p.initial_prompt:
-            kwargs["initial_prompt"] = p.initial_prompt
+            kwargs['initial_prompt'] = p.initial_prompt
         if word_by_word:
-            kwargs["word_timestamps"] = True
-            kwargs["without_timestamps"] = False
+            kwargs['word_timestamps'] = True
+            kwargs['without_timestamps'] = False
         return kwargs
 
-    def _transcribe(self, wav_path: Path, *, word_by_word: bool = False) -> List[dict]:
+    def _transcribe(
+        self, wav_path: Path, *, word_by_word: bool = False
+    ) -> list[dict]:
         if self._model is None:
-            raise RuntimeError("Call process() inside a 'with Scribe(...) as scribe:' block.")
-        segments, _ = self._model.transcribe(str(wav_path), **self._transcribe_kwargs(word_by_word=word_by_word))
-        records: List[dict] = []
+            raise RuntimeError(
+                "Call process() inside a 'with Scribe(...) as scribe:' block."
+            )
+        segments, _ = self._model.transcribe(
+            str(wav_path), **self._transcribe_kwargs(word_by_word=word_by_word)
+        )
+        records: list[dict] = []
         for segment in segments:
             if word_by_word:
                 words = self._word_records(segment)
@@ -122,9 +150,13 @@ class Scribe:
 
     def _transcribe_stream(self, wav_path: Path, *, word_by_word: bool = False):
         if self._model is None:
-            raise RuntimeError("Call process_stream() inside a 'with Scribe(...) as scribe:' block.")
-        segments, info = self._model.transcribe(str(wav_path), **self._transcribe_kwargs(word_by_word=word_by_word))
-        total = getattr(info, "duration", None)
+            raise RuntimeError(
+                "Call process_stream() inside a 'with Scribe(...) as scribe:' block."
+            )
+        segments, info = self._model.transcribe(
+            str(wav_path), **self._transcribe_kwargs(word_by_word=word_by_word)
+        )
+        total = getattr(info, 'duration', None)
         for segment in segments:
             records = self._word_records(segment) if word_by_word else []
             if not records:
@@ -134,9 +166,13 @@ class Scribe:
                 yield record, total
 
     def _make_online_diarizer(self):
-        from diarization.infrastructure.diarizer import OnlineDiarizer  # type: ignore
+        from diarization.infrastructure.diarizer import (
+            OnlineDiarizer,  # type: ignore
+        )
 
-        backend = {"nemo": "nemo", "sherpa_onnx": "sherpa_onnx"}.get(self._diar_backend, "resemblyzer")
+        backend = {'nemo': 'nemo', 'sherpa_onnx': 'sherpa_onnx'}.get(
+            self._diar_backend, 'resemblyzer'
+        )
         return OnlineDiarizer(
             similarity_threshold=self._diar_sim_threshold,
             backend=backend,
@@ -146,30 +182,47 @@ class Scribe:
             sherpa_num_threads=self._sherpa_num_threads,
         )
 
-    def _diarize(self, audio_16k: np.ndarray, asr_segs: List[dict]) -> List[dict]:
-        if self._diar_backend == "pyannote":
+    def _diarize(
+        self, audio_16k: np.ndarray, asr_segs: list[dict]
+    ) -> list[dict]:
+        if self._diar_backend == 'pyannote':
             return self._diarize_pyannote(audio_16k, asr_segs)
         diarizer = self._make_online_diarizer()
         sr = 16000
-        result: List[dict] = []
+        result: list[dict] = []
         for seg in asr_segs:
-            chunk = audio_16k[int(seg["t0"] * sr) : int(seg["t1"] * sr)]
-            label, _ = diarizer.assign(chunk, ts=seg["t0"])
-            result.append({**seg, "speaker": label})
+            chunk = audio_16k[int(seg['t0'] * sr) : int(seg['t1'] * sr)]
+            label, _ = diarizer.assign(chunk, ts=seg['t0'])
+            result.append({**seg, 'speaker': label})
         return result
 
-    def _diarize_pyannote(self, audio_16k: np.ndarray, asr_segs: List[dict]) -> List[dict]:
+    def _diarize_pyannote(
+        self, audio_16k: np.ndarray, asr_segs: list[dict]
+    ) -> list[dict]:
         from diarization.domain.segments import pick_speaker  # type: ignore
-        from diarization.infrastructure.diar_backend_pyannote import PyannoteDiarizer  # type: ignore
+        from diarization.infrastructure.diar_backend_pyannote import (
+            PyannoteDiarizer,  # type: ignore
+        )
 
         timeline = PyannoteDiarizer(device=self._diar_device).diarize(audio_16k)
-        return [{**seg, "speaker": pick_speaker(timeline, seg["t0"], seg["t1"])} for seg in asr_segs]
+        return [
+            {**seg, 'speaker': pick_speaker(timeline, seg['t0'], seg['t1'])}
+            for seg in asr_segs
+        ]
 
-    def process(self, input_path: Path, tmp_dir: Optional[Path] = None, *, word_by_word: bool = False) -> List[dict]:
+    def process(
+        self,
+        input_path: Path,
+        tmp_dir: Path | None = None,
+        *,
+        word_by_word: bool = False,
+    ) -> list[dict]:
         managed = tmp_dir is None
         temp_dir = tempfile.TemporaryDirectory() if managed else None
         try:
-            tmp_path = Path(temp_dir.name) if temp_dir is not None else Path(tmp_dir)
+            tmp_path = (
+                Path(temp_dir.name) if temp_dir is not None else Path(tmp_dir)
+            )
             wav = to_16k_mono_wav(input_path, tmp_path)
             segs = self._transcribe(wav, word_by_word=word_by_word)
             if self._diar and segs:
@@ -179,34 +232,58 @@ class Scribe:
             if temp_dir is not None:
                 temp_dir.cleanup()
 
-    def process_stream(self, input_path: Path, tmp_dir: Optional[Path] = None, *, word_by_word: bool = False):
+    def process_stream(
+        self,
+        input_path: Path,
+        tmp_dir: Path | None = None,
+        *,
+        word_by_word: bool = False,
+    ):
         managed = tmp_dir is None
         temp_dir = tempfile.TemporaryDirectory() if managed else None
         try:
-            tmp_path = Path(temp_dir.name) if temp_dir is not None else Path(tmp_dir)
+            tmp_path = (
+                Path(temp_dir.name) if temp_dir is not None else Path(tmp_dir)
+            )
             wav = to_16k_mono_wav(input_path, tmp_path)
             audio = read_wav_float32(wav) if self._diar else None
-            pyannote_timeline = self._pyannote_timeline(audio) if self._diar and self._diar_backend == "pyannote" else None
-            online_diarizer = self._make_online_diarizer() if self._diar and self._diar_backend != "pyannote" else None
+            pyannote_timeline = (
+                self._pyannote_timeline(audio)
+                if self._diar and self._diar_backend == 'pyannote'
+                else None
+            )
+            online_diarizer = (
+                self._make_online_diarizer()
+                if self._diar and self._diar_backend != 'pyannote'
+                else None
+            )
 
             sr = 16000
-            for seq, (seg, total_s) in enumerate(self._transcribe_stream(wav, word_by_word=word_by_word), 1):
-                seg["_seq"] = seq
-                seg["_total_s"] = total_s
+            for seq, (seg, total_s) in enumerate(
+                self._transcribe_stream(wav, word_by_word=word_by_word), 1
+            ):
+                seg['_seq'] = seq
+                seg['_total_s'] = total_s
                 if pyannote_timeline is not None:
-                    from diarization.domain.segments import pick_speaker  # type: ignore
+                    from diarization.domain.segments import (
+                        pick_speaker,  # type: ignore
+                    )
 
-                    seg["speaker"] = pick_speaker(pyannote_timeline, seg["t0"], seg["t1"])
+                    seg['speaker'] = pick_speaker(
+                        pyannote_timeline, seg['t0'], seg['t1']
+                    )
                 elif online_diarizer is not None and audio is not None:
-                    chunk = audio[int(seg["t0"] * sr) : int(seg["t1"] * sr)]
-                    label, _ = online_diarizer.assign(chunk, ts=seg["t0"])
-                    seg["speaker"] = label
+                    chunk = audio[int(seg['t0'] * sr) : int(seg['t1'] * sr)]
+                    label, _ = online_diarizer.assign(chunk, ts=seg['t0'])
+                    seg['speaker'] = label
                 yield seg
         finally:
             if temp_dir is not None:
                 temp_dir.cleanup()
 
-    def _pyannote_timeline(self, audio: Optional[np.ndarray]):
-        from diarization.infrastructure.diar_backend_pyannote import PyannoteDiarizer  # type: ignore
+    def _pyannote_timeline(self, audio: np.ndarray | None):
+        from diarization.infrastructure.diar_backend_pyannote import (
+            PyannoteDiarizer,  # type: ignore
+        )
 
         return PyannoteDiarizer(device=self._diar_device).diarize(audio)

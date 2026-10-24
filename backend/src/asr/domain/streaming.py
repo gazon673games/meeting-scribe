@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
 
 from asr.domain.audio import MonoAudio16k
 
@@ -15,8 +14,8 @@ class StreamingWord:
 
 @dataclass(frozen=True)
 class PrefixUpdate:
-    newly_confirmed: List[StreamingWord]
-    tentative: List[StreamingWord]
+    newly_confirmed: list[StreamingWord]
+    tentative: list[StreamingWord]
 
 
 @dataclass(frozen=True)
@@ -27,7 +26,13 @@ class StreamingChunk:
     audio: MonoAudio16k
     is_final: bool
     enqueue_ts: float
-    incremental_audio: Optional[MonoAudio16k] = None
+    incremental_audio: MonoAudio16k | None = None
+    enqueue_monotonic: float | None = None
+
+    def queue_wait_s(self, monotonic_now: float) -> float:
+        if self.enqueue_monotonic is None:
+            return 0.0
+        return max(0.0, monotonic_now - self.enqueue_monotonic)
 
 
 class ConfirmedPrefixTracker:
@@ -43,29 +48,31 @@ class ConfirmedPrefixTracker:
 
     def __init__(self, lookahead: int = 2) -> None:
         self._lookahead = max(1, lookahead)
-        self._confirmed: List[StreamingWord] = []
-        self._prev: List[StreamingWord] = []
+        self._confirmed: list[StreamingWord] = []
+        self._prev: list[StreamingWord] = []
 
     @property
-    def confirmed_words(self) -> List[StreamingWord]:
+    def confirmed_words(self) -> list[StreamingWord]:
         return list(self._confirmed)
 
-    def update(self, words: List[StreamingWord]) -> PrefixUpdate:
+    def update(self, words: list[StreamingWord]) -> PrefixUpdate:
         """Compare current run against previous, extend confirmed prefix."""
-        stable_len = _common_prefix_len(words, self._prev)
-        n = len(self._confirmed)
-        confirm_up_to = max(n, stable_len - self._lookahead)
-        newly_confirmed = list(words[n:confirm_up_to])
+        stable_prefix_length = _common_prefix_len(words, self._prev)
+        confirmed_count = len(self._confirmed)
+        confirm_up_to = max(
+            confirmed_count, stable_prefix_length - self._lookahead
+        )
+        newly_confirmed = words[confirmed_count:confirm_up_to]
         self._confirmed.extend(newly_confirmed)
         self._prev = list(words)
         return PrefixUpdate(
             newly_confirmed=newly_confirmed,
-            tentative=list(words[len(self._confirmed):]),
+            tentative=words[len(self._confirmed) :],
         )
 
     def flush(self) -> None:
         """Confirm all remaining tentative words (call when utterance ends)."""
-        remaining = self._prev[len(self._confirmed):]
+        remaining = self._prev[len(self._confirmed) :]
         self._confirmed.extend(remaining)
 
     def reset(self) -> None:
@@ -73,13 +80,12 @@ class ConfirmedPrefixTracker:
         self._prev.clear()
 
 
-def _common_prefix_len(a: List[StreamingWord], b: List[StreamingWord]) -> int:
+def _common_prefix_len(
+    words: list[StreamingWord], previous_words: list[StreamingWord]
+) -> int:
     length = 0
-    for i, w in enumerate(a):
-        if i >= len(b):
+    for word, previous_word in zip(words, previous_words):
+        if word.text != previous_word.text:
             break
-        if w.text == b[i].text:
-            length = i + 1
-        else:
-            break
+        length += 1
     return length

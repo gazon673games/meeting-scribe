@@ -112,7 +112,9 @@
   background: var(--subtle);
   top: 2px;
   left: 2px;
-  transition: transform 0.15s, background 0.15s;
+  transition:
+    transform 0.15s,
+    background 0.15s;
 }
 
 .feature-toggle.selected b {
@@ -164,8 +166,12 @@
 }
 
 @keyframes indeterminate-slide {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(400%); }
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
 }
 
 .model-download-bar-indeterminate {
@@ -209,7 +215,7 @@
 .stat-line strong {
   min-width: 0;
   color: var(--control-text);
-  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-family: 'Cascadia Mono', 'SFMono-Regular', Consolas, monospace;
   font-weight: 650;
   overflow: hidden;
   text-align: right;
@@ -312,4 +318,3 @@
   background: var(--panel-bg-strong);
   color: var(--subtle);
 }
-

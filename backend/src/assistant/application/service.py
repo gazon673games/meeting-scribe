@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, List, Optional
+from typing import Any
 
-from application.assistant_supervisor import AssistantFallbackSupervisor
-from application.assistant_use_case import AssistantRequestInput, AssistantRequestUseCase
+from application import assistant_supervisor
+from application.assistant_supervisor import AssistantFallbackPolicy
+from application.assistant_use_case import (
+    AssistantRequestInput,
+    AssistantRequestUseCase,
+)
 from application.commands import InvokeAssistantCommand
 from application.event_types import CodexFallbackStartedEvent, CodexResultEvent
 from application.supervision import SupervisionReport
@@ -34,11 +39,13 @@ class AssistantApplicationService:
         self,
         use_case: AssistantRequestUseCase,
         *,
-        supervisor: Optional[AssistantFallbackSupervisor] = None,
+        supervisor: AssistantFallbackPolicy | None = None,
     ) -> None:
         self._use_case = use_case
-        self._supervisor = supervisor or AssistantFallbackSupervisor()
-        self.last_supervision_report: Optional[SupervisionReport] = None
+        self._supervisor = (
+            supervisor if supervisor is not None else assistant_supervisor
+        )
+        self.last_supervision_report: SupervisionReport | None = None
 
     def execute(
         self,
@@ -54,8 +61,8 @@ class AssistantApplicationService:
             fallback_timeout_s=command.fallback_timeout_s,
         )
         result = None
-        first_error = ""
-        errors: List[str] = []
+        first_error = ''
+        errors: list[str] = []
 
         for attempt in attempts:
             if attempt.fallback:
@@ -63,7 +70,7 @@ class AssistantApplicationService:
                     CodexFallbackStartedEvent(
                         profile=command.profile.label,
                         cmd=command.request_text,
-                        reason=first_error or "primary attempt failed",
+                        reason=first_error or 'primary attempt failed',
                     )
                 )
 
@@ -84,9 +91,11 @@ class AssistantApplicationService:
                     execution_settings=AssistantExecutionSettings(
                         command_tokens=list(options.command_tokens),
                         path_hints=list(options.path_hints),
-                        proxy=str(options.proxy or ""),
+                        proxy=str(options.proxy or ''),
                         timeout_s=int(
-                            attempt.timeout_s if attempt.timeout_s is not None else options.default_timeout_s
+                            attempt.timeout_s
+                            if attempt.timeout_s is not None
+                            else options.default_timeout_s
                         ),
                         project_root=Path(options.project_root),
                         profile=command.profile,
@@ -95,15 +104,19 @@ class AssistantApplicationService:
                 )
             )
             if result.ok:
-                self.last_supervision_report = self._supervisor.success_report(attempt, errors)
+                self.last_supervision_report = self._supervisor.success_report(
+                    attempt, errors
+                )
                 break
             first_error = result.text
-            errors.append(f"{attempt.label}: {result.text}")
+            errors.append(f'{attempt.label}: {result.text}')
 
         if result is None:
             return
         if not result.ok:
-            self.last_supervision_report = self._supervisor.failure_report(errors)
+            self.last_supervision_report = self._supervisor.failure_report(
+                errors
+            )
 
         publish_event(
             CodexResultEvent(
@@ -121,12 +134,14 @@ class AssistantApplicationService:
             )
         )
 
-    def provider_statuses(self, *, options: AssistantRuntimeOptions) -> list[AssistantProviderInfo]:
+    def provider_statuses(
+        self, *, options: AssistantRuntimeOptions
+    ) -> list[AssistantProviderInfo]:
         return self._use_case.provider_statuses(
             AssistantExecutionSettings(
                 command_tokens=list(options.command_tokens),
                 path_hints=list(options.path_hints),
-                proxy=str(options.proxy or ""),
+                proxy=str(options.proxy or ''),
                 timeout_s=int(options.default_timeout_s),
                 project_root=Path(options.project_root),
                 profiles=list(options.profiles or []),
@@ -145,7 +160,7 @@ class AssistantApplicationService:
             AssistantExecutionSettings(
                 command_tokens=list(options.command_tokens),
                 path_hints=list(options.path_hints),
-                proxy=str(options.proxy or ""),
+                proxy=str(options.proxy or ''),
                 timeout_s=int(options.default_timeout_s),
                 project_root=Path(options.project_root),
                 profiles=list(options.profiles or []),
@@ -165,7 +180,7 @@ class AssistantApplicationService:
             AssistantExecutionSettings(
                 command_tokens=list(options.command_tokens),
                 path_hints=list(options.path_hints),
-                proxy=str(options.proxy or ""),
+                proxy=str(options.proxy or ''),
                 timeout_s=int(options.default_timeout_s),
                 project_root=Path(options.project_root),
                 profile=profile,

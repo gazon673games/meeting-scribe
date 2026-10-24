@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import queue
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from asr.application.ports import StopSignalPort
 from asr.application.segmentation import AudioSegmenterPort
@@ -14,7 +14,7 @@ class TapIngestRuntime:
     def __init__(
         self,
         *,
-        tap_queue: "queue.Queue[dict]",
+        tap_queue: queue.Queue[dict],
         stop_event: StopSignalPort,
         mode: str,
         segmenter: AudioSegmenterPort,
@@ -29,8 +29,15 @@ class TapIngestRuntime:
     def run_safe(self) -> None:
         try:
             self.run()
-        except Exception as e:
-            self._log_event({"type": "error", "where": "ingest", "error": str(e), "ts": time.time()})
+        except Exception as error:
+            self._log_event(
+                {
+                    'type': 'error',
+                    'where': 'ingest',
+                    'error': str(error),
+                    'ts': time.time(),
+                }
+            )
 
     def run(self) -> None:
         while not self._stop.is_set():

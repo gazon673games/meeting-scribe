@@ -10,7 +10,7 @@ class LocalLlmError(Exception):
     code: str
     message: str
     retryable: bool = True
-    suggestion: str = ""
+    suggestion: str = ''
     status_code: int = 0
 
     def as_provider_error(self) -> AssistantProviderError:

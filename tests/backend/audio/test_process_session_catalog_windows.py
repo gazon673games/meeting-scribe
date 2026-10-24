@@ -27,9 +27,9 @@ class WindowsProcessSessionCatalogTests(unittest.TestCase):
         calls: list[tuple[object, object, tuple[object, ...]]] = []
 
         def fake_cast(obj, pointer_type):  # noqa: ANN001, ARG001
-            if obj == "obj":
-                return ["vtbl"]
-            return {7: "fn"}
+            if obj == 'obj':
+                return ['vtbl']
+            return {7: 'fn'}
 
         def fake_winfunctype(restype, first_arg, *argtypes):  # noqa: ANN001
             self.assertIs(restype, int)
@@ -46,14 +46,16 @@ class WindowsProcessSessionCatalogTests(unittest.TestCase):
             return bind
 
         with (
-            patch("ctypes.cast", side_effect=fake_cast),
-            patch.object(ctypes, "WINFUNCTYPE", fake_winfunctype, create=True),
+            patch('ctypes.cast', side_effect=fake_cast),
+            patch.object(ctypes, 'WINFUNCTYPE', fake_winfunctype, create=True),
         ):
-            self.assertEqual(windows._wincall("obj", 7, int, [str], "arg"), 123)  # noqa: SLF001
+            self.assertEqual(windows._wincall('obj', 7, int, [str], 'arg'), 123)  # noqa: SLF001
 
-        self.assertEqual(calls, [("fn", "obj", ("arg",))])
+        self.assertEqual(calls, [('fn', 'obj', ('arg',))])
 
-    def test_list_windows_session_groups_walks_com_devices_and_groups_streams(self) -> None:
+    def test_list_windows_session_groups_walks_com_devices_and_groups_streams(
+        self,
+    ) -> None:
         def co_create_instance(*args):  # noqa: ANN001
             _set_pointer(args[-1], 111)
             return 0
@@ -67,7 +69,7 @@ class WindowsProcessSessionCatalogTests(unittest.TestCase):
         )
 
         def fake_wincall(obj, idx, restype, argtypes, *args):  # noqa: ANN001, ARG001
-            value = int(getattr(obj, "value", obj) or 0)
+            value = int(getattr(obj, 'value', obj) or 0)
             if idx == 2:
                 return 0
             if value == 111 and idx == 3:
@@ -77,7 +79,9 @@ class WindowsProcessSessionCatalogTests(unittest.TestCase):
                 args[0]._obj.value = 2  # noqa: SLF001
                 return 0
             if value == 222 and idx == 4:
-                _set_pointer(args[1], 300 + int(getattr(args[0], "value", args[0])))
+                _set_pointer(
+                    args[1], 300 + int(getattr(args[0], 'value', args[0]))
+                )
                 return 0
             if value in {300, 301} and idx == 4:
                 _set_pointer(args[1], 800 + (value - 300))
@@ -86,7 +90,7 @@ class WindowsProcessSessionCatalogTests(unittest.TestCase):
                 return -1
             if value in {800, 801} and idx == 5:
                 args[1]._obj.vt = 31  # noqa: SLF001
-                args[1]._obj.pwszVal = f"Output Label {value - 799}"  # noqa: SLF001
+                args[1]._obj.pwszVal = f'Output Label {value - 799}'  # noqa: SLF001
                 return 0
             if value in {300, 301} and idx == 3:
                 _set_pointer(args[3], 400 + (value - 300))
@@ -98,7 +102,11 @@ class WindowsProcessSessionCatalogTests(unittest.TestCase):
                 args[0]._obj.value = 2 if value == 500 else 1  # noqa: SLF001
                 return 0
             if value in {500, 501} and idx == 4:
-                _set_pointer(args[1], (600 if value == 500 else 610) + int(getattr(args[0], "value", args[0])))
+                _set_pointer(
+                    args[1],
+                    (600 if value == 500 else 610)
+                    + int(getattr(args[0], 'value', args[0])),
+                )
                 return 0
             if value in {600, 601, 610} and idx == 0:
                 _set_pointer(args[1], value + 100)
@@ -110,9 +118,17 @@ class WindowsProcessSessionCatalogTests(unittest.TestCase):
             return -1
 
         with (
-            patch.object(ctypes, "windll", SimpleNamespace(ole32=fake_ole32), create=True),
-            patch("infrastructure.process_session_catalog_parts.windows._wincall", side_effect=fake_wincall),
-            patch("infrastructure.process_session_catalog_parts.windows._process_label", side_effect=lambda pid: f"App {pid}"),
+            patch.object(
+                ctypes, 'windll', SimpleNamespace(ole32=fake_ole32), create=True
+            ),
+            patch(
+                'infrastructure.process_session_catalog_parts.windows._wincall',
+                side_effect=fake_wincall,
+            ),
+            patch(
+                'infrastructure.process_session_catalog_parts.windows._process_label',
+                side_effect=lambda pid: f'App {pid}',
+            ),
         ):
             groups = windows.list_windows_session_groups()
 
@@ -120,14 +136,30 @@ class WindowsProcessSessionCatalogTests(unittest.TestCase):
             groups,
             [
                 {
-                    "id": "endpoint:0",
-                    "label": "Output Label 1",
-                    "sessions": [{"pid": 1234, "label": "App 1234", "streams": 2, "endpointId": "endpoint:0", "endpointLabel": "Output Label 1"}],
+                    'id': 'endpoint:0',
+                    'label': 'Output Label 1',
+                    'sessions': [
+                        {
+                            'pid': 1234,
+                            'label': 'App 1234',
+                            'streams': 2,
+                            'endpointId': 'endpoint:0',
+                            'endpointLabel': 'Output Label 1',
+                        }
+                    ],
                 },
                 {
-                    "id": "endpoint:1",
-                    "label": "Output Label 2",
-                    "sessions": [{"pid": 456, "label": "App 456", "streams": 1, "endpointId": "endpoint:1", "endpointLabel": "Output Label 2"}],
+                    'id': 'endpoint:1',
+                    'label': 'Output Label 2',
+                    'sessions': [
+                        {
+                            'pid': 456,
+                            'label': 'App 456',
+                            'streams': 1,
+                            'endpointId': 'endpoint:1',
+                            'endpointLabel': 'Output Label 2',
+                        }
+                    ],
                 },
             ],
         )
@@ -138,12 +170,12 @@ class WindowsProcessSessionCatalogTests(unittest.TestCase):
                 self.pid = pid
 
             def name(self) -> str:
-                return "Browser.exe"
+                return 'Browser.exe'
 
         fake_psutil = SimpleNamespace(Process=FakeProcess)
-        with patch.dict("sys.modules", {"psutil": fake_psutil}):
-            self.assertEqual(windows._process_label(99), "Browser")  # noqa: SLF001
+        with patch.dict('sys.modules', {'psutil': fake_psutil}):
+            self.assertEqual(windows._process_label(99), 'Browser')  # noqa: SLF001
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

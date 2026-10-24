@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from application.audio_runtime import AudioRuntimeFactory, AudioRuntimePort
 from audio.application.engine import AudioEngine
@@ -13,6 +13,8 @@ class DefaultAudioRuntimeFactory(AudioRuntimeFactory):
         *,
         format: AudioFormat,
         output_queue: Any,
-        tap_queue: Optional[Any] = None,
+        tap_queue: Any | None = None,
     ) -> AudioRuntimePort:
-        return AudioEngine(format=format, output_queue=output_queue, tap_queue=tap_queue)
+        return AudioEngine(
+            format=format, output_queue=output_queue, tap_queue=tap_queue
+        )

@@ -7,5 +7,5 @@ from dataclasses import dataclass
 class AudioFormat:
     sample_rate: int
     channels: int
-    dtype: str = "float32"
+    dtype: str = 'float32'
     blocksize: int = 1024

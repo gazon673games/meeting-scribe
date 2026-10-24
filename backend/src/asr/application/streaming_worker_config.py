@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from asr.application.pipeline_config import ASRPipelineSettings
@@ -10,18 +10,20 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class StreamingWorkerConfig:
     model_name: str
-    language: Optional[str]
+    language: str | None
     device: str
     compute_type: str
     cpu_threads: int
     num_workers: int
-    initial_prompt: Optional[str]
-    hotwords: Optional[str] = None
+    initial_prompt: str | None
+    hotwords: str | None = None
     lookahead: int = 2
     queue_timeout_s: float = 0.1
 
     @classmethod
-    def from_settings(cls, settings: "ASRPipelineSettings") -> "StreamingWorkerConfig":
+    def from_settings(
+        cls, settings: ASRPipelineSettings
+    ) -> StreamingWorkerConfig:
         return cls(
             model_name=str(settings.asr_model_name),
             language=settings.asr_language,

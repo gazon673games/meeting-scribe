@@ -1,2 +1,1 @@
 """Batch Scriber implementation parts."""
-

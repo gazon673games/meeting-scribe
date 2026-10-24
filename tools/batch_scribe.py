@@ -8,72 +8,103 @@ CLI:
 
 Library:
     from pathlib import Path
-    from batch_scribe import scribe_to_srt
+    from tools.batch_scribe import scribe_to_srt
 
     result = scribe_to_srt(
-        Path("meeting.mp4"),
-        Path("meeting.srt"),
-        profile_name="Quality",
-        model="large-v3",
-        language="ru",
+        Path('meeting.mp4'),
+        Path('meeting.srt'),
+        profile_name='Quality',
+        model='large-v3',
+        language='ru',
         word_by_word=True,
     )
 """
+
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional
 
 
-def _bootstrap(project_root: Optional[str] = None, models_dir: Optional[str] = None) -> None:
-    root = Path(project_root) if project_root else Path(__file__).resolve().parent.parent
-    root = root.resolve()
+def _configure_import_paths(project_root: str | Path | None = None) -> Path:
+    project_path = (
+        Path(project_root)
+        if project_root is not None
+        else Path(__file__).resolve().parents[1]
+    )
+    root = project_path.expanduser().resolve()
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
-    src = (root / "backend" / "src").resolve()
-    if src.is_dir() and str(src) not in sys.path:
-        sys.path.insert(0, str(src))
-    try:
-        from application.local_paths import configure_project_local_io
-
-        configure_project_local_io(root, models_dir=models_dir)
-    except Exception:
-        pass
+    source_root = root / 'backend' / 'src'
+    if source_root.is_dir() and str(source_root) not in sys.path:
+        sys.path.insert(0, str(source_root))
+    return root
 
 
-_bootstrap()
+def _bootstrap(
+    project_root: str | Path | None = None,
+    models_dir: str | Path | None = None,
+) -> None:
+    root = _configure_import_paths(project_root)
+    from application.local_paths import configure_project_local_io
+
+    configure_project_local_io(root, models_dir=models_dir)
 
 
-from tools.batch_scribe_parts.cli import _parse_asr_options, build_parser, main as _main  # noqa: E402
-from tools.batch_scribe_parts.constants import OUTPUT_FORMATS, PROFILES  # noqa: E402
-from tools.batch_scribe_parts.entrypoint import BatchScriber, scribe_to_srt  # noqa: E402
-from tools.batch_scribe_parts.output import append_srt_segment, write_output  # noqa: E402
-from tools.batch_scribe_parts.profiles import build_profile, profile_from_request  # noqa: E402
-from tools.batch_scribe_parts.request import BatchScribeRequest, BatchScribeResult  # noqa: E402
+# Direct script execution needs project imports before loading the CLI facade.
+_configure_import_paths()
+
+
+from tools.batch_scribe_parts.cli import (  # noqa: E402
+    _parse_asr_options,
+    build_parser,
+)
+from tools.batch_scribe_parts.cli import (  # noqa: E402
+    main as _run_cli,
+)
+from tools.batch_scribe_parts.constants import (  # noqa: E402
+    OUTPUT_FORMATS,
+    PROFILES,
+)
+from tools.batch_scribe_parts.entrypoint import (  # noqa: E402
+    BatchScriber,
+    scribe_to_srt,
+)
+from tools.batch_scribe_parts.output import (  # noqa: E402
+    append_srt_segment,
+    write_output,
+)
+from tools.batch_scribe_parts.profiles import (  # noqa: E402
+    build_profile,
+    profile_from_request,
+)
+from tools.batch_scribe_parts.request import (  # noqa: E402
+    BatchScribeRequest,
+    BatchScribeResult,
+)
 from tools.batch_scribe_parts.scribe import Scribe  # noqa: E402
 
-
-__all__ = [
-    "BatchScribeRequest",
-    "BatchScribeResult",
-    "BatchScriber",
-    "OUTPUT_FORMATS",
-    "PROFILES",
-    "Scribe",
-    "_parse_asr_options",
-    "append_srt_segment",
-    "build_parser",
-    "build_profile",
-    "profile_from_request",
-    "scribe_to_srt",
-    "write_output",
-]
-
-
-def main(argv=None) -> None:
-    _main(argv, bootstrap=_bootstrap)
+__all__ = (
+    'BatchScribeRequest',
+    'BatchScribeResult',
+    'BatchScriber',
+    'OUTPUT_FORMATS',
+    'PROFILES',
+    'Scribe',
+    '_parse_asr_options',
+    'append_srt_segment',
+    'build_parser',
+    'build_profile',
+    'profile_from_request',
+    'scribe_to_srt',
+    'write_output',
+)
 
 
-if __name__ == "__main__":
+def main(argv: Sequence[str] | None = None) -> None:
+    _run_cli(argv, bootstrap=_bootstrap)
+
+
+if __name__ == '__main__':
     main()

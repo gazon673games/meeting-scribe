@@ -1,11 +1,11 @@
-import { Network } from "lucide-react";
+import { Network } from 'lucide-react';
 
-import { CollapsibleSection } from "../../shared/ui/CollapsibleSection";
-import { Field } from "../../shared/ui/Field";
+import { CollapsibleSection } from '../../shared/ui/CollapsibleSection';
+import { Field } from '../../shared/ui/Field';
 
-const SCHEMES = ["http", "https", "socks5"];
+const SCHEMES = ['http', 'https', 'socks5'];
 
-export function ProxySettings({ draft, onChange }) {
+export const ProxySettings = ({ draft, onChange }) => {
   const enabled = Boolean(draft.assistantProxyEnabled);
 
   return (
@@ -13,7 +13,7 @@ export function ProxySettings({ draft, onChange }) {
       <div className="proxy-settings">
         <button
           aria-pressed={enabled}
-          className={`feature-toggle proxy-toggle ${enabled ? "selected" : ""}`}
+          className={`feature-toggle proxy-toggle ${enabled ? 'selected' : ''}`}
           type="button"
           onClick={() => onChange({ assistantProxyEnabled: !enabled })}
         >
@@ -26,8 +26,10 @@ export function ProxySettings({ draft, onChange }) {
           <Field label="Scheme">
             <select
               disabled={!enabled}
-              value={draft.assistantProxyScheme || "http"}
-              onChange={(event) => onChange({ assistantProxyScheme: event.target.value })}
+              value={draft.assistantProxyScheme || 'http'}
+              onChange={(event) =>
+                onChange({ assistantProxyScheme: event.target.value })
+              }
             >
               {SCHEMES.map((scheme) => (
                 <option key={scheme} value={scheme}>
@@ -40,8 +42,10 @@ export function ProxySettings({ draft, onChange }) {
             <input
               disabled={!enabled}
               spellCheck={false}
-              value={draft.assistantProxyHost || ""}
-              onChange={(event) => onChange({ assistantProxyHost: event.target.value })}
+              value={draft.assistantProxyHost || ''}
+              onChange={(event) =>
+                onChange({ assistantProxyHost: event.target.value })
+              }
             />
           </Field>
           <Field label="Port">
@@ -49,8 +53,12 @@ export function ProxySettings({ draft, onChange }) {
               disabled={!enabled}
               inputMode="numeric"
               pattern="[0-9]*"
-              value={draft.assistantProxyPort || ""}
-              onChange={(event) => onChange({ assistantProxyPort: event.target.value.replace(/\D/g, "") })}
+              value={draft.assistantProxyPort || ''}
+              onChange={(event) =>
+                onChange({
+                  assistantProxyPort: event.target.value.replace(/\D/g, ''),
+                })
+              }
             />
           </Field>
         </div>
@@ -60,8 +68,10 @@ export function ProxySettings({ draft, onChange }) {
               autoComplete="off"
               disabled={!enabled}
               spellCheck={false}
-              value={draft.assistantProxyUsername || ""}
-              onChange={(event) => onChange({ assistantProxyUsername: event.target.value })}
+              value={draft.assistantProxyUsername || ''}
+              onChange={(event) =>
+                onChange({ assistantProxyUsername: event.target.value })
+              }
             />
           </Field>
           <Field label="Password">
@@ -69,17 +79,22 @@ export function ProxySettings({ draft, onChange }) {
               autoComplete="new-password"
               disabled={!enabled}
               type="password"
-              value={draft.assistantProxyPassword || ""}
-              onChange={(event) => onChange({ assistantProxyPassword: event.target.value })}
+              value={draft.assistantProxyPassword || ''}
+              onChange={(event) =>
+                onChange({ assistantProxyPassword: event.target.value })
+              }
             />
           </Field>
         </div>
 
         <div className="proxy-note">
           <Network size={13} />
-          <span>Route assistant requests through this proxy. Model downloads have a separate proxy option.</span>
+          <span>
+            Route assistant requests through this proxy. Model downloads have a
+            separate proxy option.
+          </span>
         </div>
       </div>
     </CollapsibleSection>
   );
-}
+};

@@ -4,7 +4,12 @@ import numpy as np
 
 
 class PreGainAGC:
-    def __init__(self, target_rms: float = 0.06, max_gain: float = 6.0, alpha: float = 0.02):
+    def __init__(
+        self,
+        target_rms: float = 0.06,
+        max_gain: float = 6.0,
+        alpha: float = 0.02,
+    ):
         self.target_rms = float(target_rms)
         self.max_gain = float(max_gain)
         self.alpha = float(alpha)

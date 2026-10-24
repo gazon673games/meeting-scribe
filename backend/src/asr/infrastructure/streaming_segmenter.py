@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import queue
 import time
-from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional
+from collections.abc import Callable
+from dataclasses import dataclass
 
 import numpy as np
 
 from asr.application.segmentation import StreamingSegmenterConfig
 from asr.domain.streaming import StreamingChunk
-from asr.infrastructure.audio_data import MonoAudio16kBuffer
+from asr.infrastructure.audio_data import ChunkedAudio16kBuffer
 from asr.infrastructure.audio_utils import resample_linear, stereo_to_mono
 from asr.infrastructure.gain import PreGainAGC
 from asr.infrastructure.vad import EnergyVAD
@@ -20,12 +20,13 @@ LogEvent = Callable[[dict], None]
 @dataclass
 class _StreamState:
     vad: EnergyVAD
-    buffer: List[np.ndarray]
-    speech_start_ts: Optional[float]
+    buffer: list[np.ndarray]
+    speech_start_ts: float | None
     last_chunk_ts: float
     residual: np.ndarray
-    agc: Optional[PreGainAGC]
+    agc: PreGainAGC | None
     emitted_samples: int = 0
+    silence_frames: int = 0
 
 
 class StreamingAudioSegmenter:
@@ -42,13 +43,13 @@ class StreamingAudioSegmenter:
         self,
         *,
         config: StreamingSegmenterConfig,
-        chunk_queue: "queue.Queue[StreamingChunk]",
+        chunk_queue: queue.Queue[StreamingChunk],
         log_event: LogEvent,
     ) -> None:
         self._cfg = config
         self._chunk_q = chunk_queue
         self._log_event = log_event
-        self._streams: Dict[str, _StreamState] = {}
+        self._streams: dict[str, _StreamState] = {}
         self.pkt_count = 0
 
     def reset_runtime(self) -> None:
@@ -57,18 +58,25 @@ class StreamingAudioSegmenter:
 
     def feed_packet(self, *, mode: str, pkt: dict) -> None:
         self.pkt_count += 1
-        t0 = float(pkt.get("t_start", 0.0))
-        t1 = float(pkt.get("t_end", 0.0))
-        if mode == "mix":
-            block = pkt.get("mix")
+        t0 = float(pkt.get('t_start', 0.0))
+        t1 = float(pkt.get('t_end', 0.0))
+        if mode == 'mix':
+            block = pkt.get('mix')
             if isinstance(block, np.ndarray):
-                self.feed_stream("mix", t0, t1, block)
+                self.feed_stream('mix', t0, t1, block)
             return
-        for name, block in (pkt.get("sources") or {}).items():
+        for name, block in (pkt.get('sources') or {}).items():
             if isinstance(block, np.ndarray):
                 self.feed_stream(str(name), t0, t1, block)
 
-    def feed_stream(self, stream: str, t0: float, t1: float, block_48k: np.ndarray, sample_rate: int = 48000) -> None:
+    def feed_stream(
+        self,
+        stream: str,
+        t0: float,
+        t1: float,
+        block_48k: np.ndarray,
+        sample_rate: int = 48000,
+    ) -> None:
         state = self._ensure_stream(stream)
         mono = stereo_to_mono(block_48k)
         x16 = resample_linear(mono, sample_rate, 16000)
@@ -82,40 +90,61 @@ class StreamingAudioSegmenter:
         if name not in self._streams:
             cfg = self._cfg
             vad = EnergyVAD(
-                sample_rate=16000, frame_ms=20,
+                sample_rate=16000,
+                frame_ms=20,
                 energy_threshold=cfg.vad_energy_threshold,
                 hangover_ms=cfg.vad_hangover_ms,
                 min_speech_ms=cfg.vad_min_speech_ms,
-                adaptive=True, noise_mult=3.0, noise_alpha=0.05,
+                adaptive=True,
+                noise_mult=3.0,
+                noise_alpha=0.05,
                 band_ratio_min=cfg.vad_band_ratio_min,
                 voiced_min=cfg.vad_voiced_min,
                 pre_speech_ms=cfg.vad_pre_speech_ms,
                 min_end_silence_ms=cfg.vad_min_end_silence_ms,
             )
-            agc = PreGainAGC(
-                target_rms=cfg.agc_target_rms,
-                max_gain=cfg.agc_max_gain,
-                alpha=cfg.agc_alpha,
-            ) if cfg.agc_enabled else None
+            agc = (
+                PreGainAGC(
+                    target_rms=cfg.agc_target_rms,
+                    max_gain=cfg.agc_max_gain,
+                    alpha=cfg.agc_alpha,
+                )
+                if cfg.agc_enabled
+                else None
+            )
             self._streams[name] = _StreamState(
-                vad=vad, buffer=[], speech_start_ts=None,
+                vad=vad,
+                buffer=[],
+                speech_start_ts=None,
                 last_chunk_ts=0.0,
-                residual=np.zeros((0,), dtype=np.float32), agc=agc,
+                residual=np.zeros((0,), dtype=np.float32),
+                agc=agc,
                 emitted_samples=0,
             )
         return self._streams[name]
 
     # ── VAD loop ───────────────────────────────────────────────────────
 
-    def _run_vad_loop(self, stream: str, state: _StreamState, t0: float, t1: float, x16: np.ndarray) -> None:
+    def _run_vad_loop(
+        self,
+        stream: str,
+        state: _StreamState,
+        t0: float,
+        t1: float,
+        x16: np.ndarray,
+    ) -> None:
         vad = state.vad
         frame_len = vad.frame_len
         silence_limit = int(self._cfg.endpoint_silence_ms / vad.frame_ms)
         max_frames = int(self._cfg.max_segment_s * 1000 / vad.frame_ms)
 
-        merged = np.concatenate([state.residual, x16]) if state.residual.size else x16
+        merged = (
+            np.concatenate([state.residual, x16])
+            if state.residual.size
+            else x16
+        )
         total_frames = merged.size // frame_len
-        silence_frames = 0
+        silence_frames = state.silence_frames
 
         for i in range(total_frames):
             frame = merged[i * frame_len : (i + 1) * frame_len]
@@ -126,7 +155,7 @@ class StreamingAudioSegmenter:
                 if state.speech_start_ts is None:
                     frac = i / max(1, total_frames)
                     state.speech_start_ts = t0 + (t1 - t0) * frac
-                    state.last_chunk_ts = time.time()
+                    state.last_chunk_ts = time.monotonic()
                     _prepend_preroll(state)
                 state.buffer.append(frame)
             else:
@@ -135,7 +164,8 @@ class StreamingAudioSegmenter:
                     state.buffer.append(frame)
 
             if state.speech_start_ts is not None and (
-                silence_frames >= silence_limit or len(state.buffer) >= max_frames
+                silence_frames >= silence_limit
+                or len(state.buffer) >= max_frames
             ):
                 self._emit_chunk(stream, state, t1, is_final=True)
                 vad.reset()
@@ -143,58 +173,70 @@ class StreamingAudioSegmenter:
 
         # Emit intermediate chunk if the speech window exceeds chunk_interval_s
         if state.speech_start_ts is not None and state.buffer:
-            elapsed = time.time() - state.last_chunk_ts
+            elapsed = time.monotonic() - state.last_chunk_ts
             if elapsed >= self._cfg.chunk_interval_s:
                 self._emit_chunk(stream, state, t1, is_final=False)
 
-        state.residual = merged[total_frames * frame_len:]
+        state.silence_frames = silence_frames
+        state.residual = merged[total_frames * frame_len :]
 
     # ── chunk emission ─────────────────────────────────────────────────
 
-    def _emit_chunk(self, stream: str, state: _StreamState, t_end: float, is_final: bool) -> None:
+    def _emit_chunk(
+        self, stream: str, state: _StreamState, t_end: float, is_final: bool
+    ) -> None:
         if state.speech_start_ts is None or not state.buffer:
             return
 
-        audio = np.concatenate(state.buffer).astype(np.float32, copy=False)
-        emitted_samples = min(max(0, int(state.emitted_samples)), int(audio.size))
-        incremental = audio[emitted_samples:]
+        audio = ChunkedAudio16kBuffer(tuple(state.buffer))
+        emitted_samples = min(
+            max(0, int(state.emitted_samples)), audio.frame_count
+        )
+        incremental = audio.tail(emitted_samples)
         chunk = StreamingChunk(
             stream=stream,
             t_start=float(state.speech_start_ts),
             t_end=float(t_end),
-            audio=MonoAudio16kBuffer.from_array(audio),
+            audio=audio,
             is_final=is_final,
             enqueue_ts=time.time(),
-            incremental_audio=MonoAudio16kBuffer.from_array(incremental),
+            incremental_audio=incremental,
+            enqueue_monotonic=time.monotonic(),
         )
         enqueued = False
         try:
             result = self._chunk_q.put_nowait(chunk)
             enqueued = True
-            if result == "coalesced":
-                self._log_event({
-                    "type": "streaming_chunk_coalesced",
-                    "stream": stream,
-                    "ts": time.time(),
-                })
-            elif result == "final_overflow":
-                self._log_event({
-                    "type": "streaming_final_backlog",
-                    "stream": stream,
-                    "queue_size": int(self._chunk_q.qsize()),
-                    "ts": time.time(),
-                })
+            if result == 'coalesced':
+                self._log_event(
+                    {
+                        'type': 'streaming_chunk_coalesced',
+                        'stream': stream,
+                        'ts': time.time(),
+                    }
+                )
+            elif result == 'final_overflow':
+                self._log_event(
+                    {
+                        'type': 'streaming_final_backlog',
+                        'stream': stream,
+                        'queue_size': int(self._chunk_q.qsize()),
+                        'ts': time.time(),
+                    }
+                )
         except queue.Full:
-            self._log_event({
-                "type": "streaming_chunk_dropped",
-                "stream": stream,
-                "reason": "queue_full",
-                "ts": time.time(),
-            })
+            self._log_event(
+                {
+                    'type': 'streaming_chunk_dropped',
+                    'stream': stream,
+                    'reason': 'queue_full',
+                    'ts': time.time(),
+                }
+            )
 
-        state.last_chunk_ts = time.time()
+        state.last_chunk_ts = time.monotonic()
         if enqueued:
-            state.emitted_samples = int(audio.size)
+            state.emitted_samples = audio.frame_count
 
         if is_final and enqueued:
             state.speech_start_ts = None
@@ -210,5 +252,7 @@ def _prepend_preroll(state: _StreamState) -> None:
     frame_len = state.vad.frame_len
     n = preroll.size // frame_len
     if n > 0:
-        aligned = preroll[-(n * frame_len):]
-        state.buffer.extend(aligned[j * frame_len : (j + 1) * frame_len] for j in range(n))
+        aligned = preroll[-(n * frame_len) :]
+        state.buffer.extend(
+            aligned[j * frame_len : (j + 1) * frame_len] for j in range(n)
+        )

@@ -6,8 +6,8 @@ from transcription.domain.job_state import (
 )
 
 __all__ = [
-    "InvalidTranscriptionJobTransition",
-    "TranscriptionJobAggregate",
-    "TranscriptionJobState",
-    "TranscriptionJobStateMachine",
+    'InvalidTranscriptionJobTransition',
+    'TranscriptionJobAggregate',
+    'TranscriptionJobState',
+    'TranscriptionJobStateMachine',
 ]

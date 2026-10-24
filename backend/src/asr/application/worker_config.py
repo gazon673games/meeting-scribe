@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from asr.application.pipeline_config import ASRPipelineSettings
@@ -10,24 +10,26 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class TranscriptionWorkerConfig:
     model_name: str
-    language: Optional[str]
+    language: str | None
     device: str
     compute_type: str
     cpu_threads: int
     num_workers: int
     beam_size: int
-    initial_prompt: Optional[str]
+    initial_prompt: str | None
     text_dedup_enabled: bool
     text_dedup_window: int
     adaptive_beam_enabled: bool
     log_speaker_labels: bool
     init_diarization: bool
     diarization_blocking_lookup: bool
-    hotwords: Optional[str] = None
-    source_speaker_labels: Dict[str, str] = field(default_factory=dict)
+    hotwords: str | None = None
+    source_speaker_labels: dict[str, str] = field(default_factory=dict)
 
     @classmethod
-    def from_settings(cls, settings: ASRPipelineSettings) -> TranscriptionWorkerConfig:
+    def from_settings(
+        cls, settings: ASRPipelineSettings
+    ) -> TranscriptionWorkerConfig:
         return cls(
             model_name=str(settings.asr_model_name),
             language=settings.asr_language,
@@ -41,8 +43,14 @@ class TranscriptionWorkerConfig:
             text_dedup_window=int(settings.text_dedup_window),
             adaptive_beam_enabled=bool(settings.adaptive_beam_enabled),
             log_speaker_labels=bool(settings.log_speaker_labels),
-            init_diarization=bool(settings.diarization_enabled and not settings.diarization_sidecar_enabled),
-            diarization_blocking_lookup=bool(settings.diarization_enabled and not settings.diarization_sidecar_enabled),
+            init_diarization=bool(
+                settings.diarization_enabled
+                and not settings.diarization_sidecar_enabled
+            ),
+            diarization_blocking_lookup=bool(
+                settings.diarization_enabled
+                and not settings.diarization_sidecar_enabled
+            ),
             hotwords=settings.asr_hotwords,
             source_speaker_labels=dict(settings.source_speaker_labels or {}),
         )

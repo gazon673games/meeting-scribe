@@ -1,0 +1,9 @@
+*.cjs text eol=lf
+*.js text eol=lf
+*.jsx text eol=lf
+*.css text eol=lf
+*.py text eol=lf
+*.spec text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf

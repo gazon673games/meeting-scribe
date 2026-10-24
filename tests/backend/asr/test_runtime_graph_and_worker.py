@@ -5,6 +5,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -12,7 +13,10 @@ from asr.application.ingest import TapIngestRuntime
 from asr.application.metrics import ASRMetrics
 from asr.application.overload import OverloadController
 from asr.application.pipeline import ASRPipeline
-from asr.application.pipeline_config import ASRPipelineDependencies, ASRPipelineSettings
+from asr.application.pipeline_config import (
+    ASRPipelineDependencies,
+    ASRPipelineSettings,
+)
 from asr.application.policies import AdaptiveBeam
 from asr.application.transcription_worker import TranscriptionWorkerRuntime
 from asr.application.utterances import UtteranceAggregator
@@ -65,7 +69,9 @@ class _Logger:
 class _Segmenter:
     def __init__(self, **kwargs) -> None:  # noqa: ANN003
         self.kwargs = kwargs
-        self.segmentation_params = kwargs.get("segmentation_params", lambda: None)()
+        self.segmentation_params = kwargs.get(
+            'segmentation_params', lambda: None
+        )()
         self.reset = False
         self.packets = []
 
@@ -78,7 +84,7 @@ class _Segmenter:
 
 class _Diarization:
     enabled = True
-    backend = "fake"
+    backend = 'fake'
 
     def __init__(self) -> None:
         self.init_called = False
@@ -87,10 +93,10 @@ class _Diarization:
         self.init_called = True
 
     def speaker_for_segment(self, seg, log_event):  # noqa: ANN001
-        return "D1"
+        return 'D1'
 
     def identity_snapshot(self) -> dict:
-        return {"speakers": ["D1"]}
+        return {'speakers': ['D1']}
 
 
 class _ASRBackend:
@@ -98,13 +104,41 @@ class _ASRBackend:
         self.closed = False
 
     def transcribe(self, samples, *, beam_size=None):  # noqa: ANN001
-        return {"text": " hello world "}
+        return {'text': ' hello world '}
 
     def close(self) -> None:
         self.closed = True
 
 
 class ASRRuntimeGraphAndWorkerTests(unittest.TestCase):
+    def test_partial_worker_start_failure_joins_started_worker_and_closes_logger(
+        self,
+    ):
+        runner = _Runner()
+        original_start = runner.start_worker
+
+        def start(*, name, target):
+            if name == 'asr-worker':
+                raise RuntimeError('worker start failed')
+            return original_start(name=name, target=target)
+
+        with tempfile.TemporaryDirectory() as directory:
+            pipeline = ASRPipeline(
+                tap_queue=queue.Queue(),
+                project_root=Path(directory),
+                settings=ASRPipelineSettings(),
+                dependencies=self._dependencies(runner),
+            )
+            with (
+                patch.object(runner, 'start_worker', side_effect=start),
+                self.assertRaisesRegex(RuntimeError, 'worker start failed'),
+            ):
+                pipeline.start()
+        self.assertTrue(pipeline.graph.stop.is_set())
+        self.assertTrue(pipeline.graph.logger.closed)
+        self.assertTrue(runner.started[0][2].joined)
+        self.assertFalse(runner.started[0][2].worker.is_alive())
+
     def _dependencies(self, runner: _Runner) -> ASRPipelineDependencies:
         return ASRPipelineDependencies(
             logger_factory=lambda **kwargs: _Logger(**kwargs),
@@ -114,7 +148,9 @@ class ASRRuntimeGraphAndWorkerTests(unittest.TestCase):
             segmenter_factory=lambda **kwargs: _Segmenter(**kwargs),
         )
 
-    def test_pipeline_graph_start_stop_and_identity_snapshot_use_fake_runtime_parts(self) -> None:
+    def test_pipeline_graph_start_stop_and_identity_snapshot_use_fake_runtime_parts(
+        self,
+    ) -> None:
         runner = _Runner()
         settings = ASRPipelineSettings(
             streaming_enabled=False,
@@ -137,13 +173,25 @@ class ASRRuntimeGraphAndWorkerTests(unittest.TestCase):
             params = pipeline.graph.segmentation_params(settings)
             pipeline.stop()
 
-        self.assertEqual(params, (settings.endpoint_silence_ms, settings.max_segment_s, settings.overlap_ms))
-        self.assertEqual(pipeline.identity_snapshot(), {"speakers": ["D1"]})
-        self.assertEqual([item[0] for item in runner.started], ["asr-ingest", "asr-worker", "asr-diarization"])
+        self.assertEqual(
+            params,
+            (
+                settings.endpoint_silence_ms,
+                settings.max_segment_s,
+                settings.overlap_ms,
+            ),
+        )
+        self.assertEqual(pipeline.identity_snapshot(), {'speakers': ['D1']})
+        self.assertEqual(
+            [item[0] for item in runner.started],
+            ['asr-ingest', 'asr-worker', 'asr-diarization'],
+        )
         self.assertTrue(pipeline.graph.logger.closed)
         self.assertGreaterEqual(events.qsize(), 1)
 
-    def test_streaming_pipeline_starts_streaming_worker_without_batch_worker(self) -> None:
+    def test_streaming_pipeline_starts_streaming_worker_without_batch_worker(
+        self,
+    ) -> None:
         runner = _Runner()
         settings = ASRPipelineSettings(streaming_enabled=True)
 
@@ -157,7 +205,10 @@ class ASRRuntimeGraphAndWorkerTests(unittest.TestCase):
             pipeline.start()
             pipeline.stop()
 
-        self.assertEqual([item[0] for item in runner.started], ["asr-ingest", "asr-streaming"])
+        self.assertEqual(
+            [item[0] for item in runner.started],
+            ['asr-ingest', 'asr-streaming'],
+        )
         self.assertIsNone(pipeline.graph.worker)
         self.assertIsNotNone(pipeline.graph.streaming_worker_runtime)
 
@@ -167,7 +218,7 @@ class ASRRuntimeGraphAndWorkerTests(unittest.TestCase):
         segmenter = _Segmenter()
         logs = []
 
-        tap_queue.put({"mix": np.zeros(4, dtype=np.float32)})
+        tap_queue.put({'mix': np.zeros(4, dtype=np.float32)})
         original_feed_packet = segmenter.feed_packet
 
         def feed_once(*, mode: str, pkt: dict) -> None:
@@ -175,21 +226,35 @@ class ASRRuntimeGraphAndWorkerTests(unittest.TestCase):
             stop.set()
 
         segmenter.feed_packet = feed_once  # type: ignore[method-assign]
-        TapIngestRuntime(tap_queue=tap_queue, stop_event=stop, mode="mix", segmenter=segmenter, log_event=logs.append).run()
-        self.assertEqual(segmenter.packets[0][0], "mix")
+        TapIngestRuntime(
+            tap_queue=tap_queue,
+            stop_event=stop,
+            mode='mix',
+            segmenter=segmenter,
+            log_event=logs.append,
+        ).run()
+        self.assertEqual(segmenter.packets[0][0], 'mix')
 
         class _BadSegmenter:
             def feed_packet(self, *, mode: str, pkt: dict) -> None:
-                raise RuntimeError("feed failed")
+                raise RuntimeError('feed failed')
 
         stop = threading.Event()
         tap_queue = queue.Queue()
         tap_queue.put({})
-        runtime = TapIngestRuntime(tap_queue=tap_queue, stop_event=stop, mode="mix", segmenter=_BadSegmenter(), log_event=logs.append)
+        runtime = TapIngestRuntime(
+            tap_queue=tap_queue,
+            stop_event=stop,
+            mode='mix',
+            segmenter=_BadSegmenter(),
+            log_event=logs.append,
+        )
         runtime.run_safe()
-        self.assertEqual(logs[-1]["where"], "ingest")
+        self.assertEqual(logs[-1]['where'], 'ingest')
 
-    def test_transcription_worker_processes_segments_metrics_overload_and_cleanup(self) -> None:
+    def test_transcription_worker_processes_segments_metrics_overload_and_cleanup(
+        self,
+    ) -> None:
         seg_queue: queue.Queue = queue.Queue()
         logs = []
         stop = threading.Event()
@@ -202,17 +267,25 @@ class ASRRuntimeGraphAndWorkerTests(unittest.TestCase):
             beam_cap=1,
             overlap_ms=80,
             max_segment_s=3.0,
-            strategy="drop_old",
+            strategy='drop_old',
         )
-        beam = AdaptiveBeam(min_beam=1, max_beam=4, cur_beam=4, last_change_ts=-10.0)
+        beam = AdaptiveBeam(
+            min_beam=1, max_beam=4, cur_beam=4, last_change_ts=-10.0
+        )
         diarization = _Diarization()
-        utterances = UtteranceAggregator(enabled=True, gap_s=0.5, max_s=3.0, flush_s=0.0, log_speaker_labels=True)
+        utterances = UtteranceAggregator(
+            enabled=True,
+            gap_s=0.5,
+            max_s=3.0,
+            flush_s=0.0,
+            log_speaker_labels=True,
+        )
         worker = TranscriptionWorkerRuntime(
             config=TranscriptionWorkerConfig(
-                model_name="tiny",
-                language="en",
-                device="cpu",
-                compute_type="int8",
+                model_name='tiny',
+                language='en',
+                device='cpu',
+                compute_type='int8',
                 cpu_threads=1,
                 num_workers=1,
                 beam_size=4,
@@ -234,7 +307,13 @@ class ASRRuntimeGraphAndWorkerTests(unittest.TestCase):
             utterances=utterances,
             asr_backend_factory=lambda **kwargs: _ASRBackend(),
         )
-        segment = Segment("mic", 0.0, 1.0, MonoAudio16kBuffer.from_array(np.ones(1600, dtype=np.float32)), enqueue_ts=0.0)
+        segment = Segment(
+            'mic',
+            0.0,
+            1.0,
+            MonoAudio16kBuffer.from_array(np.ones(1600, dtype=np.float32)),
+            enqueue_ts=0.0,
+        )
 
         worker.reset_runtime()
         worker._asr = _ASRBackend()
@@ -251,15 +330,25 @@ class ASRRuntimeGraphAndWorkerTests(unittest.TestCase):
         worker.run()
         worker.run_safe()
 
-        self.assertTrue(any(event.get("type") == "segment" for event in logs))
-        self.assertTrue(any(event.get("type") == "asr_metrics" for event in logs))
+        self.assertTrue(any(event.get('type') == 'segment' for event in logs))
+        self.assertTrue(
+            any(event.get('type') == 'asr_metrics' for event in logs)
+        )
         self.assertTrue(diarization.init_called)
 
-    def test_transcription_worker_run_consumes_segment_before_stop(self) -> None:
+    def test_transcription_worker_run_consumes_segment_before_stop(
+        self,
+    ) -> None:
         seg_queue: queue.Queue = queue.Queue()
         logs = []
         stop = threading.Event()
-        segment = Segment("mic", 0.0, 0.5, MonoAudio16kBuffer.from_array(np.ones(800, dtype=np.float32)), enqueue_ts=0.0)
+        segment = Segment(
+            'mic',
+            0.0,
+            0.5,
+            MonoAudio16kBuffer.from_array(np.ones(800, dtype=np.float32)),
+            enqueue_ts=0.0,
+        )
         seg_queue.put(segment)
 
         class _StoppingBackend(_ASRBackend):
@@ -269,10 +358,10 @@ class ASRRuntimeGraphAndWorkerTests(unittest.TestCase):
 
         worker = TranscriptionWorkerRuntime(
             config=TranscriptionWorkerConfig(
-                model_name="tiny",
-                language="en",
-                device="cpu",
-                compute_type="int8",
+                model_name='tiny',
+                language='en',
+                device='cpu',
+                compute_type='int8',
                 cpu_threads=1,
                 num_workers=1,
                 beam_size=1,
@@ -299,16 +388,24 @@ class ASRRuntimeGraphAndWorkerTests(unittest.TestCase):
             ),
             beam_controller=AdaptiveBeam(min_beam=1, max_beam=1, cur_beam=1),
             diarization=_Diarization(),
-            utterances=UtteranceAggregator(enabled=False, gap_s=0.5, max_s=3.0, flush_s=1.0, log_speaker_labels=True),
+            utterances=UtteranceAggregator(
+                enabled=False,
+                gap_s=0.5,
+                max_s=3.0,
+                flush_s=1.0,
+                log_speaker_labels=True,
+            ),
             asr_backend_factory=lambda **kwargs: _StoppingBackend(),
         )
 
         worker.run()
 
         self.assertTrue(stop.is_set())
-        self.assertTrue(any(event.get("type") == "asr_init_ok" for event in logs))
-        self.assertTrue(any(event.get("type") == "segment" for event in logs))
+        self.assertTrue(
+            any(event.get('type') == 'asr_init_ok' for event in logs)
+        )
+        self.assertTrue(any(event.get('type') == 'segment' for event in logs))
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

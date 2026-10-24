@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional, Protocol
+from pathlib import Path
+from typing import Any, Protocol
+
+import numpy as np
 
 from asr.domain.segments import Segment
 from diarization.domain.types import DiarBackend
@@ -19,10 +23,10 @@ class DiarizationConfig:
     chunk_s: float
     step_s: float
     device: str
-    temp_dir: Optional[Any] = None
-    source_speaker_labels: Dict[str, str] = field(default_factory=dict)
-    sherpa_embedding_model_path: str = ""
-    sherpa_provider: str = "cpu"
+    temp_dir: Path | None = None
+    source_speaker_labels: dict[str, str] = field(default_factory=dict)
+    sherpa_embedding_model_path: str = ''
+    sherpa_provider: str = 'cpu'
     sherpa_num_threads: int = 1
 
 
@@ -30,22 +34,18 @@ class DiarizationPort(Protocol):
     enabled: bool
     backend: DiarBackend
 
-    def ensure_stream(self, name: str) -> None:
-        ...
+    def ensure_stream(self, name: str) -> None: ...
 
-    def update_ring(self, stream: str, t1: float, audio_16k: Any) -> None:
-        ...
+    def update_ring(
+        self, stream: str, t1: float, audio_16k: np.ndarray
+    ) -> None: ...
 
-    def init_backend(self, log_event: LogEvent) -> None:
-        ...
+    def init_backend(self, log_event: LogEvent) -> None: ...
 
-    def speaker_for_segment(self, seg: Segment, log_event: LogEvent) -> str:
-        ...
+    def speaker_for_segment(self, seg: Segment, log_event: LogEvent) -> str: ...
 
-    def identity_snapshot(self) -> Dict[str, Dict[str, Any]]:
-        ...
+    def identity_snapshot(self) -> dict[str, dict[str, Any]]: ...
 
 
 class DiarizationRuntimeFactoryPort(Protocol):
-    def __call__(self, *, config: DiarizationConfig) -> DiarizationPort:
-        ...
+    def __call__(self, *, config: DiarizationConfig) -> DiarizationPort: ...

@@ -6,7 +6,10 @@ import unittest
 import numpy as np
 
 from asr.application.metrics import ASRMetrics
-from asr.application.segmentation import SegmenterConfig, StreamingSegmenterConfig
+from asr.application.segmentation import (
+    SegmenterConfig,
+    StreamingSegmenterConfig,
+)
 from asr.domain.segments import Segment
 from asr.domain.streaming import StreamingChunk
 from asr.infrastructure import segmentation as batch_segmentation
@@ -80,7 +83,9 @@ class SegmenterRuntimeHelperTests(unittest.TestCase):
             agc_alpha=1.0,
         )
 
-    def test_batch_audio_segmenter_feeds_packets_finalizes_and_enqueues_segments(self) -> None:
+    def test_batch_audio_segmenter_feeds_packets_finalizes_and_enqueues_segments(
+        self,
+    ) -> None:
         seg_q: queue.Queue = queue.Queue(maxsize=2)
         diar_q: queue.Queue = queue.Queue(maxsize=1)
         logs = []
@@ -96,9 +101,20 @@ class SegmenterRuntimeHelperTests(unittest.TestCase):
         )
 
         segmenter.reset_runtime()
-        segmenter.feed_packet(mode="split", pkt={"t_start": 0.0, "t_end": 0.01, "sources": {"mic": np.zeros(10)}})
-        segmenter.feed_packet(mode="mix", pkt={"t_start": 0.0, "t_end": 0.01, "mix": np.zeros(10)})
-        segmenter.feed_stream("mic", 0.0, 0.01, np.zeros(10, dtype=np.float32), sample_rate=16000)
+        segmenter.feed_packet(
+            mode='split',
+            pkt={
+                't_start': 0.0,
+                't_end': 0.01,
+                'sources': {'mic': np.zeros(10)},
+            },
+        )
+        segmenter.feed_packet(
+            mode='mix', pkt={'t_start': 0.0, 't_end': 0.01, 'mix': np.zeros(10)}
+        )
+        segmenter.feed_stream(
+            'mic', 0.0, 0.01, np.zeros(10, dtype=np.float32), sample_rate=16000
+        )
 
         state = batch_segmentation._StreamState(
             vad=_FakeVAD([True, False]),
@@ -107,21 +123,35 @@ class SegmenterRuntimeHelperTests(unittest.TestCase):
             residual=np.zeros(0, dtype=np.float32),
             agc=None,
         )
-        segmenter._streams["mic"] = state
-        segmenter._run_vad_loop("mic", state, 0.0, 0.04, np.ones(640, dtype=np.float32))
-        segmenter._heartbeat("mic", state)
+        segmenter._streams['mic'] = state
+        segmenter._run_vad_loop(
+            'mic', state, 0.0, 0.04, np.ones(640, dtype=np.float32)
+        )
+        segmenter._heartbeat('mic', state)
 
         self.assertFalse(seg_q.empty())
         self.assertFalse(diar_q.empty())
-        self.assertTrue(any(event.get("type") == "segment_ready" for event in logs))
-        self.assertEqual(diarization.streams[0], "mic")
+        self.assertTrue(
+            any(event.get('type') == 'segment_ready' for event in logs)
+        )
+        self.assertEqual(diarization.streams[0], 'mic')
 
         if diar_q.empty():
-            diar_q.put_nowait(Segment("mic", 0.0, 0.1, MonoAudio16kBuffer.from_array([0.0]), 0.0))
-        segmenter._enqueue_diarization_segment(Segment("mic", 0.0, 0.1, MonoAudio16kBuffer.from_array([0.0]), 0.0))
-        self.assertTrue(any(event.get("type") == "diar_segment_dropped" for event in logs))
+            diar_q.put_nowait(
+                Segment(
+                    'mic', 0.0, 0.1, MonoAudio16kBuffer.from_array([0.0]), 0.0
+                )
+            )
+        segmenter._enqueue_diarization_segment(
+            Segment('mic', 0.0, 0.1, MonoAudio16kBuffer.from_array([0.0]), 0.0)
+        )
+        self.assertTrue(
+            any(event.get('type') == 'diar_segment_dropped' for event in logs)
+        )
 
-    def test_batch_audio_segmenter_handles_invalid_and_full_queue_paths(self) -> None:
+    def test_batch_audio_segmenter_handles_invalid_and_full_queue_paths(
+        self,
+    ) -> None:
         seg_q: queue.Queue = queue.Queue(maxsize=1)
         logs = []
         segmenter = batch_segmentation.AudioSegmenter(
@@ -140,16 +170,28 @@ class SegmenterRuntimeHelperTests(unittest.TestCase):
             residual=np.zeros(0, dtype=np.float32),
             agc=None,
         )
-        segmenter._streams["mic"] = state
-        self.assertTrue(segmenter._is_segment_valid(state, np.ones(320, dtype=np.float32)))
-        segmenter._finalize_segment("mic", state, 0.1)
+        segmenter._streams['mic'] = state
+        self.assertTrue(
+            segmenter._is_segment_valid(state, np.ones(320, dtype=np.float32))
+        )
+        segmenter._finalize_segment('mic', state, 0.1)
 
         if seg_q.empty():
-            seg_q.put_nowait(Segment("mic", 0.0, 0.1, MonoAudio16kBuffer.from_array([0.0]), 0.0))
-        segmenter._enqueue_segment("mic", 0.0, 0.1, np.ones(320, dtype=np.float32))
-        self.assertTrue(any(event.get("type") == "segment_dropped" for event in logs))
+            seg_q.put_nowait(
+                Segment(
+                    'mic', 0.0, 0.1, MonoAudio16kBuffer.from_array([0.0]), 0.0
+                )
+            )
+        segmenter._enqueue_segment(
+            'mic', 0.0, 0.1, np.ones(320, dtype=np.float32)
+        )
+        self.assertTrue(
+            any(event.get('type') == 'segment_dropped' for event in logs)
+        )
 
-    def test_streaming_audio_segmenter_feeds_packets_and_emits_chunks(self) -> None:
+    def test_streaming_audio_segmenter_feeds_packets_and_emits_chunks(
+        self,
+    ) -> None:
         chunk_q: queue.Queue = queue.Queue(maxsize=2)
         logs = []
         segmenter = streaming_segmenter.StreamingAudioSegmenter(
@@ -164,9 +206,20 @@ class SegmenterRuntimeHelperTests(unittest.TestCase):
         )
 
         segmenter.reset_runtime()
-        segmenter.feed_packet(mode="mix", pkt={"t_start": 0.0, "t_end": 0.01, "mix": np.zeros(10)})
-        segmenter.feed_packet(mode="split", pkt={"t_start": 0.0, "t_end": 0.01, "sources": {"mic": np.zeros(10)}})
-        segmenter.feed_stream("mic", 0.0, 0.01, np.zeros(10, dtype=np.float32), sample_rate=16000)
+        segmenter.feed_packet(
+            mode='mix', pkt={'t_start': 0.0, 't_end': 0.01, 'mix': np.zeros(10)}
+        )
+        segmenter.feed_packet(
+            mode='split',
+            pkt={
+                't_start': 0.0,
+                't_end': 0.01,
+                'sources': {'mic': np.zeros(10)},
+            },
+        )
+        segmenter.feed_stream(
+            'mic', 0.0, 0.01, np.zeros(10, dtype=np.float32), sample_rate=16000
+        )
 
         state = streaming_segmenter._StreamState(
             vad=_FakeVAD([True, False]),
@@ -176,9 +229,11 @@ class SegmenterRuntimeHelperTests(unittest.TestCase):
             residual=np.zeros(0, dtype=np.float32),
             agc=None,
         )
-        segmenter._streams["mic"] = state
+        segmenter._streams['mic'] = state
         streaming_segmenter._prepend_preroll(state)
-        segmenter._run_vad_loop("mic", state, 0.0, 0.04, np.ones(640, dtype=np.float32))
+        segmenter._run_vad_loop(
+            'mic', state, 0.0, 0.04, np.ones(640, dtype=np.float32)
+        )
 
         self.assertFalse(chunk_q.empty())
 
@@ -197,16 +252,24 @@ class SegmenterRuntimeHelperTests(unittest.TestCase):
             residual=np.zeros(0, dtype=np.float32),
             agc=None,
         )
-        segmenter_full._emit_chunk("mic", full_state, 0.1, is_final=False)
-        self.assertTrue(any(event.get("type") == "streaming_chunk_dropped" for event in logs))
+        segmenter_full._emit_chunk('mic', full_state, 0.1, is_final=False)
+        self.assertTrue(
+            any(
+                event.get('type') == 'streaming_chunk_dropped' for event in logs
+            )
+        )
 
-    def test_streaming_queue_coalesces_intermediates_and_preserves_finals(self) -> None:
+    def test_streaming_queue_coalesces_intermediates_and_preserves_finals(
+        self,
+    ) -> None:
         chunk_queue = CoalescingStreamingQueue(maxsize=1)
 
         def chunk(*, final: bool, value: float) -> StreamingChunk:
-            audio = MonoAudio16kBuffer.from_array(np.full(4, value, dtype=np.float32))
+            audio = MonoAudio16kBuffer.from_array(
+                np.full(4, value, dtype=np.float32)
+            )
             return StreamingChunk(
-                stream="mic",
+                stream='mic',
                 t_start=0.0,
                 t_end=value,
                 audio=audio,
@@ -216,7 +279,9 @@ class SegmenterRuntimeHelperTests(unittest.TestCase):
             )
 
         chunk_queue.put_nowait(chunk(final=False, value=1.0))
-        self.assertEqual(chunk_queue.put_nowait(chunk(final=False, value=2.0)), "coalesced")
+        self.assertEqual(
+            chunk_queue.put_nowait(chunk(final=False, value=2.0)), 'coalesced'
+        )
         chunk_queue.put_nowait(chunk(final=True, value=3.0))
 
         final = chunk_queue.get(timeout=0.01)
@@ -225,5 +290,5 @@ class SegmenterRuntimeHelperTests(unittest.TestCase):
         self.assertEqual(len(final.incremental_audio.samples), 12)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

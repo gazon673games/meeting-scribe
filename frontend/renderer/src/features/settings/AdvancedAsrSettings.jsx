@@ -1,8 +1,11 @@
-import { ASR_RESOURCE_FIELDS, ASR_TIMING_FIELDS } from "../../entities/settings/model";
-import { CollapsibleSection } from "../../shared/ui/CollapsibleSection";
-import { Field } from "../../shared/ui/Field";
+import {
+  ASR_RESOURCE_FIELDS,
+  ASR_TIMING_FIELDS,
+} from '../../entities/settings/model';
+import { CollapsibleSection } from '../../shared/ui/CollapsibleSection';
+import { Field } from '../../shared/ui/Field';
 
-export function AdvancedAsrSettings({
+export const AdvancedAsrSettings = ({
   computeOptions,
   deviceOptions,
   draft,
@@ -11,106 +14,127 @@ export function AdvancedAsrSettings({
   offlineModelOptions,
   overloadOptions,
   onAsrChange,
-  onChange
-}) {
-  return (
-    <>
-      <CollapsibleSection title="ASR Runtime" defaultOpen={false}>
-        <div className="settings-grid">
-          <Field label="Device">
-            <select disabled={locked} value={draft.device} onChange={(event) => onChange({ device: event.target.value })}>
-              {deviceOptions.map((device) => (
-                <option key={device} value={device}>
-                  {device}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Compute">
-            <select disabled={locked} value={draft.computeType} onChange={(event) => onChange({ computeType: event.target.value })}>
-              {computeOptions.map((computeType) => (
-                <option key={computeType} value={computeType}>
-                  {computeType}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Model">
-            <select disabled={locked} value={draft.model} onChange={(event) => onChange({ model: event.target.value })}>
-              {modelOptions.map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Offline Model">
-            <select
-              disabled={locked}
-              value={draft.offlineModel}
-              onChange={(event) => onChange({ offlineModel: event.target.value })}
-            >
-              {offlineModelOptions.map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))}
-            </select>
-          </Field>
-          {ASR_RESOURCE_FIELDS.map((field) => (
-            <Field key={field.key} label={field.label}>
-              <input
-                disabled={locked}
-                max={field.max}
-                min={field.min}
-                step={field.step}
-                type="number"
-                value={draft.asr[field.key]}
-                onChange={(event) => onAsrChange(field.key, event.target.value)}
-              />
-            </Field>
-          ))}
-        </div>
-      </CollapsibleSection>
-
-      <CollapsibleSection title="Advanced ASR" defaultOpen={false}>
-        <div className="settings-grid">
-          <Field label="Overload">
-            <select disabled={locked} value={draft.overloadStrategy} onChange={(event) => onChange({ overloadStrategy: event.target.value })}>
-              {overloadOptions.map((strategy) => (
-                <option key={strategy} value={strategy}>
-                  {strategy}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Output">
-            <input disabled={locked} type="text" value={draft.outputFile} onChange={(event) => onChange({ outputFile: event.target.value })} />
-          </Field>
-          <Field label="Hotwords">
+  onChange,
+}) => (
+  <>
+    <CollapsibleSection title="ASR Runtime" defaultOpen={false}>
+      <div className="settings-grid">
+        <Field label="Device">
+          <select
+            disabled={locked}
+            value={draft.device}
+            onChange={(event) => onChange({ device: event.target.value })}
+          >
+            {deviceOptions.map((device) => (
+              <option key={device} value={device}>
+                {device}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Compute">
+          <select
+            disabled={locked}
+            value={draft.computeType}
+            onChange={(event) => onChange({ computeType: event.target.value })}
+          >
+            {computeOptions.map((computeType) => (
+              <option key={computeType} value={computeType}>
+                {computeType}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Model">
+          <select
+            disabled={locked}
+            value={draft.model}
+            onChange={(event) => onChange({ model: event.target.value })}
+          >
+            {modelOptions.map((model) => (
+              <option key={model} value={model}>
+                {model}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Offline Model">
+          <select
+            disabled={locked}
+            value={draft.offlineModel}
+            onChange={(event) => onChange({ offlineModel: event.target.value })}
+          >
+            {offlineModelOptions.map((model) => (
+              <option key={model} value={model}>
+                {model}
+              </option>
+            ))}
+          </select>
+        </Field>
+        {ASR_RESOURCE_FIELDS.map((field) => (
+          <Field key={field.key} label={field.label}>
             <input
               disabled={locked}
-              placeholder="Java, JVM, Spring Boot, Kafka"
-              type="text"
-              value={draft.hotwords || ""}
-              onChange={(event) => onChange({ hotwords: event.target.value })}
+              max={field.max}
+              min={field.min}
+              step={field.step}
+              type="number"
+              value={draft.asr[field.key]}
+              onChange={(event) => onAsrChange(field.key, event.target.value)}
             />
           </Field>
-          {ASR_TIMING_FIELDS.map((field) => (
-            <Field key={field.key} label={field.label}>
-              <input
-                disabled={locked}
-                max={field.max}
-                min={field.min}
-                step={field.step}
-                type="number"
-                value={draft.asr[field.key]}
-                onChange={(event) => onAsrChange(field.key, event.target.value)}
-              />
-            </Field>
-          ))}
-        </div>
-      </CollapsibleSection>
-    </>
-  );
-}
+        ))}
+      </div>
+    </CollapsibleSection>
+
+    <CollapsibleSection title="Advanced ASR" defaultOpen={false}>
+      <div className="settings-grid">
+        <Field label="Overload">
+          <select
+            disabled={locked}
+            value={draft.overloadStrategy}
+            onChange={(event) =>
+              onChange({ overloadStrategy: event.target.value })
+            }
+          >
+            {overloadOptions.map((strategy) => (
+              <option key={strategy} value={strategy}>
+                {strategy}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Output">
+          <input
+            disabled={locked}
+            type="text"
+            value={draft.outputFile}
+            onChange={(event) => onChange({ outputFile: event.target.value })}
+          />
+        </Field>
+        <Field label="Hotwords">
+          <input
+            disabled={locked}
+            placeholder="Java, JVM, Spring Boot, Kafka"
+            type="text"
+            value={draft.hotwords || ''}
+            onChange={(event) => onChange({ hotwords: event.target.value })}
+          />
+        </Field>
+        {ASR_TIMING_FIELDS.map((field) => (
+          <Field key={field.key} label={field.label}>
+            <input
+              disabled={locked}
+              max={field.max}
+              min={field.min}
+              step={field.step}
+              type="number"
+              value={draft.asr[field.key]}
+              onChange={(event) => onAsrChange(field.key, event.target.value)}
+            />
+          </Field>
+        ))}
+      </div>
+    </CollapsibleSection>
+  </>
+);

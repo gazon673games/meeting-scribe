@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Protocol
+from typing import Protocol
 
 
 @dataclass(frozen=True)
@@ -11,12 +11,11 @@ class OfflineAsrRequest:
     wav_path: Path
     out_txt: Path
     model_name: str
-    language: Optional[str]
+    language: str | None
+    models_dir: Path | None = None
 
 
 class OfflineAsrRunnerPort(Protocol):
-    def available(self) -> bool:
-        ...
+    def available(self) -> bool: ...
 
-    def run(self, request: OfflineAsrRequest) -> Path:
-        ...
+    def run(self, request: OfflineAsrRequest) -> Path: ...

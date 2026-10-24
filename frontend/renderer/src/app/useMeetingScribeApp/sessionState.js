@@ -1,4 +1,4 @@
-export function applyAsrMetrics(state, event) {
+export const applyAsrMetrics = (state, event) => {
   if (!state?.session) {
     return state;
   }
@@ -7,17 +7,33 @@ export function applyAsrMetrics(state, event) {
     session: {
       ...state.session,
       asrMetrics: {
-        segDroppedTotal: Number(event.seg_dropped_total ?? state.session.asrMetrics?.segDroppedTotal ?? 0),
-        segSkippedTotal: Number(event.seg_skipped_total ?? state.session.asrMetrics?.segSkippedTotal ?? 0),
-        avgLatencyS: Number(event.avg_latency_s ?? state.session.asrMetrics?.avgLatencyS ?? 0),
-        p95LatencyS: Number(event.p95_latency_s ?? state.session.asrMetrics?.p95LatencyS ?? 0),
-        lagS: Number(event.lag_s ?? state.session.asrMetrics?.lagS ?? 0)
-      }
-    }
+        segDroppedTotal: Number(
+          event.seg_dropped_total ??
+            state.session.asrMetrics?.segDroppedTotal ??
+            0,
+        ),
+        segSkippedTotal: Number(
+          event.seg_skipped_total ??
+            state.session.asrMetrics?.segSkippedTotal ??
+            0,
+        ),
+        avgLatencyS: Number(
+          event.avg_latency_s ?? state.session.asrMetrics?.avgLatencyS ?? 0,
+        ),
+        p95LatencyS: Number(
+          event.p95_latency_s ?? state.session.asrMetrics?.p95LatencyS ?? 0,
+        ),
+        lagS: Number(event.lag_s ?? state.session.asrMetrics?.lagS ?? 0),
+        queueWaitS: Number(event.queue_wait_s ?? 0),
+        rtf: Number(event.rtf ?? 0),
+        queueSize: Number(event.seg_qsize ?? 0),
+        device: String(event.device ?? ''),
+      },
+    },
   };
-}
+};
 
-export function upsertSessionSource(state, source) {
+export const upsertSessionSource = (state, source) => {
   if (!state?.session || !source?.name) {
     return state;
   }
@@ -25,22 +41,24 @@ export function upsertSessionSource(state, source) {
   const index = sources.findIndex((item) => item.name === source.name);
   const nextSources =
     index >= 0
-      ? sources.map((item, itemIndex) => (itemIndex === index ? { ...item, ...source } : item))
+      ? sources.map((item, itemIndex) =>
+          itemIndex === index ? { ...item, ...source } : item,
+        )
       : [...sources, source];
   return {
     ...state,
     session: {
       ...state.session,
-      sources: nextSources
-    }
+      sources: nextSources,
+    },
   };
-}
+};
 
-export function removeSessionSource(state, source) {
+export const removeSessionSource = (state, source) => {
   if (!state?.session) {
     return state;
   }
-  const sourceName = String(source?.name || source || "");
+  const sourceName = String(source?.name || source || '');
   if (!sourceName) {
     return state;
   }
@@ -48,7 +66,9 @@ export function removeSessionSource(state, source) {
     ...state,
     session: {
       ...state.session,
-      sources: (state.session.sources || []).filter((item) => item.name !== sourceName)
-    }
+      sources: (state.session.sources || []).filter(
+        (item) => item.name !== sourceName,
+      ),
+    },
   };
-}
+};

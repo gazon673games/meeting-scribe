@@ -11,9 +11,13 @@ class InvalidAssistantJobTransition(InvalidJobTransition):
 
 
 class AssistantJobState(str, Enum):
-    IDLE = "idle"
-    RUNNING = "running"
-    FALLBACK = "fallback"
+    IDLE = 'idle'
+    RUNNING = 'running'
+    FALLBACK = 'fallback'
+
+
+_IDLE_STATES = (AssistantJobState.IDLE,)
+_ACTIVE_STATES = (AssistantJobState.RUNNING, AssistantJobState.FALLBACK)
 
 
 @dataclass
@@ -29,19 +33,27 @@ class AssistantJobStateMachine:
         return self.state == AssistantJobState.FALLBACK
 
     def begin(self) -> None:
-        self._transition({AssistantJobState.IDLE}, AssistantJobState.RUNNING)
+        self._transition(_IDLE_STATES, AssistantJobState.RUNNING)
 
     def begin_fallback(self) -> None:
-        self._transition({AssistantJobState.RUNNING, AssistantJobState.FALLBACK}, AssistantJobState.FALLBACK)
+        self._transition(
+            _ACTIVE_STATES,
+            AssistantJobState.FALLBACK,
+        )
 
     def finish(self) -> None:
-        self._transition({AssistantJobState.RUNNING, AssistantJobState.FALLBACK}, AssistantJobState.IDLE)
+        self._transition(
+            _ACTIVE_STATES,
+            AssistantJobState.IDLE,
+        )
 
-    def _transition(self, allowed: set[AssistantJobState], target: AssistantJobState) -> None:
+    def _transition(
+        self, allowed: tuple[AssistantJobState, ...], target: AssistantJobState
+    ) -> None:
         if self.state not in allowed:
-            expected = ", ".join(sorted(state.value for state in allowed))
+            expected = ', '.join(sorted(state.value for state in allowed))
             raise InvalidAssistantJobTransition(
-                f"Cannot transition assistant job from {self.state.value} to {target.value}; "
-                f"expected one of: {expected}"
+                f'Cannot transition assistant job from {self.state.value} to {target.value}; '
+                f'expected one of: {expected}'
             )
         self.state = target

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar, Optional
+from typing import ClassVar
 
 from application.events.base import EventType, TypedEvent, init_event
 
@@ -9,17 +9,17 @@ from application.events.base import EventType, TypedEvent, init_event
 @dataclass(frozen=True)
 class AsrStopDoneEvent(TypedEvent):
     record_fields: ClassVar[tuple[str, ...]] = (
-        "wav_path",
-        "run_offline_pass",
-        "offline_model_name",
-        "offline_language",
-        "stop_error",
+        'wav_path',
+        'run_offline_pass',
+        'offline_model_name',
+        'offline_language',
+        'stop_error',
     )
     wav_path: str
     run_offline_pass: bool
     offline_model_name: str
-    offline_language: Optional[str]
-    stop_error: Optional[str]
+    offline_language: str | None
+    stop_error: str | None
 
     def __init__(
         self,
@@ -27,9 +27,9 @@ class AsrStopDoneEvent(TypedEvent):
         wav_path: str,
         run_offline_pass: bool,
         offline_model_name: str,
-        offline_language: Optional[str],
-        stop_error: Optional[str],
-        ts: Optional[float] = None,
+        offline_language: str | None,
+        stop_error: str | None,
+        ts: float | None = None,
     ):
         init_event(
             self,
@@ -45,23 +45,23 @@ class AsrStopDoneEvent(TypedEvent):
 
 @dataclass(frozen=True)
 class OfflinePassStartedEvent(TypedEvent):
-    def __init__(self, *, ts: Optional[float] = None):
+    def __init__(self, *, ts: float | None = None):
         init_event(self, EventType.OFFLINE_PASS_STARTED, ts)
 
 
 @dataclass(frozen=True)
 class OfflinePassDoneEvent(TypedEvent):
-    record_fields: ClassVar[tuple[str, ...]] = ("out_txt",)
+    record_fields: ClassVar[tuple[str, ...]] = ('out_txt',)
     out_txt: str
 
-    def __init__(self, *, out_txt: str, ts: Optional[float] = None):
+    def __init__(self, *, out_txt: str, ts: float | None = None):
         init_event(self, EventType.OFFLINE_PASS_DONE, ts, out_txt=str(out_txt))
 
 
 @dataclass(frozen=True)
 class OfflinePassErrorEvent(TypedEvent):
-    record_fields: ClassVar[tuple[str, ...]] = ("error",)
+    record_fields: ClassVar[tuple[str, ...]] = ('error',)
     error: str
 
-    def __init__(self, *, error: str, ts: Optional[float] = None):
+    def __init__(self, *, error: str, ts: float | None = None):
         init_event(self, EventType.OFFLINE_PASS_ERROR, ts, error=str(error))

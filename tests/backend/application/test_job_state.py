@@ -7,7 +7,10 @@ from assistant.domain.job_state import (
     AssistantJobStateMachine,
 )
 from shared.domain.errors import InvalidJobTransition
-from transcription.domain.job_state import TranscriptionJobState, TranscriptionJobStateMachine
+from transcription.domain.job_state import (
+    TranscriptionJobState,
+    TranscriptionJobStateMachine,
+)
 
 
 class JobStateMachineTests(unittest.TestCase):
@@ -60,5 +63,5 @@ class JobStateMachineTests(unittest.TestCase):
         self.assertTrue(machine.can_start)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

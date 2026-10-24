@@ -110,9 +110,15 @@
   background: var(--muted);
 }
 
-.debug-status-dot.good { background: var(--success); }
-.debug-status-dot.warn { background: var(--warn); }
-.debug-status-dot.error { background: var(--danger); }
+.debug-status-dot.good {
+  background: var(--success);
+}
+.debug-status-dot.warn {
+  background: var(--warn);
+}
+.debug-status-dot.error {
+  background: var(--danger);
+}
 
 .debug-process-copy p {
   margin: 0;
@@ -174,7 +180,7 @@
   color: var(--text);
 }
 
-.debug-log-actions button[aria-pressed="true"] {
+.debug-log-actions button[aria-pressed='true'] {
   border-color: var(--warn-border);
 }
 
@@ -210,7 +216,7 @@
 .debug-log-list {
   min-height: 0;
   overflow: auto;
-  font-family: "Cascadia Mono", Consolas, "SFMono-Regular", monospace;
+  font-family: 'Cascadia Mono', Consolas, 'SFMono-Regular', monospace;
 }
 
 .debug-log-row {
@@ -269,4 +275,3 @@
   color: var(--muted);
   font-size: 12px;
 }
-

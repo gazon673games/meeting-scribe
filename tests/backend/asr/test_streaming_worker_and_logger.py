@@ -4,6 +4,7 @@ import queue
 import tempfile
 import threading
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,7 +14,10 @@ from asr.application.streaming_worker_config import StreamingWorkerConfig
 from asr.domain.streaming import StreamingChunk, StreamingWord
 from asr.infrastructure.audio_data import MonoAudio16kBuffer
 from asr.infrastructure.logger import ASRLogger, _EventFilter
-from asr.infrastructure.streaming_worker import StreamingWhisperWorker, _word_to_dict
+from asr.infrastructure.streaming_worker import (
+    StreamingWhisperWorker,
+    _word_to_dict,
+)
 from asr.infrastructure.worker_faster_whisper import FasterWhisperASR
 
 
@@ -24,10 +28,10 @@ class _StreamingBackend:
 
     def transcribe_words(self, samples):  # noqa: ANN001
         if self.fail:
-            raise RuntimeError("decode failed")
+            raise RuntimeError('decode failed')
         return [
-            {"text": "hello", "start": 0.0, "end": 0.2},
-            {"text": "world", "start": 0.2, "end": 0.4},
+            {'text': 'hello', 'start': 0.0, 'end': 0.2},
+            {'text': 'world', 'start': 0.2, 'end': 0.4},
         ]
 
     def close(self) -> None:
@@ -41,13 +45,13 @@ class _StatefulStreamingBackend(_StreamingBackend):
 
     def transcribe_stream_chunk(self, stream, samples, *, is_final):  # noqa: ANN001
         self.calls.append((stream, len(samples), is_final))
-        return {"text": "native stream"}
+        return {'text': 'native stream'}
 
 
 class StreamingWorkerAndLoggerTests(unittest.TestCase):
     def _chunk(self, *, final: bool = False) -> StreamingChunk:
         return StreamingChunk(
-            stream="mic",
+            stream='mic',
             t_start=0.0,
             t_end=1.0,
             audio=MonoAudio16kBuffer.from_array(np.ones(320, dtype=np.float32)),
@@ -55,14 +59,16 @@ class StreamingWorkerAndLoggerTests(unittest.TestCase):
             enqueue_ts=0.0,
         )
 
-    def test_streaming_worker_processes_intermediate_final_error_and_cleanup_paths(self) -> None:
+    def test_streaming_worker_processes_intermediate_final_error_and_cleanup_paths(
+        self,
+    ) -> None:
         logs = []
         worker = StreamingWhisperWorker(
             config=StreamingWorkerConfig(
-                model_name="tiny",
-                language="en",
-                device="cpu",
-                compute_type="int8",
+                model_name='tiny',
+                language='en',
+                device='cpu',
+                compute_type='int8',
                 cpu_threads=1,
                 num_workers=1,
                 initial_prompt=None,
@@ -75,25 +81,28 @@ class StreamingWorkerAndLoggerTests(unittest.TestCase):
             asr_backend_factory=lambda **kwargs: _StreamingBackend(),
         )
 
-        worker._asr = _StreamingBackend()
+        worker._bind_backend(_StreamingBackend())
         worker._process(self._chunk(final=False))
         worker._process(self._chunk(final=True))
         worker.reset_runtime()
 
-        worker._asr = _StreamingBackend(fail=True)
+        worker._bind_backend(_StreamingBackend(fail=True))
         worker._process(self._chunk(final=False))
+        worker._process(self._chunk(final=True))
+        self.assertNotIn('mic', worker._trackers)
+        self.assertEqual(logs[-1]['type'], 'streaming_final')
 
         stop = threading.Event()
         stop.set()
         worker = StreamingWhisperWorker(
             config=StreamingWorkerConfig(
-                model_name="tiny",
+                model_name='tiny',
                 language=None,
-                device="cpu",
-                compute_type="int8",
+                device='cpu',
+                compute_type='int8',
                 cpu_threads=1,
                 num_workers=1,
-                initial_prompt="terms",
+                initial_prompt='terms',
                 queue_timeout_s=0.01,
             ),
             chunk_queue=queue.Queue(),
@@ -104,43 +113,66 @@ class StreamingWorkerAndLoggerTests(unittest.TestCase):
         worker.run()
         worker.run_safe()
 
-        self.assertTrue(any(event.get("type") == "streaming_words" for event in logs))
-        self.assertTrue(any(event.get("type") == "streaming_final" for event in logs))
-        self.assertTrue(any(event.get("where") == "streaming_transcribe" for event in logs))
-        self.assertEqual(_word_to_dict(StreamingWord("x", 1.0, 2.0)), {"text": "x", "start": 1.0, "end": 2.0})
+        self.assertTrue(
+            any(event.get('type') == 'streaming_words' for event in logs)
+        )
+        self.assertTrue(
+            any(event.get('type') == 'streaming_final' for event in logs)
+        )
+        self.assertTrue(
+            any(event.get('where') == 'streaming_transcribe' for event in logs)
+        )
+        self.assertEqual(
+            _word_to_dict(StreamingWord('x', 1.0, 2.0)),
+            {'text': 'x', 'start': 1.0, 'end': 2.0},
+        )
 
-    def test_asr_logger_filters_high_frequency_events_and_writes_jsonl(self) -> None:
-        event_filter = _EventFilter(write_segment_events=False, audio_seen_min_interval_s=10.0)
+    def test_asr_logger_filters_high_frequency_events_and_writes_jsonl(
+        self,
+    ) -> None:
+        event_filter = _EventFilter(
+            write_segment_events=False, audio_seen_min_interval_s=10.0
+        )
 
-        self.assertTrue(event_filter.should_skip({"type": "segment"}))
-        self.assertFalse(event_filter.should_skip({"type": "audio_seen", "stream": "mic", "ts": 100.0}))
-        self.assertTrue(event_filter.should_skip({"type": "audio_seen", "stream": "mic", "ts": 105.0}))
+        self.assertTrue(event_filter.should_skip({'type': 'segment'}))
+        self.assertFalse(
+            event_filter.should_skip(
+                {'type': 'audio_seen', 'stream': 'mic', 'ts': 100.0}
+            )
+        )
+        self.assertTrue(
+            event_filter.should_skip(
+                {'type': 'audio_seen', 'stream': 'mic', 'ts': 105.0}
+            )
+        )
 
         with tempfile.TemporaryDirectory() as tmp:
             logger = ASRLogger(
                 root=Path(tmp),
-                session_id="unit",
-                language="en",
+                session_id='unit',
+                language='en',
                 max_bytes=100_000,
                 backup_count=1,
                 write_segment_events=True,
             )
-            logger.write({"type": "segment", "text": "kept"})
-            logger.write("ignored")  # type: ignore[arg-type]
+            logger.write({'type': 'segment', 'text': 'kept'})
+            logger.write('ignored')  # type: ignore[arg-type]
             logger.close()
 
             self.assertTrue(logger.path.exists())
-            self.assertIn('"segment"', logger.path.read_text(encoding="utf-8"))
+            self.assertIn('"segment"', logger.path.read_text(encoding='utf-8'))
 
-    def test_streaming_worker_uses_incremental_audio_for_stateful_backend(self) -> None:
+    def test_streaming_worker_uses_incremental_audio_for_stateful_backend(
+        self,
+    ) -> None:
         logs = []
         backend = _StatefulStreamingBackend()
         worker = StreamingWhisperWorker(
             config=StreamingWorkerConfig(
-                model_name="native",
-                language="ru",
-                device="cpu",
-                compute_type="int8",
+                model_name='native',
+                language='ru',
+                device='cpu',
+                compute_type='int8',
                 cpu_threads=1,
                 num_workers=1,
                 initial_prompt=None,
@@ -150,20 +182,27 @@ class StreamingWorkerAndLoggerTests(unittest.TestCase):
             log_event=logs.append,
             asr_backend_factory=lambda **kwargs: backend,
         )
-        worker._asr = backend
+        worker._bind_backend(backend)
         chunk = self._chunk(final=True)
-        chunk = StreamingChunk(
-            **{**chunk.__dict__, "incremental_audio": MonoAudio16kBuffer.from_array(np.ones(8, dtype=np.float32))}
+        chunk = replace(
+            chunk,
+            incremental_audio=MonoAudio16kBuffer.from_array(
+                np.ones(8, dtype=np.float32)
+            ),
         )
 
         worker._process(chunk)
 
-        self.assertEqual(backend.calls, [("mic", 8, True)])
-        self.assertTrue(any(event.get("type") == "streaming_final" for event in logs))
+        self.assertEqual(backend.calls, [('mic', 8, True)])
+        self.assertTrue(
+            any(event.get('type') == 'streaming_final' for event in logs)
+        )
 
-    def test_faster_whisper_adapter_transcribes_words_and_closes_model(self) -> None:
+    def test_faster_whisper_adapter_transcribes_words_and_closes_model(
+        self,
+    ) -> None:
         class _Word:
-            word = " hello "
+            word = ' hello '
             start = 0.1
             end = 0.2
 
@@ -172,7 +211,9 @@ class StreamingWorkerAndLoggerTests(unittest.TestCase):
 
         class _Model:
             def __init__(self) -> None:
-                self.model = SimpleNamespace(unload_model=lambda: setattr(self, "unloaded", True))
+                self.model = SimpleNamespace(
+                    unload_model=lambda: setattr(self, 'unloaded', True)
+                )
                 self.calls = []
                 self.unloaded = False
 
@@ -181,16 +222,16 @@ class StreamingWorkerAndLoggerTests(unittest.TestCase):
                 return [_Segment()], object()
 
         adapter = FasterWhisperASR.__new__(FasterWhisperASR)
-        adapter.language = "en"
+        adapter.language = 'en'
         adapter._model = _Model()
 
         words = adapter.transcribe_words(np.ones((2, 2), dtype=np.float32))
         adapter.close()
 
-        self.assertEqual(words, [{"text": "hello", "start": 0.1, "end": 0.2}])
-        self.assertTrue(adapter._model.calls[0][1]["word_timestamps"])
+        self.assertEqual(words, [{'text': 'hello', 'start': 0.1, 'end': 0.2}])
+        self.assertTrue(adapter._model.calls[0][1]['word_timestamps'])
         self.assertTrue(adapter._model.unloaded)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

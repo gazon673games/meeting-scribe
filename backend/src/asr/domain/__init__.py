@@ -6,9 +6,9 @@ from asr.domain.types import Mode, OverloadStrategy
 from asr.domain.utterances import UtteranceState
 
 __all__ = [
-    "Mode",
-    "MonoAudio16k",
-    "OverloadStrategy",
-    "Segment",
-    "UtteranceState",
+    'Mode',
+    'MonoAudio16k',
+    'OverloadStrategy',
+    'Segment',
+    'UtteranceState',
 ]

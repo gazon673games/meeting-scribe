@@ -1,0 +1,15 @@
+export const createAssistantPing = (overrides = {}) => ({
+  busy: false,
+  providerId: '',
+  profileId: '',
+  id: '',
+  label: '',
+  ok: null,
+  message: '',
+  errorCode: '',
+  retryable: false,
+  suggestion: '',
+  statusCode: 0,
+  ts: 0,
+  ...overrides,
+});

@@ -1,8 +1,6 @@
-export function Field({ label, children }) {
-  return (
-    <label className="field">
-      <span>{label}</span>
-      {children}
-    </label>
-  );
-}
+export const Field = ({ label, children }) => (
+  <label className="field">
+    <span>{label}</span>
+    {children}
+  </label>
+);

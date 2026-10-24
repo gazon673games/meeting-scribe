@@ -34,7 +34,9 @@ def set_source_enabled_state(state: SourceState, enabled: bool) -> None:
         state.last_ts = time.monotonic()
 
 
-def set_source_delay(state: SourceState, fmt: AudioFormat, delay_ms: float) -> None:
+def set_source_delay(
+    state: SourceState, fmt: AudioFormat, delay_ms: float
+) -> None:
     delay = max(0.0, float(delay_ms))
     state.delay_frames = int(round((delay / 1000.0) * fmt.sample_rate))
     with state.buf_lock:

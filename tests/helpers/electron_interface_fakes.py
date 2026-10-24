@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Tuple
 
 from application.event_types import UtteranceEvent
 
 
 class _DeviceCatalog:
-    def list_loopback_devices(self) -> List[Tuple[str, object]]:
-        return [("Speakers loopback", {"name": "speakers"})]
+    def list_loopback_devices(self) -> list[tuple[str, object]]:
+        return [('Speakers loopback', {'name': 'speakers'})]
 
-    def list_input_devices(self) -> List[Tuple[str, int]]:
-        return [("Built-in microphone", 7)]
+    def list_input_devices(self) -> list[tuple[str, int]]:
+        return [('Built-in microphone', 7)]
 
 
 class _FakeSource:
@@ -20,7 +19,9 @@ class _FakeSource:
 
 
 class _FakeAudioSourceFactory:
-    def create_loopback_source(self, *, name, engine_format, device, error_callback=None):  # noqa: ANN001
+    def create_loopback_source(
+        self, *, name, engine_format, device, error_callback=None
+    ):  # noqa: ANN001
         return _FakeSource(name)
 
     def create_microphone_source(self, *, name, device):  # noqa: ANN001
@@ -56,7 +57,9 @@ class _FakeEngine:
         self.enabled[src.name] = True
 
     def remove_source(self, name: str) -> None:
-        self.sources = [source for source in self.sources if source.name != name]
+        self.sources = [
+            source for source in self.sources if source.name != name
+        ]
         self.enabled.pop(name, None)
         self.delays.pop(name, None)
 
@@ -69,7 +72,9 @@ class _FakeEngine:
     def set_source_delay_ms(self, name: str, delay_ms: float) -> None:
         self.delays[name] = float(delay_ms)
 
-    def enable_auto_sync(self, reference_source: str, target_source: str) -> None:
+    def enable_auto_sync(
+        self, reference_source: str, target_source: str
+    ) -> None:
         pass
 
     def disable_auto_sync(self) -> None:
@@ -77,14 +82,14 @@ class _FakeEngine:
 
     def get_meters(self) -> dict:
         return {
-            "master": {"rms": 0.25, "last_ts": 0.0},
-            "drops": {"dropped_out_blocks": 0, "dropped_tap_blocks": 0},
-            "sources": {
+            'master': {'rms': 0.25, 'last_ts': 0.0},
+            'drops': {'dropped_out_blocks': 0, 'dropped_tap_blocks': 0},
+            'sources': {
                 source.name: {
-                    "rms": 0.25,
-                    "last_ts": 0.0,
-                    "enabled": self.enabled.get(source.name, True),
-                    "delay_ms": self.delays.get(source.name, 0.0),
+                    'rms': 0.25,
+                    'last_ts': 0.0,
+                    'enabled': self.enabled.get(source.name, True),
+                    'delay_ms': self.delays.get(source.name, 0.0),
                 }
                 for source in self.sources
             },
@@ -160,7 +165,7 @@ class _FakeAssistantService:
                 ok=True,
                 profile=command.profile.label,
                 cmd=command.request_text,
-                text=f"answer for {command.context_text}",
+                text=f'answer for {command.context_text}',
                 dt_s=0.1,
             )
         )
@@ -176,7 +181,9 @@ class _FakeAsrRuntime:
     def start(self) -> None:
         self.started = True
         self.start_calls += 1
-        self.event_queue.put_nowait(UtteranceEvent(text="hello from asr", stream="mic"))
+        self.event_queue.put_nowait(
+            UtteranceEvent(text='hello from asr', stream='mic')
+        )
 
     def stop(self) -> None:
         self.stopped = True
@@ -187,7 +194,9 @@ class _FakeAsrRuntimeFactory:
         self.runtime = None
         self.settings = None
 
-    def build(self, settings, *, tap_queue, project_root: Path, event_queue=None):  # noqa: ANN001
+    def build(
+        self, settings, *, tap_queue, project_root: Path, event_queue=None
+    ):  # noqa: ANN001
         self.settings = settings
         self.runtime = _FakeAsrRuntime(event_queue)
         return self.runtime

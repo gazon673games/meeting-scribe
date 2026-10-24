@@ -52,15 +52,14 @@
 }
 
 .proxy-toggle {
-  width: min(100%, 220px);
-}
-
-.proxy-toggle {
   width: auto;
 }
 
 .settings-grid.proxy-address-grid {
-  grid-template-columns: minmax(90px, 0.6fr) minmax(180px, 2fr) minmax(90px, 0.6fr);
+  grid-template-columns: minmax(90px, 0.6fr) minmax(180px, 2fr) minmax(
+      90px,
+      0.6fr
+    );
 }
 
 .settings-grid.proxy-credentials-grid {
@@ -152,4 +151,3 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-

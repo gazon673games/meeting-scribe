@@ -1,7 +1,13 @@
-import React from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import React from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 
-export function CollapsibleSection({ title, children, defaultOpen = true, action, summary }) {
+export const CollapsibleSection = ({
+  title,
+  children,
+  defaultOpen = true,
+  action,
+  summary,
+}) => {
   const [open, setOpen] = React.useState(defaultOpen);
   return (
     <section className="settings-section">
@@ -12,7 +18,10 @@ export function CollapsibleSection({ title, children, defaultOpen = true, action
         tabIndex={0}
         onClick={() => setOpen((o) => !o)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
+          if (
+            e.target === e.currentTarget &&
+            (e.key === 'Enter' || e.key === ' ')
+          ) {
             e.preventDefault();
             setOpen((o) => !o);
           }
@@ -21,13 +30,12 @@ export function CollapsibleSection({ title, children, defaultOpen = true, action
         <div className="section-head-left">
           {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           <h3>{title}</h3>
-          {!open && summary ? <span className="settings-section-summary">{summary}</span> : null}
+          {!open && summary ? (
+            <span className="settings-section-summary">{summary}</span>
+          ) : null}
         </div>
         {action ? (
-          <div
-            role="presentation"
-            onClick={(e) => e.stopPropagation()}
-          >
+          <div role="presentation" onClick={(e) => e.stopPropagation()}>
             {action}
           </div>
         ) : null}
@@ -35,4 +43,4 @@ export function CollapsibleSection({ title, children, defaultOpen = true, action
       {open ? children : null}
     </section>
   );
-}
+};

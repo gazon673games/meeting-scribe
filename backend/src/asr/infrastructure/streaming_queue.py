@@ -5,12 +5,11 @@ import threading
 import time
 from collections import deque
 from dataclasses import replace
-from typing import Deque, Optional
 
 import numpy as np
 
 from asr.domain.streaming import StreamingChunk
-from asr.infrastructure.audio_data import MonoAudio16kBuffer
+from asr.infrastructure.audio_data import ChunkedAudio16kBuffer
 
 
 class CoalescingStreamingQueue:
@@ -18,25 +17,27 @@ class CoalescingStreamingQueue:
 
     def __init__(self, maxsize: int = 50) -> None:
         self.maxsize = max(1, int(maxsize))
-        self._items: Deque[StreamingChunk] = deque()
+        self._items: deque[StreamingChunk] = deque()
         self._condition = threading.Condition()
 
-    def put_nowait(self, chunk: StreamingChunk) -> Optional[str]:
+    def put_nowait(self, chunk: StreamingChunk) -> str | None:
         with self._condition:
             if not chunk.is_final:
                 for index in range(len(self._items) - 1, -1, -1):
                     pending = self._items[index]
                     if pending.stream == chunk.stream and not pending.is_final:
-                        self._items[index] = _merge_incremental_audio(pending, chunk)
+                        self._items[index] = _merge_incremental_audio(
+                            pending, chunk
+                        )
                         self._condition.notify()
-                        return "coalesced"
+                        return 'coalesced'
                 if len(self._items) >= self.maxsize:
                     raise queue.Full
                 self._items.append(chunk)
                 self._condition.notify()
                 return None
 
-            retained: Deque[StreamingChunk] = deque()
+            retained: deque[StreamingChunk] = deque()
             for pending in self._items:
                 if pending.stream == chunk.stream and not pending.is_final:
                     chunk = _merge_incremental_audio(pending, chunk)
@@ -45,10 +46,14 @@ class CoalescingStreamingQueue:
             self._items = retained
             self._items.append(chunk)
             self._condition.notify()
-            return "final_overflow" if len(self._items) > self.maxsize else None
+            return 'final_overflow' if len(self._items) > self.maxsize else None
 
-    def get(self, timeout: Optional[float] = None) -> StreamingChunk:
-        deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
+    def get(self, timeout: float | None = None) -> StreamingChunk:
+        deadline = (
+            None
+            if timeout is None
+            else time.monotonic() + max(0.0, float(timeout))
+        )
         with self._condition:
             while not self._items:
                 if deadline is None:
@@ -68,12 +73,29 @@ class CoalescingStreamingQueue:
         return self.qsize() == 0
 
 
-def _merge_incremental_audio(previous: StreamingChunk, current: StreamingChunk) -> StreamingChunk:
+def _merge_incremental_audio(
+    previous: StreamingChunk, current: StreamingChunk
+) -> StreamingChunk:
     previous_audio = previous.incremental_audio
     current_audio = current.incremental_audio
     if previous_audio is None:
         return current
     if current_audio is None:
         return replace(current, incremental_audio=previous_audio)
-    merged = np.concatenate([previous_audio.samples, current_audio.samples]).astype(np.float32, copy=False)
-    return replace(current, incremental_audio=MonoAudio16kBuffer.from_array(merged))
+    previous_chunks = (
+        previous_audio.chunks
+        if isinstance(previous_audio, ChunkedAudio16kBuffer)
+        else (np.asarray(previous_audio.samples, dtype=np.float32),)
+    )
+    current_chunks = (
+        current_audio.chunks
+        if isinstance(current_audio, ChunkedAudio16kBuffer)
+        else (np.asarray(current_audio.samples, dtype=np.float32),)
+    )
+    return replace(
+        current,
+        incremental_audio=ChunkedAudio16kBuffer(
+            previous_chunks + current_chunks
+        ),
+        enqueue_monotonic=previous.enqueue_monotonic,
+    )

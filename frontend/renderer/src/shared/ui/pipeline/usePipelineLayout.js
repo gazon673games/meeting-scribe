@@ -1,10 +1,44 @@
-import React from "react";
+import React from 'react';
+import {
+  readJsonStorage,
+  removeStorage,
+  writeStorage,
+} from '../../lib/browserStorage';
 
-const STORAGE_KEY = "meeting-scribe.pipeline-layout.v1";
+const STORAGE_KEY = 'meeting-scribe.pipeline-layout.v1';
 
-export function usePipelineLayout(columns, storageKey = STORAGE_KEY) {
-  const defaultOrder = React.useMemo(() => columns.map((column) => column.id), [columns]);
-  const columnMap = React.useMemo(() => new Map(columns.map((column) => [column.id, column])), [columns]);
+const normalizeOrder = (order, defaultOrder) => {
+  const known = new Set(defaultOrder);
+  const stored = Array.isArray(order)
+    ? [...new Set(order.filter((id) => known.has(id)))]
+    : [];
+  return [...stored, ...defaultOrder.filter((id) => !stored.includes(id))];
+};
+
+const normalizeHidden = (hidden, order) => {
+  const known = new Set(order);
+  const next = Array.isArray(hidden)
+    ? [...new Set(hidden.filter((id) => known.has(id)))]
+    : [];
+  return next.length >= order.length ? [] : next;
+};
+
+const readLayout = (storageKey) => {
+  const parsed = readJsonStorage(storageKey, {});
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? parsed
+    : {};
+};
+
+export const usePipelineLayout = (columns, storageKey = STORAGE_KEY) => {
+  const defaultOrder = React.useMemo(
+    () => columns.map((column) => column.id),
+    [columns],
+  );
+  const columnMap = React.useMemo(
+    () => new Map(columns.map((column) => [column.id, column])),
+    [columns],
+  );
   const [layout, setLayout] = React.useState(() => readLayout(storageKey));
   const [resetRevision, setResetRevision] = React.useState(0);
 
@@ -12,11 +46,13 @@ export function usePipelineLayout(columns, storageKey = STORAGE_KEY) {
   const hiddenIds = normalizeHidden(layout.hidden, order);
   const hiddenSet = React.useMemo(() => new Set(hiddenIds), [hiddenIds]);
   const orderedColumns = order.map((id) => columnMap.get(id)).filter(Boolean);
-  const visibleColumns = orderedColumns.filter((column) => !hiddenSet.has(column.id));
+  const visibleColumns = orderedColumns.filter(
+    (column) => !hiddenSet.has(column.id),
+  );
   const visibleIds = visibleColumns.map((column) => column.id);
 
   React.useEffect(() => {
-    window.localStorage?.setItem(storageKey, JSON.stringify({ order, hidden: hiddenIds }));
+    writeStorage(storageKey, JSON.stringify({ order, hidden: hiddenIds }));
   }, [hiddenIds, order, storageKey]);
 
   const moveColumn = React.useCallback(
@@ -29,15 +65,18 @@ export function usePipelineLayout(columns, storageKey = STORAGE_KEY) {
           return current;
         }
         const reordered = [...nextOrder];
-        [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
+        [reordered[index], reordered[target]] = [
+          reordered[target],
+          reordered[index],
+        ];
         return { ...current, order: reordered };
       });
     },
-    [defaultOrder]
+    [defaultOrder],
   );
 
   const moveColumnTo = React.useCallback(
-    (id, targetId, placement = "before") => {
+    (id, targetId, placement = 'before') => {
       setLayout((current) => {
         if (id === targetId) {
           return current;
@@ -52,12 +91,12 @@ export function usePipelineLayout(columns, storageKey = STORAGE_KEY) {
 
         const reordered = nextOrder.filter((columnId) => columnId !== id);
         const cleanTargetIndex = reordered.indexOf(targetId);
-        const insertIndex = cleanTargetIndex + (placement === "after" ? 1 : 0);
+        const insertIndex = cleanTargetIndex + (placement === 'after' ? 1 : 0);
         reordered.splice(insertIndex, 0, id);
         return { ...current, order: reordered };
       });
     },
-    [defaultOrder]
+    [defaultOrder],
   );
 
   const hideColumn = React.useCallback(
@@ -72,7 +111,7 @@ export function usePipelineLayout(columns, storageKey = STORAGE_KEY) {
         return { ...current, hidden: [...nextHidden] };
       });
     },
-    [defaultOrder]
+    [defaultOrder],
   );
 
   const showColumn = React.useCallback((id) => {
@@ -84,7 +123,7 @@ export function usePipelineLayout(columns, storageKey = STORAGE_KEY) {
   }, []);
 
   const resetLayout = React.useCallback(() => {
-    window.localStorage?.removeItem(storageKey);
+    removeStorage(storageKey);
     setLayout({ order: defaultOrder, hidden: [] });
     setResetRevision((current) => current + 1);
   }, [defaultOrder, storageKey]);
@@ -99,28 +138,6 @@ export function usePipelineLayout(columns, storageKey = STORAGE_KEY) {
     hideColumn,
     moveColumn,
     moveColumnTo,
-    showColumn
+    showColumn,
   };
-}
-
-function normalizeOrder(order, defaultOrder) {
-  const known = new Set(defaultOrder);
-  const stored = Array.isArray(order) ? order.filter((id) => known.has(id)) : [];
-  return [...stored, ...defaultOrder.filter((id) => !stored.includes(id))];
-}
-
-function normalizeHidden(hidden, order) {
-  const known = new Set(order);
-  const next = Array.isArray(hidden) ? hidden.filter((id) => known.has(id)) : [];
-  return next.length >= order.length ? [] : next;
-}
-
-function readLayout(storageKey) {
-  try {
-    const raw = window.localStorage?.getItem(storageKey);
-    const parsed = raw ? JSON.parse(raw) : {};
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
+};

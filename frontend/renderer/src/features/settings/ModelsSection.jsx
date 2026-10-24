@@ -1,21 +1,33 @@
-import React from "react";
-import { Network, RefreshCw } from "lucide-react";
+import { classNames } from '../../shared/lib/classNames';
+import React from 'react';
+import { Network, RefreshCw } from 'lucide-react';
 
-import { buildProxyUrl } from "../../entities/settings/model";
-import { CollapsibleSection } from "../../shared/ui/CollapsibleSection";
-import { Field } from "../../shared/ui/Field";
-import { AsrModelsPanel } from "./modelSections/AsrModelsPanel";
-import { DiarModelsPanel } from "./modelSections/DiarModelsPanel";
-import { LlmModelsPanel } from "./modelSections/LlmModelsPanel";
-import { joinDir } from "./modelSections/useModelList";
+import { buildProxyUrl } from '../../entities/settings/model';
+import { CollapsibleSection } from '../../shared/ui/CollapsibleSection';
+import { Field } from '../../shared/ui/Field';
+import { AsrModelsPanel } from './modelSections/AsrModelsPanel';
+import { DiarModelsPanel } from './modelSections/DiarModelsPanel';
+import { LlmModelsPanel } from './modelSections/LlmModelsPanel';
 
-export function ModelsSection({ draft, onChange, open }) {
+export const ModelsSection = ({ draft, onChange, open, locked = false }) => {
   const [refreshToken, setRefreshToken] = React.useState(0);
 
-  const baseDir = String(draft.modelsDirectory || "").trim();
-  const asrDir = joinDir(baseDir, draft.asrModelsSubdir);
-  const diarDir = joinDir(baseDir, draft.diarModelsSubdir);
-  const llmDir = joinDir(baseDir, draft.llmModelsSubdir);
+  const baseDir = String(draft.modelsDirectory || '').trim();
+  const asrSubdir = String(draft.asrModelsSubdir || '').trim();
+  const asrDir = React.useMemo(
+    () => ({ modelsDir: baseDir, modelsSubdir: asrSubdir }),
+    [baseDir, asrSubdir],
+  );
+  const diarSubdir = String(draft.diarModelsSubdir || '').trim();
+  const diarDir = React.useMemo(
+    () => ({ modelsDir: baseDir, modelsSubdir: diarSubdir }),
+    [baseDir, diarSubdir],
+  );
+  const llmSubdir = String(draft.llmModelsSubdir || '').trim();
+  const llmDir = React.useMemo(
+    () => ({ modelsDir: baseDir, modelsSubdir: llmSubdir }),
+    [baseDir, llmSubdir],
+  );
   const useProxy = Boolean(draft.modelsUseProxy);
   const downloadProxy = buildProxyUrl(draft, { forceEnabled: useProxy });
 
@@ -29,24 +41,34 @@ export function ModelsSection({ draft, onChange, open }) {
     <CollapsibleSection
       title="Models"
       defaultOpen={false}
-      action={(
-        <button className="icon-button" title="Refresh all models" type="button" onClick={refreshAll}>
+      action={
+        <button
+          className="icon-button"
+          title="Refresh all models"
+          type="button"
+          onClick={refreshAll}
+        >
           <RefreshCw size={13} />
         </button>
-      )}
+      }
     >
       <div className="models-controls">
         <Field label="Models Folder">
           <input
             spellCheck={false}
-            value={draft.modelsDirectory || ""}
+            value={draft.modelsDirectory || ''}
             placeholder="Default: ./models"
-            onChange={(event) => onChange({ modelsDirectory: event.target.value })}
+            onChange={(event) =>
+              onChange({ modelsDirectory: event.target.value })
+            }
           />
         </Field>
         <button
           aria-pressed={useProxy}
-          className={`feature-toggle model-proxy-toggle ${useProxy ? "selected" : ""}`}
+          className={classNames(
+            'feature-toggle model-proxy-toggle',
+            useProxy && 'selected',
+          )}
           type="button"
           onClick={() => onChange({ modelsUseProxy: !useProxy })}
         >
@@ -57,6 +79,7 @@ export function ModelsSection({ draft, onChange, open }) {
       </div>
 
       <AsrModelsPanel
+        locked={locked}
         draft={draft}
         onChange={onChange}
         open={open}
@@ -66,6 +89,7 @@ export function ModelsSection({ draft, onChange, open }) {
         refreshToken={refreshToken}
       />
       <DiarModelsPanel
+        locked={locked}
         draft={draft}
         onChange={onChange}
         open={open}
@@ -85,4 +109,4 @@ export function ModelsSection({ draft, onChange, open }) {
       />
     </CollapsibleSection>
   );
-}
+};

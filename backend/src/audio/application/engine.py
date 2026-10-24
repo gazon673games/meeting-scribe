@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
+import queue
 import threading
-from typing import List, Optional
 
 import numpy as np
 
-from audio.application.engine_meters import build_meter_snapshot  # noqa: F401 (kept for callers)
+from audio.application.engine_meters import (
+    build_meter_snapshot,  # noqa: F401 (kept for callers)
+)
 from audio.application.engine_runtime import EngineRuntimeState
 from audio.application.mix_worker import AudioMixWorker, MixLoopSnapshot
 from audio.application.mixer import enqueue_source_frame, normalize_source_frame
@@ -14,6 +17,8 @@ from audio.application.tap_config import normalize_tap_config
 from audio.domain.formats import AudioFormat
 from audio.domain.ports import AudioFilter, AudioSource
 from audio.domain.types import TapMode
+
+_logger = logging.getLogger(__name__)
 
 
 class AudioEngine:
@@ -30,10 +35,10 @@ class AudioEngine:
     def __init__(
         self,
         format: AudioFormat,
-        output_queue: "queue.Queue[np.ndarray]",
+        output_queue: queue.Queue[np.ndarray],
         *,
         max_source_buffer_blocks: int = 50,
-        tap_queue: Optional["queue.Queue[dict]"] = None,
+        tap_queue: queue.Queue[dict] | None = None,
         tap_queue_max: int = 200,
     ):
         self._fmt = format
@@ -42,7 +47,7 @@ class AudioEngine:
         self._registry = SourceRegistry(format)
         self._lock = threading.RLock()
         self._running = False
-        self._mix_thread: Optional[threading.Thread] = None
+        self._mix_thread: threading.Thread | None = None
         self._stop_evt = threading.Event()
         self._runtime = EngineRuntimeState(
             tap_q=tap_queue,
@@ -68,7 +73,7 @@ class AudioEngine:
         with self._lock:
             return bool(self._running)
 
-    def set_tap_queue(self, tap_queue: Optional["queue.Queue[dict]"]) -> None:
+    def set_tap_queue(self, tap_queue: queue.Queue[dict] | None) -> None:
         with self._lock:
             self._runtime.set_tap_queue(tap_queue)
 
@@ -79,13 +84,17 @@ class AudioEngine:
     def set_tap_config(
         self,
         *,
-        mode: TapMode = "both",
-        sources: Optional[List[str]] = None,
+        mode: TapMode = 'both',
+        sources: list[str] | None = None,
         drop_threshold: float = 0.85,
     ) -> None:
         """mode: "mix" | "sources" | "both"; sources: None = all; drop_threshold: skip tap when queue fill >= threshold."""
         with self._lock:
-            self._runtime.apply_tap_config(normalize_tap_config(mode=mode, sources=sources, drop_threshold=drop_threshold))
+            self._runtime.apply_tap_config(
+                normalize_tap_config(
+                    mode=mode, sources=sources, drop_threshold=drop_threshold
+                )
+            )
 
     def add_source(self, src: AudioSource) -> None:
         start_now = False
@@ -117,7 +126,9 @@ class AudioEngine:
         with self._lock:
             self._registry.set_source_delay_ms(name, delay_ms)
 
-    def enable_auto_sync(self, reference_source: str, target_source: str) -> None:
+    def enable_auto_sync(
+        self, reference_source: str, target_source: str
+    ) -> None:
         with self._lock:
             self._runtime.enable_auto_sync(reference_source, target_source)
 
@@ -134,18 +145,20 @@ class AudioEngine:
             if self._running:
                 return
             if not self._registry.has_sources():
-                raise RuntimeError("No sources added")
+                raise RuntimeError('No sources added')
             self._running = True
             self._stop_evt.clear()
             self._runtime.reset_for_start()
 
-        started: List[AudioSource] = []
+        started: list[AudioSource] = []
         try:
             for src in self._registry.sources:
                 src.start(self._on_audio_from_source)
                 started.append(src)  # only append after successful start
 
-            self._mix_thread = threading.Thread(target=self._mix_worker.run, name="audio-mixer", daemon=True)
+            self._mix_thread = threading.Thread(
+                target=self._mix_worker.run, name='audio-mixer', daemon=True
+            )
             self._mix_thread.start()
         except Exception:
             with self._lock:
@@ -156,7 +169,9 @@ class AudioEngine:
                 try:
                     src.stop()
                 except Exception:
-                    pass
+                    _logger.debug(
+                        'Best-effort operation failed in start', exc_info=True
+                    )
             with self._lock:
                 self._reset_runtime_state_locked()
             raise
@@ -172,7 +187,9 @@ class AudioEngine:
             try:
                 src.stop()
             except Exception:
-                pass
+                _logger.debug(
+                    'Best-effort operation failed in stop', exc_info=True
+                )
 
         if self._mix_thread is not None:
             self._mix_thread.join(timeout=2.0)
@@ -185,15 +202,21 @@ class AudioEngine:
         self._registry.reset_runtime_state()
         self._runtime.reset_after_stop()
 
-    def _on_audio_from_source(self, source_name: str, frame: np.ndarray) -> None:
+    def _on_audio_from_source(
+        self, source_name: str, frame: np.ndarray
+    ) -> None:
         with self._lock:
             if not self._running:
                 return
             st = self._registry.get_state(source_name)
             if st is None or not st.enabled:
                 return
-        # Intentionally lock-free: ring buffer append is thread-safe by design.
-        enqueue_source_frame(st, normalize_source_frame(frame), max_buffer_blocks=self._max_buf_blocks)
+        # Keep the registry lock out of frame copying and buffer insertion.
+        enqueue_source_frame(
+            st,
+            normalize_source_frame(frame),
+            max_buffer_blocks=self._max_buf_blocks,
+        )
 
     def _build_mix_snapshot(self, period_s: float) -> MixLoopSnapshot:
         with self._lock:
@@ -208,7 +231,9 @@ class AudioEngine:
                 master_filters=self._registry.master_filters(),
                 tap_q=self._runtime.tap_q,
                 tap_mode=self._runtime.tap_mode,
-                tap_sources_filter=set(self._runtime.tap_sources_filter) if self._runtime.tap_sources_filter else None,
+                tap_sources_filter=set(self._runtime.tap_sources_filter)
+                if self._runtime.tap_sources_filter
+                else None,
                 tap_drop_threshold=self._runtime.tap_drop_threshold,
                 output_enabled=self._runtime.output_enabled,
             )

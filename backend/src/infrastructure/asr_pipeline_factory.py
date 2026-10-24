@@ -1,19 +1,33 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from queue import Queue
 
-from application.asr_session import ASRRuntime, ASRRuntimeFactory, ASRSessionSettings
-from application.native_asr_models import NEMOTRON_MODEL_ID, native_asr_model_dir
+from application.asr_session import (
+    ASRRuntime,
+    ASRRuntimeFactory,
+    ASRSessionSettings,
+)
+from application.native_asr_models import (
+    NEMOTRON_MODEL_ID,
+    SHERPA_OFFLINE_MODEL_IDS,
+    native_asr_model_dir,
+)
 from asr.application.pipeline import ASRPipeline
-from asr.application.pipeline_config import ASRPipelineDependencies, ASRPipelineSettings
+from asr.application.pipeline_config import (
+    ASRPipelineDependencies,
+    ASRPipelineSettings,
+)
 from asr.infrastructure.logger import ASRLogger
 from asr.infrastructure.runtime_workers import ThreadRealtimeWorkerRunner
 from asr.infrastructure.segmentation import AudioSegmenter
 from asr.infrastructure.worker_faster_whisper import FasterWhisperASR
 from asr.infrastructure.worker_sherpa_nemotron import SherpaNemotronASR
+from asr.infrastructure.worker_sherpa_offline import SherpaOfflineASR
 from diarization.infrastructure.diar_backend_pyannote import PyannoteDiarizer
-from diarization.infrastructure.diarization_runtime import DefaultDiarizationRuntimeFactory
+from diarization.infrastructure.diarization_runtime import (
+    DefaultDiarizationRuntimeFactory,
+)
 from diarization.infrastructure.diarizer import OnlineDiarizer
 
 
@@ -22,9 +36,9 @@ class ASRPipelineFactory(ASRRuntimeFactory):
         self,
         settings: ASRSessionSettings,
         *,
-        tap_queue: Any,
+        tap_queue: Queue[dict],
         project_root: Path,
-        event_queue: Any = None,
+        event_queue: Queue[object] | None = None,
     ) -> ASRRuntime:
         pipeline_settings = ASRPipelineSettings(
             language=settings.language,
@@ -44,7 +58,9 @@ class ASRPipelineFactory(ASRRuntimeFactory):
             vad_min_speech_ms=350,
             diarization_enabled=bool(settings.diarization_enabled),
             diar_backend=settings.diar_backend,
-            diarization_sidecar_enabled=bool(settings.diarization_sidecar_enabled),
+            diarization_sidecar_enabled=bool(
+                settings.diarization_sidecar_enabled
+            ),
             diarization_queue_size=int(settings.diarization_queue_size),
             diar_sherpa_embedding_model_path=settings.diar_sherpa_embedding_model_path,
             diar_sherpa_provider=settings.diar_sherpa_provider,
@@ -61,7 +77,9 @@ class ASRPipelineFactory(ASRRuntimeFactory):
             utterance_enabled=True,
             utterance_gap_s=0.85,
             utterance_max_s=18.0,
-            utterance_flush_s=2.5,
+            utterance_flush_s=2.5
+            if settings.overload_strategy == 'keep_all'
+            else 0.35,
             log_max_bytes=25 * 1024 * 1024,
             log_backup_count=5,
             asr_language=settings.asr_language,
@@ -70,14 +88,29 @@ class ASRPipelineFactory(ASRRuntimeFactory):
             metrics_emit_interval_s=5.0,
             metrics_latency_window=200,
             streaming_enabled=bool(settings.streaming_enabled),
-            streaming_chunk_interval_s=float(settings.streaming_chunk_interval_s),
-            streaming_endpoint_silence_ms=float(settings.streaming_endpoint_silence_ms),
+            streaming_chunk_interval_s=float(
+                settings.streaming_chunk_interval_s
+            ),
+            streaming_endpoint_silence_ms=float(
+                settings.streaming_endpoint_silence_ms
+            ),
         )
+
         def asr_backend_factory(**kwargs):  # noqa: ANN003
-            if str(kwargs.get("model_name") or "") == NEMOTRON_MODEL_ID:
-                return SherpaNemotronASR(
+            model_name = str(kwargs.get('model_name') or '')
+            if (
+                model_name == NEMOTRON_MODEL_ID
+                or model_name in SHERPA_OFFLINE_MODEL_IDS
+            ):
+                backend_type = (
+                    SherpaNemotronASR
+                    if model_name == NEMOTRON_MODEL_ID
+                    else SherpaOfflineASR
+                )
+                return backend_type(
                     model_dir=native_asr_model_dir(
-                        str(kwargs.get("model_name") or ""),
+                        str(kwargs.get('model_name') or ''),
+                        models_dir=settings.models_dir,
                         project_root=Path(project_root),
                     ),
                     **kwargs,

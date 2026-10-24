@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import queue
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Dict
 
 from asr.domain.segments import Segment
 from diarization.application.diarization import DiarizationPort
-from diarization.domain.speaker_labels import clean_speaker_label, source_speaker_label
+from diarization.domain.speaker_labels import (
+    clean_speaker_label,
+    source_speaker_label,
+)
 
 LogEvent = Callable[[dict], None]
 
@@ -15,8 +18,8 @@ LogEvent = Callable[[dict], None]
 @dataclass(frozen=True)
 class DiarizationUpdateConfig:
     enabled: bool
-    source_speaker_labels: Dict[str, str] = field(default_factory=dict)
-    event_source: str = "diarization_sidecar"
+    source_speaker_labels: dict[str, str] = field(default_factory=dict)
+    event_source: str = 'diarization_sidecar'
 
 
 class DiarizationUpdateRuntime:
@@ -24,14 +27,14 @@ class DiarizationUpdateRuntime:
         self,
         *,
         config: DiarizationUpdateConfig,
-        segment_queue: "queue.Queue[Segment]",
+        segment_queue: queue.Queue[Segment],
         stop_event,
         diarization: DiarizationPort,
         log_event: LogEvent,
     ) -> None:
         self.enabled = bool(config.enabled)
         self._source_speaker_labels = dict(config.source_speaker_labels or {})
-        self._event_source = str(config.event_source or "diarization_sidecar")
+        self._event_source = str(config.event_source or 'diarization_sidecar')
         self._seg_q = segment_queue
         self._stop = stop_event
         self._diar = diarization
@@ -44,8 +47,15 @@ class DiarizationUpdateRuntime:
     def run_safe(self) -> None:
         try:
             self.run()
-        except Exception as exc:
-            self._log_event({"type": "error", "where": "diar_sidecar", "error": str(exc), "ts": time.time()})
+        except Exception as error:
+            self._log_event(
+                {
+                    'type': 'error',
+                    'where': 'diar_sidecar',
+                    'error': str(error),
+                    'ts': time.time(),
+                }
+            )
 
     def run(self) -> None:
         if not self.enabled:
@@ -71,47 +81,51 @@ class DiarizationUpdateRuntime:
             return
         self._diar.init_backend(self._log_event)
         self._started = True
-        self._log_event({"type": "diar_sidecar_started", "ts": time.time()})
+        self._log_event({'type': 'diar_sidecar_started', 'ts': time.time()})
 
     def _process_segment(self, segment: Segment) -> None:
         started_ts = time.time()
         self._log_event(
             {
-                "type": "diar_segment_processing",
-                "stream": str(segment.stream),
-                "t_start": float(segment.t_start),
-                "t_end": float(segment.t_end),
-                "diar_qsize": int(self._seg_q.qsize()),
-                "source": self._event_source,
-                "ts": started_ts,
+                'type': 'diar_segment_processing',
+                'stream': str(segment.stream),
+                't_start': float(segment.t_start),
+                't_end': float(segment.t_end),
+                'diar_qsize': int(self._seg_q.qsize()),
+                'source': self._event_source,
+                'ts': started_ts,
             }
         )
-        speaker = clean_speaker_label(self._diar.speaker_for_segment(segment, self._log_event))
+        speaker = clean_speaker_label(
+            self._diar.speaker_for_segment(segment, self._log_event)
+        )
         self._log_event(
             {
-                "type": "diar_segment_done",
-                "stream": str(segment.stream),
-                "speaker": str(speaker),
-                "t_start": float(segment.t_start),
-                "t_end": float(segment.t_end),
-                "latency_s": max(0.0, time.time() - started_ts),
-                "diar_qsize": int(self._seg_q.qsize()),
-                "source": self._event_source,
-                "ts": time.time(),
+                'type': 'diar_segment_done',
+                'stream': str(segment.stream),
+                'speaker': str(speaker),
+                't_start': float(segment.t_start),
+                't_end': float(segment.t_end),
+                'latency_s': max(0.0, time.time() - started_ts),
+                'diar_qsize': int(self._seg_q.qsize()),
+                'source': self._event_source,
+                'ts': time.time(),
             }
         )
         if not speaker:
             return
-        if speaker == source_speaker_label(self._source_speaker_labels, segment.stream):
+        if speaker == source_speaker_label(
+            self._source_speaker_labels, segment.stream
+        ):
             return
         self._log_event(
             {
-                "type": "transcript_speaker_update",
-                "stream": str(segment.stream),
-                "speaker": speaker,
-                "t_start": float(segment.t_start),
-                "t_end": float(segment.t_end),
-                "source": self._event_source,
-                "ts": time.time(),
+                'type': 'transcript_speaker_update',
+                'stream': str(segment.stream),
+                'speaker': speaker,
+                't_start': float(segment.t_start),
+                't_end': float(segment.t_end),
+                'source': self._event_source,
+                'ts': time.time(),
             }
         )

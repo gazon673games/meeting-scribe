@@ -7,18 +7,18 @@ from shared.domain.events import DomainEvent
 
 @dataclass(frozen=True)
 class AssistantRequestStarted(DomainEvent):
-    profile: str = ""
-    source_label: str = ""
+    profile: str = ''
+    source_label: str = ''
 
 
 @dataclass(frozen=True)
 class AssistantFallbackStarted(DomainEvent):
-    profile: str = ""
-    reason: str = ""
+    profile: str = ''
+    reason: str = ''
 
 
 @dataclass(frozen=True)
 class AssistantRequestFinished(DomainEvent):
-    profile: str = ""
+    profile: str = ''
     ok: bool = False
     elapsed_s: float = 0.0

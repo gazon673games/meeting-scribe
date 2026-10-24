@@ -1,7 +1,5 @@
-:root {
-  color-scheme: dark;
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+:root,
+.app-shell {
   --accent: #2563eb;
   --accent-strong: #1d4ed8;
   --accent-soft: rgba(37, 99, 235, 0.28);
@@ -39,6 +37,18 @@
   --shadow-popover: rgba(0, 0, 0, 0.42);
   --shadow-modal: rgba(0, 0, 0, 0.52);
   --backdrop: rgba(0, 0, 0, 0.58);
+}
+
+:root {
+  color-scheme: dark;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
   background: var(--app-bg);
   color: var(--text);
   font-synthesis: none;
@@ -84,43 +94,6 @@ textarea:disabled {
 
 .app-shell {
   color-scheme: dark;
-  --accent: #2563eb;
-  --accent-strong: #1d4ed8;
-  --accent-soft: rgba(37, 99, 235, 0.28);
-  --app-bg: #0a0a0a;
-  --bar-bg: #111111;
-  --panel-bg: #0d0d0d;
-  --panel-bg-strong: #151515;
-  --panel-bg-soft: #131313;
-  --hover-bg: #1a1a1a;
-  --hover-bg-strong: #171717;
-  --border: #243044;
-  --border-soft: #1f2937;
-  --border-strong: #374151;
-  --text: #f3f4f6;
-  --heading: #e5e7eb;
-  --control-text: #d1d5db;
-  --muted: #64748b;
-  --subtle: #9ca3af;
-  --faint: #4b5563;
-  --on-accent: #ffffff;
-  --control-knob: #ffffff;
-  --danger: #dc2626;
-  --danger-soft: #fb7185;
-  --warn: #eab308;
-  --success: #22c55e;
-  --meter-bg: #10213a;
-  --error-bg: #35171d;
-  --error-text: #ffe4e6;
-  --error-soft: #fecdd3;
-  --error-border: rgba(251, 113, 133, 0.45);
-  --error-button-border: rgba(251, 113, 133, 0.35);
-  --error-button-bg: rgba(15, 23, 42, 0.2);
-  --error-button-hover: rgba(251, 113, 133, 0.12);
-  --shadow-soft: rgba(0, 0, 0, 0.35);
-  --shadow-popover: rgba(0, 0, 0, 0.42);
-  --shadow-modal: rgba(0, 0, 0, 0.52);
-  --backdrop: rgba(0, 0, 0, 0.58);
   width: 100%;
   height: 100vh;
   min-height: 640px;
@@ -131,8 +104,8 @@ textarea:disabled {
   color: var(--text);
 }
 
-.app-shell[data-theme="light"],
-.debug-console-shell[data-theme="light"] {
+.app-shell[data-theme='light'],
+.debug-console-shell[data-theme='light'] {
   color-scheme: light;
   --accent: #2563eb;
   --accent-strong: #1d4ed8;
@@ -443,4 +416,3 @@ textarea:disabled {
   border-color: var(--border-strong);
   background: var(--hover-bg);
 }
-

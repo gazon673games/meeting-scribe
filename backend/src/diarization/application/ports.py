@@ -1,21 +1,18 @@
 from __future__ import annotations
 
-from typing import Any, List, Optional, Protocol
+from typing import Any, Protocol
 
 from diarization.domain.segments import DiarSegment
 
 
 class OnlineDiarizerPort(Protocol):
-    def last_error(self) -> Optional[str]:
-        ...
+    def last_error(self) -> str | None: ...
 
-    def clusters_snapshot(self) -> List[dict]:
-        ...
+    def clusters_snapshot(self) -> list[dict]: ...
 
     def assign_with_debug(
-        self, audio_16k: Any, ts: Optional[float] = None
-    ) -> tuple[str, Optional[int], float, bool]:
-        ...
+        self, audio_16k: Any, ts: float | None = None
+    ) -> tuple[str, int | None, float, bool]: ...
 
 
 class OnlineDiarizerFactoryPort(Protocol):
@@ -27,19 +24,18 @@ class OnlineDiarizerFactoryPort(Protocol):
         window_s: float,
         backend: str,
         device: str,
-        temp_dir: Optional[Any] = None,
-        sherpa_model_path: str = "",
-        sherpa_provider: str = "cpu",
+        temp_dir: Any | None = None,
+        sherpa_model_path: str = '',
+        sherpa_provider: str = 'cpu',
         sherpa_num_threads: int = 1,
-    ) -> OnlineDiarizerPort:
-        ...
+    ) -> OnlineDiarizerPort: ...
 
 
 class PyannoteDiarizerPort(Protocol):
-    def diarize(self, audio_16k: Any, *, t_offset: float = 0.0) -> List[DiarSegment]:
-        ...
+    def diarize(
+        self, audio_16k: Any, *, t_offset: float = 0.0
+    ) -> list[DiarSegment]: ...
 
 
 class PyannoteDiarizerFactoryPort(Protocol):
-    def __call__(self, *, device: str) -> PyannoteDiarizerPort:
-        ...
+    def __call__(self, *, device: str) -> PyannoteDiarizerPort: ...

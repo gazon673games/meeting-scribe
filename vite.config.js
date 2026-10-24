@@ -1,43 +1,54 @@
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-import { createRequire } from "node:module";
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { DEFAULT_RENDERER_HOST, DEFAULT_RENDERER_PORT, parsePort } = require("./frontend/electron/renderer-url.cjs");
+const {
+  DEFAULT_RENDERER_HOST,
+  DEFAULT_RENDERER_PORT,
+  parsePort,
+} = require('./frontend/electron/renderer-url.cjs');
 
 const devServerHost = process.env.VITE_DEV_SERVER_HOST || DEFAULT_RENDERER_HOST;
-const devServerPort = parsePort(process.env.VITE_DEV_SERVER_PORT, DEFAULT_RENDERER_PORT);
+const devServerPort = parsePort(
+  process.env.VITE_DEV_SERVER_PORT,
+  DEFAULT_RENDERER_PORT,
+);
 
 export default defineConfig({
-  root: "frontend/renderer",
+  root: 'frontend/renderer',
   plugins: [react()],
   server: {
     host: devServerHost,
     port: devServerPort,
-    strictPort: true
+    strictPort: true,
   },
   build: {
-    outDir: "../../build/electron-renderer",
-    emptyOutDir: true
+    outDir: '../../build/electron-renderer',
+    emptyOutDir: true,
   },
   test: {
-    include: ["tests/**/*.test.{js,jsx}", "../electron/tests/**/*.test.js"],
-    setupFiles: ["src/test/setup.js"],
+    include: ['tests/**/*.test.{js,jsx}', '../electron/tests/**/*.test.js'],
+    setupFiles: ['src/test/setup.js'],
     coverage: {
-      provider: "v8",
+      provider: 'v8',
       allowExternal: true,
-      reporter: ["text", "html"],
-      reportsDirectory: "../../coverage/frontend",
-      include: ["src/**/*.{js,jsx}", "../electron/**/*.{cjs,js}", "frontend/electron/**/*.{cjs,js}"],
+      reporter: ['text', 'html'],
+      reportsDirectory: '../../coverage/frontend',
+      include: [
+        'src/**/*.{js,jsx}',
+        '../electron/**/*.{cjs,js}',
+        'frontend/electron/**/*.{cjs,js}',
+      ],
       exclude: [
-        "tests/**",
-        "src/test/**",
-        "../electron/tests/**",
-        "frontend/electron/tests/**",
-        "../electron/assets/**",
-        "frontend/electron/assets/**",
-        "../electron/run-electron.cjs"
-      ]
-    }
-  }
+        'tests/**',
+        'src/test/**',
+        '../electron/tests/**',
+        'frontend/electron/tests/**',
+        '../electron/assets/**',
+        'frontend/electron/assets/**',
+        '../electron/run-electron.cjs',
+      ],
+    },
+  },
 });

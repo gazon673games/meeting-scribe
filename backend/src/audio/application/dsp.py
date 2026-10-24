@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import List
-
 import numpy as np
 
 from audio.application.source_state import SourceState
@@ -9,7 +7,9 @@ from audio.domain.formats import AudioFormat
 from audio.domain.ports import AudioFilter
 
 
-def apply_filters(x: np.ndarray, fmt: AudioFormat, filters: List[AudioFilter]) -> np.ndarray:
+def apply_filters(
+    x: np.ndarray, fmt: AudioFormat, filters: list[AudioFilter]
+) -> np.ndarray:
     y = x
     for audio_filter in filters:
         y = audio_filter.process(y, fmt)
@@ -32,7 +32,9 @@ def pad_or_crop_n(x: np.ndarray, n: int) -> np.ndarray:
     return np.vstack([x.astype(np.float32, copy=False), pad])
 
 
-def channel_map_to_engine(x: np.ndarray, src_ch: int, eng_ch: int) -> np.ndarray:
+def channel_map_to_engine(
+    x: np.ndarray, src_ch: int, eng_ch: int
+) -> np.ndarray:
     if src_ch == eng_ch:
         return x.astype(np.float32, copy=False)
 
@@ -51,7 +53,9 @@ def channel_map_to_engine(x: np.ndarray, src_ch: int, eng_ch: int) -> np.ndarray
     return out
 
 
-def resample_to_engine_rate(x: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
+def resample_to_engine_rate(
+    x: np.ndarray, src_rate: int, dst_rate: int
+) -> np.ndarray:
     if src_rate == dst_rate:
         return x.astype(np.float32, copy=False)
 
@@ -65,21 +69,29 @@ def resample_to_engine_rate(x: np.ndarray, src_rate: int, dst_rate: int) -> np.n
         return np.zeros((0, x.shape[1]), dtype=np.float32)
 
     src_t = np.linspace(0.0, duration, num=n, endpoint=False, dtype=np.float64)
-    dst_t = np.linspace(0.0, duration, num=dst_n, endpoint=False, dtype=np.float64)
+    dst_t = np.linspace(
+        0.0, duration, num=dst_n, endpoint=False, dtype=np.float64
+    )
 
     out = np.zeros((dst_n, x.shape[1]), dtype=np.float32)
     for ch in range(x.shape[1]):
-        out[:, ch] = np.interp(dst_t, src_t, x[:, ch].astype(np.float64, copy=False)).astype(np.float32, copy=False)
+        out[:, ch] = np.interp(
+            dst_t, src_t, x[:, ch].astype(np.float64, copy=False)
+        ).astype(np.float32, copy=False)
     return out
 
 
-def apply_delay_block(state: SourceState, block: np.ndarray, blocksize: int, channels: int) -> np.ndarray:
+def apply_delay_block(
+    state: SourceState, block: np.ndarray, blocksize: int, channels: int
+) -> np.ndarray:
     if state.delay_frames <= 0:
         return block
 
     blocks_delay = int(np.ceil(state.delay_frames / float(blocksize)))
     while len(state.delay_buf) < blocks_delay:
-        state.delay_buf.append(np.zeros((blocksize, channels), dtype=np.float32))
+        state.delay_buf.append(
+            np.zeros((blocksize, channels), dtype=np.float32)
+        )
 
     state.delay_buf.append(block)
     return state.delay_buf.popleft()

@@ -23,47 +23,72 @@ from application.local_paths import (
     project_sessions_dir,
 )
 from application.model_download_parts.catalog import inaccessible_model_record
-from application.model_download_parts.inspection import coerce_summary_value, parse_readme_frontmatter
+from application.model_download_parts.inspection import (
+    coerce_summary_value,
+    parse_readme_frontmatter,
+)
 from application.model_download_parts.paths import model_cache_dir
 from application.model_download_parts.references import is_builtin_model
 from application.model_policy import ModelOrchestrator
 
 
 class ConfigAndModelHelperTests(unittest.TestCase):
-    def test_codex_profiles_settings_and_command_values_serialize_for_config(self) -> None:
+    def test_codex_profiles_settings_and_command_values_serialize_for_config(
+        self,
+    ) -> None:
         profile = CodexProfile(
-            id="deep",
-            label="Deep",
-            prompt="answer",
-            provider_id="ollama",
-            model="llama",
-            extra_args=["--flag", ""],
+            id='deep',
+            label='Deep',
+            prompt='answer',
+            provider_id='ollama',
+            model='llama',
+            extra_args=['--flag', ''],
             temperature=None,
         )
-        settings = CodexSettings(enabled=True, command_tokens=["codex", "exec"], profiles=[profile])
+        settings = CodexSettings(
+            enabled=True, command_tokens=['codex', 'exec'], profiles=[profile]
+        )
 
-        self.assertEqual(codex_command_config_value([]), "codex")
-        self.assertEqual(codex_command_config_value(["codex", "exec"]), ["codex", "exec"])
-        self.assertEqual(codex_profile_to_dict(profile)["provider"], "ollama")
+        self.assertEqual(codex_command_config_value([]), 'codex')
+        self.assertEqual(
+            codex_command_config_value(['codex', 'exec']), ['codex', 'exec']
+        )
+        self.assertEqual(codex_profile_to_dict(profile)['provider'], 'ollama')
         serialized = codex_settings_to_dict(settings)
-        self.assertEqual(serialized["command"], ["codex", "exec"])
-        self.assertEqual(serialized["profiles"][0]["model"], "llama")
+        self.assertEqual(serialized['command'], ['codex', 'exec'])
+        self.assertEqual(serialized['profiles'][0]['model'], 'llama')
 
-    def test_project_local_paths_create_local_dirs_and_cache_environment(self) -> None:
-        keys = ("HF_HUB_CACHE", "HF_HOME", "TRANSFORMERS_CACHE", "TORCH_HOME", "NEMO_CACHE_DIR", "XDG_CACHE_HOME", "TMP", "TEMP", "TMPDIR")
+    def test_project_local_paths_create_local_dirs_and_cache_environment(
+        self,
+    ) -> None:
+        keys = (
+            'HF_HUB_CACHE',
+            'HF_HOME',
+            'TRANSFORMERS_CACHE',
+            'TORCH_HOME',
+            'NEMO_CACHE_DIR',
+            'XDG_CACHE_HOME',
+            'TMP',
+            'TEMP',
+            'TMPDIR',
+        )
         old_env = {key: os.environ.get(key) for key in keys}
         old_tempdir = tempfile.tempdir
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
-                models_dir = root / "custom_models"
+                models_dir = root / 'custom_models'
 
                 configure_project_local_io(root, models_dir=models_dir)
 
-                self.assertTrue(project_sessions_dir(root, create=True).is_dir())
-                self.assertTrue(project_identity_dir(root, create=True).is_dir())
-                self.assertTrue(Path(os.environ["HF_HOME"]).is_dir())
-                self.assertEqual(tempfile.tempdir, str(root / ".local" / "tmp"))
+                self.assertTrue(
+                    project_sessions_dir(root, create=True).is_dir()
+                )
+                self.assertTrue(
+                    project_identity_dir(root, create=True).is_dir()
+                )
+                self.assertTrue(Path(os.environ['HF_HOME']).is_dir())
+                self.assertEqual(tempfile.tempdir, str(root / '.local' / 'tmp'))
                 self.assertTrue(application_root().exists())
         finally:
             for key, value in old_env.items():
@@ -73,58 +98,90 @@ class ConfigAndModelHelperTests(unittest.TestCase):
                     os.environ[key] = value
             tempfile.tempdir = old_tempdir
 
-    def test_model_records_frontmatter_builtin_policy_and_private_download_helpers(self) -> None:
-        record = inaccessible_model_record(Path("broken-model"), OSError("denied"))
-        self.assertEqual(record["status"], "inaccessible")
-        self.assertIn("OSError", record["warnings"][0])
+    def test_model_records_frontmatter_builtin_policy_and_private_download_helpers(
+        self,
+    ) -> None:
+        record = inaccessible_model_record(
+            Path('broken-model'), OSError('denied')
+        )
+        self.assertEqual(record['status'], 'inaccessible')
+        self.assertIn('OSError', record['warnings'][0])
 
-        metadata = parse_readme_frontmatter(["---", "license: mit", "ignored: value", "---"])
-        self.assertEqual(metadata["license"], "mit")
-        self.assertEqual(coerce_summary_value(["a"] * 20), (True, ["a"] * 12))
-        self.assertEqual(coerce_summary_value({"a": 1}), (True, {"a": 1}))
+        metadata = parse_readme_frontmatter(
+            ['---', 'license: mit', 'ignored: value', '---']
+        )
+        self.assertEqual(metadata['license'], 'mit')
+        self.assertEqual(coerce_summary_value(['a'] * 20), (True, ['a'] * 12))
+        self.assertEqual(coerce_summary_value({'a': 1}), (True, {'a': 1}))
         self.assertEqual(coerce_summary_value(object()), (False, None))
-        self.assertTrue(is_builtin_model("large-v3"))
+        self.assertTrue(is_builtin_model('large-v3'))
 
         with tempfile.TemporaryDirectory() as tmp:
-            local_path = Path(tmp) / "speaker.onnx"
-            local_path.write_bytes(b"data")
+            local_path = Path(tmp) / 'speaker.onnx'
+            local_path.write_bytes(b'data')
             diar_record = diarization_model_download._local_record(local_path)
-        self.assertEqual(diar_record["source"], "local-file")
+        self.assertEqual(diar_record['source'], 'local-file')
 
-        with patch.dict(os.environ, {"HF_TOKEN": "secret"}, clear=False):
-            self.assertEqual(llm_model_download._hf_headers()["Authorization"], "Bearer secret")
+        with patch.dict(os.environ, {'HF_TOKEN': 'secret'}, clear=False):
+            self.assertEqual(
+                llm_model_download._hf_headers()['Authorization'],
+                'Bearer secret',
+            )
 
-        fake_hf = SimpleNamespace(hf_hub_url=lambda repo_id, filename: f"https://hf/{repo_id}/{filename}")
-        source = llm_model_download.LlmSource(filename="model.gguf", folder="repo", repo_id="org/repo")
+        fake_hf = SimpleNamespace(
+            hf_hub_url=lambda repo_id, filename: (
+                f'https://hf/{repo_id}/{filename}'
+            )
+        )
+        source = llm_model_download.LlmSource(
+            filename='model.gguf', folder='repo', repo_id='org/repo'
+        )
         with (
-            patch.dict(sys.modules, {"huggingface_hub": fake_hf}),
-            patch.object(llm_model_download, "_download_url") as download_url,
+            patch.dict(sys.modules, {'huggingface_hub': fake_hf}),
+            patch(
+                'infrastructure.llm_model_transfer._download_url'
+            ) as download_url,
         ):
-            llm_model_download._download_hf_file(source, Path("model.gguf"), proxy="http://proxy", on_progress=lambda _: None)
+            llm_model_download._download_hf_file(
+                source,
+                Path('model.gguf'),
+                proxy='http://proxy',
+                on_progress=lambda _: None,
+            )
         download_url.assert_called_once()
 
-        fake_constants = SimpleNamespace(HF_HUB_CACHE=str(Path("hf_cache")))
-        with patch.dict(sys.modules, {"huggingface_hub": SimpleNamespace(constants=fake_constants)}):
-            self.assertEqual(model_cache_dir().name, "hf_cache")
+        fake_constants = SimpleNamespace(HF_HUB_CACHE=str(Path('hf_cache')))
+        with patch.dict(
+            sys.modules,
+            {'huggingface_hub': SimpleNamespace(constants=fake_constants)},
+        ):
+            self.assertEqual(model_cache_dir().name, 'hf_cache')
 
-    def test_model_orchestrator_recommend_returns_combined_asr_and_codex_decision(self) -> None:
+    def test_model_orchestrator_recommend_returns_combined_asr_and_codex_decision(
+        self,
+    ) -> None:
         profiles = [
-            SimpleNamespace(id="fast", label="Fast", reasoning_effort="low"),
-            SimpleNamespace(id="deep", label="Deep", reasoning_effort="high"),
+            SimpleNamespace(id='fast', label='Fast', reasoning_effort='low'),
+            SimpleNamespace(id='deep', label='Deep', reasoning_effort='high'),
         ]
 
         decision = ModelOrchestrator().recommend(
-            asr_profile="quality",
-            language="ru",
-            current_asr_model="small",
-            available_asr_models=["large-v3", "bzikst/faster-whisper-large-v3-russian"],
+            asr_profile='quality',
+            language='ru',
+            current_asr_model='small',
+            available_asr_models=[
+                'large-v3',
+                'bzikst/faster-whisper-large-v3-russian',
+            ],
             codex_profiles=profiles,
-            current_codex_profile_id="fast",
+            current_codex_profile_id='fast',
         )
 
-        self.assertEqual(decision.asr_model, "bzikst/faster-whisper-large-v3-russian")
-        self.assertEqual(decision.codex_profile_id, "deep")
+        self.assertEqual(
+            decision.asr_model, 'bzikst/faster-whisper-large-v3-russian'
+        )
+        self.assertEqual(decision.codex_profile_id, 'deep')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

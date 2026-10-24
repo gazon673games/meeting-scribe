@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Deque, Tuple
 
 import numpy as np
 
 # ── speech decision thresholds ─────────────────────────────────────────────
-_SCORE_THRESHOLD: float = 0.60       # weighted band+voiced score to count as speech-like
-_NEAR_ENERGY_RATIO: float = 0.85     # fraction of threshold for "near energy" gate
+_SCORE_THRESHOLD: float = (
+    0.60  # weighted band+voiced score to count as speech-like
+)
+_NEAR_ENERGY_RATIO: float = 0.85  # fraction of threshold for "near energy" gate
 
 # ── voicedness autocorrelation pitch range ─────────────────────────────────
 _PITCH_MIN_HZ: float = 80.0
@@ -119,14 +120,20 @@ class EnergyVAD:
         self._sm = _SpeechStateMachine(
             hangover_frames=max(0, int(round(hangover_ms / self.frame_ms))),
             min_speech_frames=max(1, int(round(min_speech_ms / self.frame_ms))),
-            min_end_silence_frames=max(0, int(round(min_end_silence_ms / self.frame_ms))),
+            min_end_silence_frames=max(
+                0, int(round(min_end_silence_ms / self.frame_ms))
+            ),
         )
         self._pre_frames = max(0, int(round(pre_speech_ms / self.frame_ms)))
-        self._prebuf: Deque[np.ndarray] = deque(maxlen=max(1, self._pre_frames) if self._pre_frames > 0 else 1)
+        self._prebuf: deque[np.ndarray] = deque(
+            maxlen=max(1, self._pre_frames) if self._pre_frames > 0 else 1
+        )
 
         # cached FFT helpers — avoids per-frame allocation
         self._win = np.hanning(self.frame_len).astype(np.float32, copy=False)
-        self._freqs = np.fft.rfftfreq(self.frame_len, d=1.0 / float(self.sample_rate))
+        self._freqs = np.fft.rfftfreq(
+            self.frame_len, d=1.0 / float(self.sample_rate)
+        )
         self._band_mask = (self._freqs >= 300.0) & (self._freqs <= 3400.0)
 
         self._last_rms = 0.0
@@ -144,11 +151,20 @@ class EnergyVAD:
     def speech_long_enough(self) -> bool:
         return self._sm.speech_long_enough()
 
-    def last_rms(self) -> float:       return float(self._last_rms)
-    def last_threshold(self) -> float: return float(self._thr)
-    def noise_rms(self) -> float:      return float(self._noise_rms)
-    def last_band_ratio(self) -> float: return float(self._last_band_ratio)
-    def last_voiced(self) -> float:    return float(self._last_voiced)
+    def last_rms(self) -> float:
+        return float(self._last_rms)
+
+    def last_threshold(self) -> float:
+        return float(self._thr)
+
+    def noise_rms(self) -> float:
+        return float(self._noise_rms)
+
+    def last_band_ratio(self) -> float:
+        return float(self._last_band_ratio)
+
+    def last_voiced(self) -> float:
+        return float(self._last_voiced)
 
     def is_speech_frame(self, frame: np.ndarray) -> bool:
         x = self._normalize_frame(frame)
@@ -160,27 +176,33 @@ class EnergyVAD:
             self._prebuf.append(x.copy())
         return speech
 
-    def pop_preroll(self) -> Tuple[np.ndarray, int]:
+    def pop_preroll(self) -> tuple[np.ndarray, int]:
         if self._pre_frames <= 0 or not self._prebuf:
             return np.zeros((0,), dtype=np.float32), 0
         frames = list(self._prebuf)
         self._prebuf.clear()
-        return np.concatenate(frames).astype(np.float32, copy=False), len(frames)
+        return np.concatenate(frames).astype(np.float32, copy=False), len(
+            frames
+        )
 
     # ── frame processing ────────────────────────────────────────────────────
 
     def _normalize_frame(self, frame: np.ndarray) -> np.ndarray:
         x = np.asarray(frame, dtype=np.float32).reshape(-1)
         if x.size < self.frame_len:
-            x = np.concatenate([x, np.zeros((self.frame_len - x.size,), dtype=np.float32)])
+            x = np.concatenate(
+                [x, np.zeros((self.frame_len - x.size,), dtype=np.float32)]
+            )
         elif x.size > self.frame_len:
             x = x[: self.frame_len]
         return x
 
-    def _extract_features(self, x: np.ndarray) -> Tuple[float, float, float]:
+    def _extract_features(self, x: np.ndarray) -> tuple[float, float, float]:
         self._frame_index += 1
         rms = self._rms(x)
-        if rms < self._thr * min(_NEAR_ENERGY_RATIO, self._features.near_thr_ratio):
+        if rms < self._thr * min(
+            _NEAR_ENERGY_RATIO, self._features.near_thr_ratio
+        ):
             self._last_rms = rms
             self._last_band_ratio = 0.0
             self._last_voiced = 0.0
@@ -201,11 +223,14 @@ class EnergyVAD:
         self._last_voiced = voiced
         return voiced
 
-    def _decide_raw_speech(self, rms: float, band_ratio: float, voiced: float) -> bool:
+    def _decide_raw_speech(
+        self, rms: float, band_ratio: float, voiced: float
+    ) -> bool:
         feat = self._features
         energy_ok = rms >= self._thr
-        score = (feat.band_ratio_weight * (1.0 if band_ratio >= feat.band_ratio_min else 0.0)
-                 + feat.voiced_weight   * (1.0 if voiced    >= feat.voiced_min        else 0.0))
+        score = feat.band_ratio_weight * (
+            1.0 if band_ratio >= feat.band_ratio_min else 0.0
+        ) + feat.voiced_weight * (1.0 if voiced >= feat.voiced_min else 0.0)
         near_energy = rms >= _NEAR_ENERGY_RATIO * self._thr
         return bool(energy_ok or (near_energy and score >= _SCORE_THRESHOLD))
 
@@ -224,7 +249,9 @@ class EnergyVAD:
     def _band_ratio(self, x: np.ndarray) -> float:
         xw = self._remove_dc(x) * self._win
         spec = np.fft.rfft(xw)
-        pwr = (spec.real * spec.real + spec.imag * spec.imag).astype(np.float32, copy=False)
+        pwr = (spec.real * spec.real + spec.imag * spec.imag).astype(
+            np.float32, copy=False
+        )
         total = float(np.sum(pwr) + 1e-12)
         band = float(np.sum(pwr[self._band_mask]) + 1e-12)
         return float(band / total)
@@ -249,12 +276,16 @@ class EnergyVAD:
 
     # ── noise adaptation ────────────────────────────────────────────────────
 
-    def _update_noise(self, rms: float, band_ratio: float, voiced: float) -> None:
+    def _update_noise(
+        self, rms: float, band_ratio: float, voiced: float
+    ) -> None:
         if not self._adaptive:
             self._thr = self._min_thr
             return
         feat = self._features
-        not_speech_like = (band_ratio < feat.band_ratio_min * 0.85) and (voiced < feat.voiced_min * 0.85)
+        not_speech_like = (band_ratio < feat.band_ratio_min * 0.85) and (
+            voiced < feat.voiced_min * 0.85
+        )
         if not_speech_like:
             if self._noise_rms <= 0.0:
                 self._noise_rms = rms

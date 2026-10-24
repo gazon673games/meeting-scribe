@@ -2,18 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional, Protocol
+from queue import Queue
+from typing import Protocol
 
 from asr.domain.types import Mode, OverloadStrategy
 from diarization.domain.types import DiarBackend
 
 
 class ASRRuntime(Protocol):
-    def start(self) -> None:
-        ...
+    def start(self) -> None: ...
 
-    def stop(self) -> None:
-        ...
+    def stop(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -37,28 +36,29 @@ class ASRSessionSettings:
     overload_beam_cap: int
     overload_max_segment_s: float
     overload_overlap_ms: float
-    asr_language: Optional[str]
-    asr_initial_prompt: Optional[str]
-    asr_hotwords: Optional[str] = None
-    source_speaker_labels: Dict[str, str] = field(default_factory=dict)
+    asr_language: str | None
+    asr_initial_prompt: str | None
+    asr_hotwords: str | None = None
+    source_speaker_labels: dict[str, str] = field(default_factory=dict)
     diarization_enabled: bool = False
-    diar_backend: DiarBackend = "online"
+    diar_backend: DiarBackend = 'online'
     diarization_sidecar_enabled: bool = True
     diarization_queue_size: int = 50
-    diar_sherpa_embedding_model_path: str = ""
-    diar_sherpa_provider: str = "cpu"
+    diar_sherpa_embedding_model_path: str = ''
+    diar_sherpa_provider: str = 'cpu'
     diar_sherpa_num_threads: int = 1
     streaming_enabled: bool = False
     streaming_chunk_interval_s: float = 1.0
     streaming_endpoint_silence_ms: float = 300.0
     speaker_identity_enabled: bool = False
     speaker_identity_persistent_profiles_enabled: bool = False
-    speaker_identity_backend: str = "file"
-    speaker_identity_app_data_dir: str = ""
+    speaker_identity_backend: str = 'file'
+    speaker_identity_app_data_dir: str = ''
     speaker_identity_auto_match_threshold: float = 0.84
     speaker_identity_uncertain_match_threshold: float = 0.74
     speaker_identity_min_speech_ms_for_embedding: int = 8000
     speaker_identity_min_quality_score: float = 0.65
+    models_dir: Path | None = None
 
 
 class ASRRuntimeFactory(Protocol):
@@ -66,8 +66,7 @@ class ASRRuntimeFactory(Protocol):
         self,
         settings: ASRSessionSettings,
         *,
-        tap_queue: Any,
+        tap_queue: Queue[dict],
         project_root: Path,
-        event_queue: Any = None,
-    ) -> ASRRuntime:
-        ...
+        event_queue: Queue[object] | None = None,
+    ) -> ASRRuntime: ...

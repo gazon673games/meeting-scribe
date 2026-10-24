@@ -1,9 +1,8 @@
-const preloadDeps = global.__MEETING_SCRIBE_PRELOAD_DEPS__ || {};
-const { contextBridge, ipcRenderer } = preloadDeps.electron || require("electron");
-const { createMeetingScribeApi } = preloadDeps.preloadApi || require("./preload-api.cjs");
+'use strict';
 
-const meetingScribeApi = createMeetingScribeApi(ipcRenderer);
+const electron = require('electron');
+const { exposeMeetingScribeApi } = require('./preload-api.cjs');
 
-contextBridge.exposeInMainWorld("meetingScribe", meetingScribeApi);
+const meetingScribeApi = exposeMeetingScribeApi(electron);
 
 module.exports = { meetingScribeApi };

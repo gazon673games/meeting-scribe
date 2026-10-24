@@ -4,25 +4,32 @@ import unittest
 
 import numpy as np
 
-from asr.infrastructure.vad import EnergyVAD
-from asr.infrastructure.vad import _SpeechStateMachine
+from asr.infrastructure.vad import EnergyVAD, _SpeechStateMachine
 
 
-def _sine_frame(freq_hz: float, amplitude: float, sample_rate: int, frame_len: int) -> np.ndarray:
+def _sine_frame(
+    freq_hz: float, amplitude: float, sample_rate: int, frame_len: int
+) -> np.ndarray:
     t = np.arange(frame_len, dtype=np.float32) / float(sample_rate)
-    return (float(amplitude) * np.sin(2.0 * np.pi * float(freq_hz) * t)).astype(np.float32)
+    return (float(amplitude) * np.sin(2.0 * np.pi * float(freq_hz) * t)).astype(
+        np.float32
+    )
 
 
 class EnergyVADTests(unittest.TestCase):
     def test_reset_and_speech_long_enough_clear_accumulated_state(self) -> None:
-        sm = _SpeechStateMachine(hangover_frames=1, min_speech_frames=2, min_end_silence_frames=0)
+        sm = _SpeechStateMachine(
+            hangover_frames=1, min_speech_frames=2, min_end_silence_frames=0
+        )
         sm.update(True)
         sm.update(True)
         self.assertTrue(sm.speech_long_enough())
         sm.reset()
         self.assertFalse(sm.speech_long_enough())
 
-        vad = EnergyVAD(energy_threshold=0.001, min_speech_ms=20, hangover_ms=20)
+        vad = EnergyVAD(
+            energy_threshold=0.001, min_speech_ms=20, hangover_ms=20
+        )
         vad.is_speech_frame(np.ones(vad.frame_len, dtype=np.float32) * 0.1)
         self.assertTrue(vad.speech_long_enough())
         vad.reset()
@@ -37,14 +44,21 @@ class EnergyVADTests(unittest.TestCase):
             voiced_every_n_frames=1,
         )
 
-        frame = _sine_frame(freq_hz=350.0, amplitude=0.06, sample_rate=vad.sample_rate, frame_len=vad.frame_len)
+        frame = _sine_frame(
+            freq_hz=350.0,
+            amplitude=0.06,
+            sample_rate=vad.sample_rate,
+            frame_len=vad.frame_len,
+        )
 
         self.assertTrue(vad.is_speech_frame(frame))
         self.assertGreater(vad.last_rms(), vad.last_threshold())
         self.assertGreater(vad.last_band_ratio(), 0.35)
         self.assertGreater(vad.last_voiced(), 0.12)
 
-    def test_near_threshold_speech_like_frame_uses_band_and_voiced_path(self) -> None:
+    def test_near_threshold_speech_like_frame_uses_band_and_voiced_path(
+        self,
+    ) -> None:
         vad = EnergyVAD(
             sample_rate=16000,
             frame_ms=20,
@@ -53,7 +67,12 @@ class EnergyVADTests(unittest.TestCase):
             voiced_every_n_frames=1,
         )
 
-        frame = _sine_frame(freq_hz=350.0, amplitude=0.027, sample_rate=vad.sample_rate, frame_len=vad.frame_len)
+        frame = _sine_frame(
+            freq_hz=350.0,
+            amplitude=0.027,
+            sample_rate=vad.sample_rate,
+            frame_len=vad.frame_len,
+        )
 
         self.assertTrue(vad.is_speech_frame(frame))
         self.assertLess(vad.last_rms(), vad.last_threshold())
@@ -61,7 +80,9 @@ class EnergyVADTests(unittest.TestCase):
         self.assertGreater(vad.last_band_ratio(), 0.35)
         self.assertGreater(vad.last_voiced(), 0.12)
 
-    def test_adaptive_threshold_increases_after_repeated_non_speech_noise(self) -> None:
+    def test_adaptive_threshold_increases_after_repeated_non_speech_noise(
+        self,
+    ) -> None:
         vad = EnergyVAD(
             sample_rate=16000,
             frame_ms=20,
@@ -71,7 +92,12 @@ class EnergyVADTests(unittest.TestCase):
             voiced_every_n_frames=1,
         )
 
-        noise_frame = _sine_frame(freq_hz=6000.0, amplitude=0.004, sample_rate=vad.sample_rate, frame_len=vad.frame_len)
+        noise_frame = _sine_frame(
+            freq_hz=6000.0,
+            amplitude=0.004,
+            sample_rate=vad.sample_rate,
+            frame_len=vad.frame_len,
+        )
 
         decisions = [vad.is_speech_frame(noise_frame) for _ in range(12)]
 
@@ -90,7 +116,12 @@ class EnergyVADTests(unittest.TestCase):
             voiced_every_n_frames=1,
         )
 
-        speech = _sine_frame(freq_hz=350.0, amplitude=0.06, sample_rate=vad.sample_rate, frame_len=vad.frame_len)
+        speech = _sine_frame(
+            freq_hz=350.0,
+            amplitude=0.06,
+            sample_rate=vad.sample_rate,
+            frame_len=vad.frame_len,
+        )
         silence = np.zeros((vad.frame_len,), dtype=np.float32)
 
         results = [
@@ -113,7 +144,12 @@ class EnergyVADTests(unittest.TestCase):
             voiced_every_n_frames=1,
         )
 
-        speech = _sine_frame(freq_hz=350.0, amplitude=0.06, sample_rate=vad.sample_rate, frame_len=vad.frame_len)
+        speech = _sine_frame(
+            freq_hz=350.0,
+            amplitude=0.06,
+            sample_rate=vad.sample_rate,
+            frame_len=vad.frame_len,
+        )
         silence = np.zeros((vad.frame_len,), dtype=np.float32)
 
         results = [
@@ -136,7 +172,12 @@ class EnergyVADTests(unittest.TestCase):
         )
 
         frames = [
-            _sine_frame(freq_hz=50.0, amplitude=amp, sample_rate=vad.sample_rate, frame_len=vad.frame_len)
+            _sine_frame(
+                freq_hz=50.0,
+                amplitude=amp,
+                sample_rate=vad.sample_rate,
+                frame_len=vad.frame_len,
+            )
             for amp in (0.002, 0.003, 0.004, 0.005)
         ]
 
@@ -148,7 +189,9 @@ class EnergyVADTests(unittest.TestCase):
         self.assertEqual(count, 3)
         self.assertEqual(preroll.shape, (vad.frame_len * 3,))
         np.testing.assert_allclose(preroll[: vad.frame_len], frames[1])
-        np.testing.assert_allclose(preroll[vad.frame_len : 2 * vad.frame_len], frames[2])
+        np.testing.assert_allclose(
+            preroll[vad.frame_len : 2 * vad.frame_len], frames[2]
+        )
         np.testing.assert_allclose(preroll[2 * vad.frame_len :], frames[3])
 
         empty, empty_count = vad.pop_preroll()
@@ -156,5 +199,5 @@ class EnergyVADTests(unittest.TestCase):
         self.assertEqual(empty.shape, (0,))
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

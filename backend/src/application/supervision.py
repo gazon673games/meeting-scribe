@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Sequence
 
 
 class SupervisionStatus(str, Enum):
-    HEALTHY = "healthy"
-    DEGRADED = "degraded"
-    FAILED = "failed"
+    HEALTHY = 'healthy'
+    DEGRADED = 'degraded'
+    FAILED = 'failed'
 
 
 @dataclass(frozen=True)

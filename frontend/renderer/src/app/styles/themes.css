@@ -45,8 +45,8 @@
   --speaker-9-text: #bef264;
 }
 
-.app-shell[data-theme="light"],
-.debug-console-shell[data-theme="light"] {
+.app-shell[data-theme='light'],
+.debug-console-shell[data-theme='light'] {
   --speaker-0-bg: rgba(37, 99, 235, 0.12);
   --speaker-0-text: #1d4ed8;
   --speaker-1-bg: rgba(126, 34, 206, 0.12);
@@ -69,57 +69,97 @@
   --speaker-9-text: #4d7c0f;
 }
 
-.app-shell[data-theme="grimdark"],
-.debug-console-shell[data-theme="grimdark"] {
+.app-shell[data-theme='grimdark'],
+.debug-console-shell[data-theme='grimdark'] {
   color-scheme: dark;
 
   /* The complete Army Painter palette; all tints derive from these colors. */
-  --the-darkness: #21252C;
-  --ivory-white: #F6E2BD;
+  --the-darkness: #21252c;
+  --ivory-white: #f6e2bd;
   --ironclad-grey: #323438;
-  --moonbeam-yellow: #F0B81D;
-  --blighted-green: #1E2C2D;
-  --banshee-brown: #342B28;
-  --bloodmoon-red: #C63130;
-  --warm-skin-shade: #73573D;
-  --grimdark-shadow: #40403A;
-  --emperor-gold: #5A4427;
-  --fiery-vermilion: #B01A11;
-  --blanched-berry: #37232B;
+  --moonbeam-yellow: #f0b81d;
+  --blighted-green: #1e2c2d;
+  --banshee-brown: #342b28;
+  --bloodmoon-red: #c63130;
+  --warm-skin-shade: #73573d;
+  --grimdark-shadow: #40403a;
+  --emperor-gold: #5a4427;
+  --fiery-vermilion: #b01a11;
+  --blanched-berry: #37232b;
   --sunburst-ochre: #714529;
-  --midnight-olive: #31352C;
-  --tainted-garden: #3E3E2A;
+  --midnight-olive: #31352c;
+  --tainted-garden: #3e3e2a;
   --ruddy-terra: #804339;
-  --turnbull-turquoise: #3A4C53;
-  --voodoo-shade: #50422B;
-  --grim-rust: #3B230D;
-  --heavy-metal: #3E3E3E;
+  --turnbull-turquoise: #3a4c53;
+  --voodoo-shade: #50422b;
+  --grim-rust: #3b230d;
+  --heavy-metal: #3e3e3e;
 
   --accent: var(--moonbeam-yellow);
-  --accent-strong: color-mix(in srgb, var(--moonbeam-yellow) 85%, var(--ivory-white));
+  --accent-strong: color-mix(
+    in srgb,
+    var(--moonbeam-yellow) 85%,
+    var(--ivory-white)
+  );
   --accent-soft: color-mix(in srgb, var(--moonbeam-yellow) 14%, transparent);
   --app-bg: var(--the-darkness);
   --bar-bg: color-mix(in srgb, var(--the-darkness) 55%, var(--ironclad-grey));
   --panel-bg: color-mix(in srgb, var(--the-darkness) 85%, var(--ironclad-grey));
   --panel-bg-strong: var(--ironclad-grey);
-  --panel-bg-soft: color-mix(in srgb, var(--ironclad-grey) 65%, var(--the-darkness));
+  --panel-bg-soft: color-mix(
+    in srgb,
+    var(--ironclad-grey) 65%,
+    var(--the-darkness)
+  );
   --hover-bg: var(--heavy-metal);
   --hover-bg-strong: var(--grimdark-shadow);
   --border: var(--heavy-metal);
-  --border-soft: color-mix(in srgb, var(--heavy-metal) 60%, var(--the-darkness));
-  --border-strong: color-mix(in srgb, var(--heavy-metal) 85%, var(--ivory-white));
+  --border-soft: color-mix(
+    in srgb,
+    var(--heavy-metal) 60%,
+    var(--the-darkness)
+  );
+  --border-strong: color-mix(
+    in srgb,
+    var(--heavy-metal) 85%,
+    var(--ivory-white)
+  );
   --text: color-mix(in srgb, var(--ivory-white) 88%, var(--ironclad-grey));
   --heading: color-mix(in srgb, var(--ivory-white) 95%, var(--ironclad-grey));
   --control-text: var(--text);
-  --muted: color-mix(in srgb, var(--ivory-white) 60%, var(--turnbull-turquoise));
-  --subtle: color-mix(in srgb, var(--ivory-white) 72%, var(--turnbull-turquoise));
-  --faint: color-mix(in srgb, var(--ivory-white) 56%, var(--turnbull-turquoise));
-  --disabled-text: color-mix(in srgb, var(--ivory-white) 40%, var(--turnbull-turquoise));
+  --muted: color-mix(
+    in srgb,
+    var(--ivory-white) 60%,
+    var(--turnbull-turquoise)
+  );
+  --subtle: color-mix(
+    in srgb,
+    var(--ivory-white) 72%,
+    var(--turnbull-turquoise)
+  );
+  --faint: color-mix(
+    in srgb,
+    var(--ivory-white) 56%,
+    var(--turnbull-turquoise)
+  );
+  --disabled-text: color-mix(
+    in srgb,
+    var(--ivory-white) 40%,
+    var(--turnbull-turquoise)
+  );
   --on-accent: var(--the-darkness);
   --on-danger: var(--ivory-white);
   --control-knob: var(--subtle);
-  --toggle-on-bg: color-mix(in srgb, var(--moonbeam-yellow) 70%, var(--emperor-gold));
-  --danger: color-mix(in srgb, var(--bloodmoon-red) 75%, var(--fiery-vermilion));
+  --toggle-on-bg: color-mix(
+    in srgb,
+    var(--moonbeam-yellow) 70%,
+    var(--emperor-gold)
+  );
+  --danger: color-mix(
+    in srgb,
+    var(--bloodmoon-red) 75%,
+    var(--fiery-vermilion)
+  );
   --danger-soft: color-mix(in srgb, var(--ivory-white) 65%, var(--ruddy-terra));
   --warn: var(--moonbeam-yellow);
   --success: color-mix(in srgb, var(--ivory-white) 64%, var(--blighted-green));
@@ -139,13 +179,29 @@
   --backdrop: color-mix(in srgb, var(--the-darkness) 78%, transparent);
 
   --info: color-mix(in srgb, var(--ivory-white) 78%, var(--turnbull-turquoise));
-  --info-soft: color-mix(in srgb, var(--turnbull-turquoise) 50%, var(--the-darkness));
+  --info-soft: color-mix(
+    in srgb,
+    var(--turnbull-turquoise) 50%,
+    var(--the-darkness)
+  );
   --info-badge-text: var(--info);
   --info-badge-bg: var(--info-soft);
   --info-strong: var(--info);
-  --selected-bg: color-mix(in srgb, var(--emperor-gold) 24%, var(--ironclad-grey));
-  --selected-border: color-mix(in srgb, var(--moonbeam-yellow) 40%, var(--emperor-gold));
-  --success-soft: color-mix(in srgb, var(--tainted-garden) 55%, var(--the-darkness));
+  --selected-bg: color-mix(
+    in srgb,
+    var(--emperor-gold) 24%,
+    var(--ironclad-grey)
+  );
+  --selected-border: color-mix(
+    in srgb,
+    var(--moonbeam-yellow) 40%,
+    var(--emperor-gold)
+  );
+  --success-soft: color-mix(
+    in srgb,
+    var(--tainted-garden) 55%,
+    var(--the-darkness)
+  );
   --success-border: var(--midnight-olive);
   --success-ring: color-mix(in srgb, var(--ivory-white) 12%, transparent);
   --success-text: var(--success);
@@ -180,43 +236,59 @@
   --speaker-9-text: var(--ivory-white);
 }
 
-.app-shell[data-theme="grimdark"] ::selection {
+.app-shell[data-theme='grimdark'] ::selection {
   background: var(--moonbeam-yellow);
   color: var(--the-darkness);
 }
 
-:is(.app-shell, .debug-console-shell)[data-theme="grimdark"] * {
+:is(.app-shell, .debug-console-shell)[data-theme='grimdark'] * {
   scrollbar-color: var(--border-strong) var(--panel-bg);
   scrollbar-width: thin;
 }
 
-:is(.app-shell, .debug-console-shell)[data-theme="grimdark"] :is(button, input, select, textarea, summary):focus-visible {
+:is(.app-shell, .debug-console-shell)[data-theme='grimdark']
+  :is(button, input, select, textarea, summary):focus-visible {
   outline: 2px solid var(--selected-border);
   outline-offset: 2px;
 }
 
 /* Bright gold is reserved for available primary actions. */
-.app-shell[data-theme="grimdark"] :is(button, input, select, textarea) {
+.app-shell[data-theme='grimdark'] :is(button, input, select, textarea) {
   border-radius: 6px;
-  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
-.app-shell[data-theme="grimdark"] .record-button {
+.app-shell[data-theme='grimdark'] .record-button {
   border-radius: 8px;
 }
 
-.app-shell[data-theme="grimdark"] .theme-segmented button.selected {
+.app-shell[data-theme='grimdark'] .theme-segmented button.selected {
   background: var(--selected-bg);
   color: var(--text);
   box-shadow: inset 0 0 0 1px var(--selected-border);
 }
 
-.app-shell[data-theme="grimdark"] :is(.feature-toggle, .action-button, .assistant-ping-btn):not(:disabled):hover {
+.app-shell[data-theme='grimdark']
+  :is(.feature-toggle, .action-button, .assistant-ping-btn):not(
+    :disabled
+  ):hover {
   background: var(--hover-bg);
   border-color: var(--border-strong);
 }
 
-.app-shell[data-theme="grimdark"] :is(.record-button, .assistant-input button, .save-button, .action-button, .assistant-auth-button, .assistant-ping-button, .assistant-ping-btn):disabled {
+.app-shell[data-theme='grimdark']
+  :is(
+    .record-button,
+    .assistant-input button,
+    .save-button,
+    .action-button,
+    .assistant-auth-button,
+    .assistant-ping-button,
+    .assistant-ping-btn
+  ):disabled {
   background: var(--panel-bg-soft);
   border-color: var(--border-soft);
   color: var(--disabled-text);
@@ -224,164 +296,168 @@
   filter: none;
 }
 
-.app-shell[data-theme="grimdark"] .action-button:disabled svg {
+.app-shell[data-theme='grimdark'] .action-button:disabled svg {
   color: inherit;
 }
 
-.app-shell[data-theme="grimdark"] :is(.record-button:not(.stop), .assistant-input button, .save-button):not(:disabled):hover {
+.app-shell[data-theme='grimdark']
+  :is(.record-button:not(.stop), .assistant-input button, .save-button):not(
+    :disabled
+  ):hover {
   background: var(--accent-strong);
   filter: none;
 }
 
 /* Neutral tracks and a small, muted gold mark distinguish toggle states. */
-.app-shell[data-theme="grimdark"] .switch-button {
+.app-shell[data-theme='grimdark'] .switch-button {
   border-radius: 999px;
   background: var(--heavy-metal);
 }
 
-.app-shell[data-theme="grimdark"] .feature-toggle b {
+.app-shell[data-theme='grimdark'] .feature-toggle b {
   background: var(--heavy-metal);
 }
 
-.app-shell[data-theme="grimdark"] .feature-toggle {
+.app-shell[data-theme='grimdark'] .feature-toggle {
   background: var(--panel-bg-soft);
 }
 
-.app-shell[data-theme="grimdark"] .feature-toggle:disabled {
+.app-shell[data-theme='grimdark'] .feature-toggle:disabled {
   opacity: 1;
 }
 
-.app-shell[data-theme="grimdark"] .feature-toggle:disabled > span {
+.app-shell[data-theme='grimdark'] .feature-toggle:disabled > span {
   color: var(--disabled-text);
 }
 
-.app-shell[data-theme="grimdark"] .switch-button.on,
-.app-shell[data-theme="grimdark"] .feature-toggle.selected b {
+.app-shell[data-theme='grimdark'] .switch-button.on,
+.app-shell[data-theme='grimdark'] .feature-toggle.selected b {
   background: var(--toggle-on-bg);
 }
 
-.app-shell[data-theme="grimdark"] .switch-button.on span,
-.app-shell[data-theme="grimdark"] .feature-toggle.selected b::after {
+.app-shell[data-theme='grimdark'] .switch-button.on span,
+.app-shell[data-theme='grimdark'] .feature-toggle.selected b::after {
   background: var(--on-accent);
 }
 
-.app-shell[data-theme="grimdark"] .record-button.stop:not(:disabled):hover {
+.app-shell[data-theme='grimdark'] .record-button.stop:not(:disabled):hover {
   background: var(--fiery-vermilion);
   filter: none;
 }
 
 /* Lighter typography and consistent surfaces keep long sessions comfortable. */
-.app-shell[data-theme="grimdark"] .column-header h2 {
+.app-shell[data-theme='grimdark'] .column-header h2 {
   font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: none;
 }
 
-.app-shell[data-theme="grimdark"] .settings-section-head h3 {
+.app-shell[data-theme='grimdark'] .settings-section-head h3 {
   font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: none;
 }
 
-.app-shell[data-theme="grimdark"] :is(.section-label, .resource-strip-head) {
+.app-shell[data-theme='grimdark'] :is(.section-label, .resource-strip-head) {
   font-size: 12px;
   font-weight: 500;
   letter-spacing: 0.06em;
 }
 
-.app-shell[data-theme="grimdark"] .source-head {
+.app-shell[data-theme='grimdark'] .source-head {
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.app-shell[data-theme="grimdark"] .source-title {
+.app-shell[data-theme='grimdark'] .source-title {
   min-width: min(100%, 110px);
 }
 
-.app-shell[data-theme="grimdark"] .source-title strong {
+.app-shell[data-theme='grimdark'] .source-title strong {
   font-size: 14px;
   font-weight: 500;
   white-space: normal;
   overflow-wrap: anywhere;
 }
 
-.app-shell[data-theme="grimdark"] .source-actions {
+.app-shell[data-theme='grimdark'] .source-actions {
   margin-left: auto;
 }
 
-.app-shell[data-theme="grimdark"] .column-resizer {
+.app-shell[data-theme='grimdark'] .column-resizer {
   border-radius: 0;
 }
 
-.app-shell[data-theme="grimdark"] .icon-button {
+.app-shell[data-theme='grimdark'] .icon-button {
   background: transparent;
   border-color: transparent;
 }
 
-.app-shell[data-theme="grimdark"] .icon-button:not(:disabled):hover {
+.app-shell[data-theme='grimdark'] .icon-button:not(:disabled):hover {
   background: var(--panel-bg-strong);
   border-color: var(--border);
 }
 
-.app-shell[data-theme="grimdark"] .settings-trigger.dirty {
+.app-shell[data-theme='grimdark'] .settings-trigger.dirty {
   border-color: var(--selected-border);
 }
 
-.app-shell[data-theme="grimdark"] .settings-trigger.dirty span {
+.app-shell[data-theme='grimdark'] .settings-trigger.dirty span {
   background: var(--accent);
 }
 
-.app-shell[data-theme="grimdark"] :is(.transcript-line p, .assistant-response p) {
+.app-shell[data-theme='grimdark']
+  :is(.transcript-line p, .assistant-response p) {
   font-weight: 400;
   line-height: 1.65;
 }
 
-.app-shell[data-theme="grimdark"] .stat-line strong {
+.app-shell[data-theme='grimdark'] .stat-line strong {
   color: var(--control-text);
   font-weight: 500;
 }
 
-.app-shell[data-theme="grimdark"] .stat-line.warn strong {
+.app-shell[data-theme='grimdark'] .stat-line.warn strong {
   color: var(--warn);
 }
 
-.app-shell[data-theme="grimdark"] .assistant-response {
+.app-shell[data-theme='grimdark'] .assistant-response {
   background: var(--app-bg);
   border-color: var(--border-soft);
   border-radius: 10px;
 }
 
-.app-shell[data-theme="grimdark"] .assistant-chat-empty {
+.app-shell[data-theme='grimdark'] .assistant-chat-empty {
   justify-content: flex-start;
   padding-top: 8px;
 }
 
-.app-shell[data-theme="grimdark"] .assistant-provider-notice {
+.app-shell[data-theme='grimdark'] .assistant-provider-notice {
   color: var(--subtle);
 }
 
-.app-shell[data-theme="grimdark"] .top-status.idle span {
+.app-shell[data-theme='grimdark'] .top-status.idle span {
   width: 12px;
   height: 12px;
   background: transparent;
 }
 
-.app-shell[data-theme="grimdark"] .top-status.idle span::before {
-  content: "\2713";
+.app-shell[data-theme='grimdark'] .top-status.idle span::before {
+  content: '\2713';
   display: block;
   color: var(--success);
   font-size: 12px;
   line-height: 12px;
 }
 
-.app-shell[data-theme="grimdark"] .column-dot.idle {
+.app-shell[data-theme='grimdark'] .column-dot.idle {
   border: 1px solid var(--border-strong);
   background: transparent;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .app-shell[data-theme="grimdark"] :is(button, input, select, textarea) {
+  .app-shell[data-theme='grimdark'] :is(button, input, select, textarea) {
     transition: none;
   }
 }

@@ -20,23 +20,25 @@ class _OfflineRunner:
 
 
 class SessionTaskTests(unittest.TestCase):
-    def test_offline_pass_use_case_creates_log_output_and_delegates_to_runner(self) -> None:
+    def test_offline_pass_use_case_creates_log_output_and_delegates_to_runner(
+        self,
+    ) -> None:
         runner = _OfflineRunner()
 
         with tempfile.TemporaryDirectory() as tmp:
             result = OfflinePassUseCase(runner).execute(
                 OfflinePassRequest(
                     project_root=Path(tmp),
-                    wav_path=Path(tmp) / "session.wav",
-                    model_name="",
+                    wav_path=Path(tmp) / 'session.wav',
+                    model_name='',
                     language=None,
                 )
             )
 
         self.assertTrue(OfflinePassUseCase(runner).available())
-        self.assertTrue(result.out_txt.name.startswith("offline_transcript_"))
-        self.assertEqual(runner.requests[0].model_name, "large-v3")
+        self.assertTrue(result.out_txt.name.startswith('offline_transcript_'))
+        self.assertEqual(runner.requests[0].model_name, 'large-v3')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

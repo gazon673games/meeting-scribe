@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Optional, Protocol
+from collections.abc import Callable
+from typing import Any, Protocol
 
 
 class BackgroundTaskHandle(Protocol):
-    def join(self, timeout: Optional[float] = None) -> None:
-        ...
+    def join(self, timeout: float | None = None) -> None: ...
 
 
 class BackgroundTaskRunner(Protocol):
@@ -15,6 +15,5 @@ class BackgroundTaskRunner(Protocol):
         name: str,
         target: Callable[..., None],
         args: tuple[Any, ...] = (),
-        kwargs: Optional[dict[str, Any]] = None,
-    ) -> BackgroundTaskHandle:
-        ...
+        kwargs: dict[str, Any] | None = None,
+    ) -> BackgroundTaskHandle: ...

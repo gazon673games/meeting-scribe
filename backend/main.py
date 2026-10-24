@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+# ruff: noqa: E402
+# Runtime bootstrap must configure import paths before application imports.
 import subprocess
 import sys
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
-_BACKEND_ROOT = _PROJECT_ROOT / "backend"
-_SRC_ROOT = _BACKEND_ROOT / "src"
+_BACKEND_ROOT = _PROJECT_ROOT / 'backend'
+_SRC_ROOT = _BACKEND_ROOT / 'src'
 if _SRC_ROOT.exists():
     src_text = str(_SRC_ROOT)
     if src_text not in sys.path:
@@ -18,13 +20,17 @@ from settings.infrastructure.runtime_config import ensure_runtime_config
 
 
 def _runtime_root() -> Path:
-    return Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else _PROJECT_ROOT
+    return (
+        Path(sys.executable).resolve().parent
+        if getattr(sys, 'frozen', False)
+        else _PROJECT_ROOT
+    )
 
 
 def _repair_config() -> None:
     root = _runtime_root()
     configure_project_local_io(root)
-    ensure_runtime_config(root, JsonConfigRepository(root / "config.json"))
+    ensure_runtime_config(root, JsonConfigRepository(root / 'config.json'))
 
 
 def _run_backend() -> None:
@@ -34,18 +40,22 @@ def _run_backend() -> None:
 
 
 def _run_electron_dev() -> None:
-    if not (_PROJECT_ROOT / "package.json").exists():
-        raise SystemExit("Electron package.json was not found.")
-    subprocess.run(["npm.cmd" if sys.platform == "win32" else "npm", "run", "dev"], cwd=_PROJECT_ROOT, check=True)
+    if not (_PROJECT_ROOT / 'package.json').exists():
+        raise SystemExit('Electron package.json was not found.')
+    subprocess.run(
+        ['npm.cmd' if sys.platform == 'win32' else 'npm', 'run', 'dev'],
+        cwd=_PROJECT_ROOT,
+        check=True,
+    )
 
 
-if __name__ == "__main__":
-    if "--repair-config" in sys.argv:
+if __name__ == '__main__':
+    if '--repair-config' in sys.argv:
         _repair_config()
         raise SystemExit(0)
-    if "--smoke-import" in sys.argv:
+    if '--smoke-import' in sys.argv:
         raise SystemExit(0)
-    if "--backend" in sys.argv:
+    if '--backend' in sys.argv:
         _run_backend()
     else:
         _run_electron_dev()

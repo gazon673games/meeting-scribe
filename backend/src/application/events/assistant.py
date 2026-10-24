@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar, Optional
+from typing import ClassVar
 
 from application.events.base import EventType, TypedEvent, init_event
 
@@ -9,17 +9,17 @@ from application.events.base import EventType, TypedEvent, init_event
 @dataclass(frozen=True)
 class CodexResultEvent(TypedEvent):
     record_fields: ClassVar[tuple[str, ...]] = (
-        "ok",
-        "profile",
-        "cmd",
-        "text",
-        "dt_s",
-        "provider",
-        "model",
-        "error_code",
-        "retryable",
-        "suggestion",
-        "details",
+        'ok',
+        'profile',
+        'cmd',
+        'text',
+        'dt_s',
+        'provider',
+        'model',
+        'error_code',
+        'retryable',
+        'suggestion',
+        'details',
     )
     ok: bool
     profile: str
@@ -41,13 +41,13 @@ class CodexResultEvent(TypedEvent):
         cmd: str,
         text: str,
         dt_s: float,
-        provider: str = "codex",
-        model: str = "",
-        error_code: str = "",
+        provider: str = 'codex',
+        model: str = '',
+        error_code: str = '',
         retryable: bool = False,
-        suggestion: str = "",
-        details: str = "",
-        ts: Optional[float] = None,
+        suggestion: str = '',
+        details: str = '',
+        ts: float | None = None,
     ):
         init_event(
             self,
@@ -58,23 +58,25 @@ class CodexResultEvent(TypedEvent):
             cmd=str(cmd),
             text=str(text),
             dt_s=float(dt_s),
-            provider=str(provider or "codex"),
-            model=str(model or ""),
-            error_code=str(error_code or ""),
+            provider=str(provider or 'codex'),
+            model=str(model or ''),
+            error_code=str(error_code or ''),
             retryable=bool(retryable),
-            suggestion=str(suggestion or ""),
-            details=str(details or ""),
+            suggestion=str(suggestion or ''),
+            details=str(details or ''),
         )
 
 
 @dataclass(frozen=True)
 class CodexFallbackStartedEvent(TypedEvent):
-    record_fields: ClassVar[tuple[str, ...]] = ("profile", "cmd", "reason")
+    record_fields: ClassVar[tuple[str, ...]] = ('profile', 'cmd', 'reason')
     profile: str
     cmd: str
     reason: str
 
-    def __init__(self, *, profile: str, cmd: str, reason: str, ts: Optional[float] = None):
+    def __init__(
+        self, *, profile: str, cmd: str, reason: str, ts: float | None = None
+    ):
         init_event(
             self,
             EventType.CODEX_FALLBACK_STARTED,

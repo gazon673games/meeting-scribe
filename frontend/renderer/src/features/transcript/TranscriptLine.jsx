@@ -1,10 +1,12 @@
-import { formatTime } from "../../shared/lib/format";
+import { formatTime } from '../../shared/lib/format';
 
-export function TranscriptLine({ line, speaker, tone = 0 }) {
+export const TranscriptLine = ({ line, speaker, tone = 0 }) => {
   const body = line.tentative ? (
     <>
-      {line.confirmedText || ""}
-      {line.tentativeText ? <span className="transcript-tentative"> {line.tentativeText}</span> : null}
+      {line.confirmedText || ''}
+      {line.tentativeText ? (
+        <span className="transcript-tentative"> {line.tentativeText}</span>
+      ) : null}
     </>
   ) : (
     line.text
@@ -18,4 +20,4 @@ export function TranscriptLine({ line, speaker, tone = 0 }) {
       <p>{body}</p>
     </div>
   );
-}
+};

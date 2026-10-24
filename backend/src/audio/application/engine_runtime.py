@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import queue
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Set, Tuple
+from typing import Any
 
 from audio.application.tap_config import TapConfig
 from audio.domain.formats import AudioFormat
@@ -11,10 +11,10 @@ from audio.domain.types import TapMode
 
 @dataclass
 class EngineRuntimeState:
-    tap_q: Optional["queue.Queue[dict]"] = None
+    tap_q: queue.Queue[dict] | None = None
     tap_queue_max: int = 200
-    tap_mode: TapMode = "both"
-    tap_sources_filter: Optional[Set[str]] = None
+    tap_mode: TapMode = 'both'
+    tap_sources_filter: set[str] | None = None
     tap_drop_threshold: float = 0.85
     output_enabled: bool = False
     tick_index: int = 0
@@ -23,11 +23,11 @@ class EngineRuntimeState:
     dropped_out_blocks: int = 0
     dropped_tap_blocks: int = 0
     autosync_enabled: bool = False
-    autosync_ref: Optional[str] = None
-    autosync_target: Optional[str] = None
+    autosync_ref: str | None = None
+    autosync_target: str | None = None
     autosync_last_offset_ms: float = 0.0
 
-    def set_tap_queue(self, tap_queue: Optional["queue.Queue[dict]"]) -> None:
+    def set_tap_queue(self, tap_queue: queue.Queue[dict] | None) -> None:
         self.tap_q = tap_queue
         self.dropped_tap_blocks = 0
 
@@ -41,7 +41,9 @@ class EngineRuntimeState:
         self.tap_sources_filter = config.sources_filter
         self.tap_drop_threshold = config.drop_threshold
 
-    def enable_auto_sync(self, reference_source: str, target_source: str) -> None:
+    def enable_auto_sync(
+        self, reference_source: str, target_source: str
+    ) -> None:
         self.autosync_enabled = True
         self.autosync_ref = reference_source
         self.autosync_target = target_source
@@ -65,7 +67,7 @@ class EngineRuntimeState:
         self.dropped_tap_blocks = 0
         self.autosync_last_offset_ms = 0.0
 
-    def next_mix_window(self, period_s: float) -> Tuple[float, float]:
+    def next_mix_window(self, period_s: float) -> tuple[float, float]:
         t_start = float(self.tick_index) * period_s
         self.tick_index += 1
         return t_start, t_start + period_s
@@ -80,8 +82,11 @@ class EngineRuntimeState:
     def record_tap_drop(self) -> None:
         self.dropped_tap_blocks += 1
 
-    def meter_snapshot(self, fmt: AudioFormat, registry_state: Dict[str, Any]) -> dict:
+    def meter_snapshot(
+        self, fmt: AudioFormat, registry_state: dict[str, Any]
+    ) -> dict:
         from audio.application.engine_meters import build_meter_snapshot
+
         return build_meter_snapshot(
             fmt=fmt,
             state=registry_state,

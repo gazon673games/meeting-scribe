@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import List
 
 
 @dataclass(frozen=True)
@@ -12,7 +11,7 @@ class DomainEvent:
 
 class AggregateRoot:
     def __init__(self) -> None:
-        self._domain_events: List[DomainEvent] = []
+        self._domain_events: list[DomainEvent] = []
 
     @property
     def domain_events(self) -> tuple[DomainEvent, ...]:

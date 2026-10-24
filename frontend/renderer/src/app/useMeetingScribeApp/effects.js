@@ -1,76 +1,115 @@
-import React from "react";
+import React from 'react';
 
-import { FALLBACK_OPTIONS, makeSettingsDraft } from "../../entities/settings/model";
-import { meetingScribeClient } from "../../shared/api/meetingScribeClient";
-import { emptyResourceUsage } from "./constants";
-import { formatRequestError } from "./errors";
-import { applyLockedProfileDefaults } from "./settingsDraft";
-import { mergeBackendStateSnapshot } from "./transcriptState";
+import {
+  FALLBACK_OPTIONS,
+  makeSettingsDraft,
+} from '../../entities/settings/model';
+import { meetingScribeClient } from '../../shared/api/meetingScribeClient';
+import { emptyResourceUsage } from './constants';
+import { formatRequestError } from './errors';
+import { applyLockedProfileDefaults } from './settingsDraft';
+import { mergeBackendStateSnapshot } from './transcriptState';
 
-export function useBackendEventSubscription({ refresh, handlers }) {
+export const useBackendEventSubscription = ({ refresh, handler }) => {
   React.useEffect(() => {
     refresh();
-    return meetingScribeClient.onBackendEvent((event) => handlers(event));
-  }, [handlers, refresh]);
-}
+    return meetingScribeClient.onBackendEvent(handler);
+  }, [handler, refresh]);
+};
 
-export function useSettingsDraftSync({ config, settingsDirty, stateOptions, setSettingsDraft }) {
+export const useSettingsDraftSync = ({
+  config,
+  settingsDirty,
+  stateOptions,
+  setSettingsDraft,
+}) => {
   React.useEffect(() => {
     if (!settingsDirty) {
-      const next = applyLockedProfileDefaults(makeSettingsDraft(config), stateOptions || FALLBACK_OPTIONS);
+      const next = applyLockedProfileDefaults(
+        makeSettingsDraft(config),
+        stateOptions || FALLBACK_OPTIONS,
+      );
       setSettingsDraft(next);
     }
   }, [config, settingsDirty, stateOptions, setSettingsDraft]);
-}
+};
 
-export function useContentProtectionSync({ config, settingsDirty, settingsDraft, setError }) {
+export const useContentProtectionSync = ({
+  config,
+  settingsDirty,
+  settingsDraft,
+  setError,
+}) => {
   React.useEffect(() => {
     if (!config) return;
     const savedDraft = makeSettingsDraft(config);
-    const enabled = settingsDirty ? settingsDraft.screenCaptureProtection : savedDraft.screenCaptureProtection;
-    meetingScribeClient.setContentProtection(Boolean(enabled)).catch((requestError) => {
-      setError(formatRequestError(requestError));
-    });
+    const enabled = settingsDirty
+      ? settingsDraft.screenCaptureProtection
+      : savedDraft.screenCaptureProtection;
+    meetingScribeClient
+      .setContentProtection(Boolean(enabled))
+      .catch((requestError) => {
+        setError(formatRequestError(requestError));
+      });
   }, [config, settingsDirty, settingsDraft.screenCaptureProtection, setError]);
-}
+};
 
-export function useRuntimeStatePolling({ isRunning, setState, setError }) {
+export const useRuntimeStatePolling = ({ isRunning, setState, setError }) => {
   React.useEffect(() => {
     if (!isRunning) {
       return undefined;
     }
-    const handle = window.setInterval(() => {
-      meetingScribeClient
-        .request("get_runtime_state")
-        .then((result) => setState((current) => mergeBackendStateSnapshot(current, result)))
-        .catch((requestError) => setError(formatRequestError(requestError)));
-    }, 600);
-    return () => window.clearInterval(handle);
+    let isCancelled = false;
+    let isPending = false;
+    const loadRuntimeState = async () => {
+      if (isPending) return;
+      isPending = true;
+      try {
+        const result = await meetingScribeClient.request('get_runtime_state');
+        if (!isCancelled) {
+          setState((current) => mergeBackendStateSnapshot(current, result));
+        }
+      } catch (requestError) {
+        if (!isCancelled) setError(formatRequestError(requestError));
+      } finally {
+        isPending = false;
+      }
+    };
+    const handle = window.setInterval(loadRuntimeState, 600);
+    return () => {
+      isCancelled = true;
+      window.clearInterval(handle);
+    };
   }, [isRunning, setError, setState]);
-}
+};
 
-export function useResourceUsagePolling({ fastPolling, setResourceUsage }) {
+export const useResourceUsagePolling = ({ fastPolling, setResourceUsage }) => {
   React.useEffect(() => {
-    let cancelled = false;
-    const loadResourceUsage = () => {
-      meetingScribeClient
-        .resourceUsage()
-        .then((result) => {
-          if (!cancelled) {
-            setResourceUsage(result || emptyResourceUsage());
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setResourceUsage(emptyResourceUsage());
-          }
-        });
+    let isCancelled = false;
+    let isPending = false;
+    const loadResourceUsage = async () => {
+      if (isPending) return;
+      isPending = true;
+      try {
+        const result = await meetingScribeClient.resourceUsage();
+        if (!isCancelled) setResourceUsage(result || emptyResourceUsage());
+      } catch (requestError) {
+        if (!isCancelled) {
+          console.warn('[resources] resource polling failed', requestError);
+          setResourceUsage(emptyResourceUsage());
+        }
+      } finally {
+        isPending = false;
+      }
     };
     loadResourceUsage();
-    const handle = window.setInterval(loadResourceUsage, fastPolling ? 2000 : 5000);
+    const handle = window.setInterval(
+      loadResourceUsage,
+      fastPolling ? 2000 : 5000,
+    );
     return () => {
-      cancelled = true;
+      isCancelled = true;
       window.clearInterval(handle);
     };
   }, [fastPolling, setResourceUsage]);
-}
+};

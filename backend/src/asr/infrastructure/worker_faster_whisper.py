@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 
 from asr.application.ports import AsrBackendPort
+from asr.domain.recognition import RecognitionResult, RecognizedWord
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -20,17 +24,18 @@ class FasterWhisperASR(AsrBackendPort):
       - condition_on_previous_text (usually True helps coherence)
       - language: "ru"/"en"/... or None for auto-detect
     """
-    model_name: str = "large-v3"
-    language: Optional[str] = "ru"   # <--- CHANGED: Optional
-    device: str = "cuda"            # "cpu" or "cuda"
-    compute_type: str = "int8_float16"
+
+    model_name: str = 'large-v3'
+    language: str | None = 'ru'  # <--- CHANGED: Optional
+    device: str = 'cuda'  # "cpu" or "cuda"
+    compute_type: str = 'int8_float16'
     cpu_threads: int = 0
     num_workers: int = 1
     beam_size: int = 5
 
-    temperature: Optional[float] = 0.0
-    initial_prompt: Optional[str] = None
-    hotwords: Optional[str] = None
+    temperature: float | None = 0.0
+    initial_prompt: str | None = None
+    hotwords: str | None = None
     condition_on_previous_text: bool = True
     without_timestamps: bool = True
 
@@ -38,17 +43,19 @@ class FasterWhisperASR(AsrBackendPort):
         try:
             self._model.model.unload_model()
         except Exception:
-            pass
+            _logger.debug(
+                'Best-effort operation failed in close', exc_info=True
+            )
 
     def __post_init__(self) -> None:
         try:
             from faster_whisper import WhisperModel  # type: ignore
-        except Exception as e:
+        except ImportError as error:
             raise RuntimeError(
-                "faster-whisper is not installed. Install it (and ctranslate2) to enable ASR.\n"
-                "Example: pip install faster-whisper\n"
-                f"Import error: {type(e).__name__}: {e}"
-            )
+                'faster-whisper is not installed. Install it (and ctranslate2) to enable ASR.\n'
+                'Example: pip install faster-whisper\n'
+                f'Import error: {type(error).__name__}: {error}'
+            ) from error
 
         self._model = WhisperModel(
             self.model_name,
@@ -62,7 +69,9 @@ class FasterWhisperASR(AsrBackendPort):
             s = str(self.language).strip().lower()
             self.language = s if s else None
 
-    def transcribe(self, audio_16k_mono: np.ndarray, *, beam_size: Optional[int] = None) -> Dict[str, Any]:
+    def transcribe(
+        self, audio_16k_mono: np.ndarray, *, beam_size: int | None = None
+    ) -> RecognitionResult:
         x = np.asarray(audio_16k_mono, dtype=np.float32)
         if x.ndim != 1:
             x = x.reshape(-1).astype(np.float32, copy=False)
@@ -72,25 +81,27 @@ class FasterWhisperASR(AsrBackendPort):
             bs = 1
 
         fast_decode = bs <= 1
-        kwargs: Dict[str, Any] = {
-            "beam_size": bs,
-            "best_of": 1,
-            "vad_filter": False,  # VAD is done upstream
-            "condition_on_previous_text": bool(self.condition_on_previous_text and not fast_decode),
-            "without_timestamps": bool(self.without_timestamps),
+        kwargs: dict[str, Any] = {
+            'beam_size': bs,
+            'best_of': 1,
+            'vad_filter': False,  # VAD is done upstream
+            'condition_on_previous_text': bool(
+                self.condition_on_previous_text and not fast_decode
+            ),
+            'without_timestamps': bool(self.without_timestamps),
         }
 
         # IMPORTANT: language can be None -> auto detect
         if self.language is not None:
-            kwargs["language"] = self.language
+            kwargs['language'] = self.language
 
         if self.temperature is not None:
-            kwargs["temperature"] = float(self.temperature)
+            kwargs['temperature'] = float(self.temperature)
 
         if self.initial_prompt:
-            kwargs["initial_prompt"] = str(self.initial_prompt)
-        if getattr(self, "hotwords", None):
-            kwargs["hotwords"] = str(self.hotwords)
+            kwargs['initial_prompt'] = str(self.initial_prompt)
+        if self.hotwords:
+            kwargs['hotwords'] = str(self.hotwords)
 
         segments, info = self._model.transcribe(x, **kwargs)
 
@@ -99,57 +110,69 @@ class FasterWhisperASR(AsrBackendPort):
         no_speech_probabilities = []
         compression_ratios = []
         for s in segments:
-            t = getattr(s, "text", "")
+            t = getattr(s, 'text', '')
             if t:
                 text_parts.append(t)
-            if getattr(s, "avg_logprob", None) is not None:
+            if getattr(s, 'avg_logprob', None) is not None:
                 avg_logprobs.append(float(s.avg_logprob))
-            if getattr(s, "no_speech_prob", None) is not None:
+            if getattr(s, 'no_speech_prob', None) is not None:
                 no_speech_probabilities.append(float(s.no_speech_prob))
-            if getattr(s, "compression_ratio", None) is not None:
+            if getattr(s, 'compression_ratio', None) is not None:
                 compression_ratios.append(float(s.compression_ratio))
 
-        text = "".join(text_parts).strip()
-        out: Dict[str, Any] = {"text": text, "beam_size": bs}
+        text = ''.join(text_parts).strip()
+        out: RecognitionResult = {'text': text, 'beam_size': bs}
         if avg_logprobs:
-            out["avg_logprob"] = sum(avg_logprobs) / len(avg_logprobs)
+            out['avg_logprob'] = sum(avg_logprobs) / len(avg_logprobs)
         if no_speech_probabilities:
-            out["no_speech_probability"] = max(no_speech_probabilities)
+            out['no_speech_probability'] = max(no_speech_probabilities)
         if compression_ratios:
-            out["compression_ratio"] = max(compression_ratios)
+            out['compression_ratio'] = max(compression_ratios)
 
         try:
-            out["language"] = getattr(info, "language", None)
-            out["language_probability"] = getattr(info, "language_probability", None)
+            out['language'] = getattr(info, 'language', None)
+            out['language_probability'] = getattr(
+                info, 'language_probability', None
+            )
         except Exception:
-            pass
+            _logger.debug(
+                'Best-effort operation failed in transcribe', exc_info=True
+            )
 
         return out
 
-    def transcribe_words(self, audio_16k_mono: np.ndarray) -> List[Dict[str, Any]]:
+    def transcribe_words(
+        self, audio_16k_mono: np.ndarray
+    ) -> list[RecognizedWord]:
         x = np.asarray(audio_16k_mono, dtype=np.float32)
         if x.ndim != 1:
             x = x.reshape(-1).astype(np.float32, copy=False)
 
-        kwargs: Dict[str, Any] = {
-            "beam_size": 1,
-            "temperature": 0.0,
-            "vad_filter": False,
-            "word_timestamps": True,
-            "without_timestamps": False,
-            "condition_on_previous_text": False,
+        kwargs: dict[str, Any] = {
+            'beam_size': 1,
+            'temperature': 0.0,
+            'vad_filter': False,
+            'word_timestamps': True,
+            'without_timestamps': False,
+            'condition_on_previous_text': False,
         }
         if self.language is not None:
-            kwargs["language"] = self.language
-        if getattr(self, "hotwords", None):
-            kwargs["hotwords"] = str(self.hotwords)
+            kwargs['language'] = self.language
+        if self.hotwords:
+            kwargs['hotwords'] = str(self.hotwords)
 
         segments, _ = self._model.transcribe(x, **kwargs)
 
-        result: List[Dict[str, Any]] = []
+        result: list[RecognizedWord] = []
         for seg in segments:
-            for w in (seg.words or []):
+            for w in seg.words or []:
                 text = w.word.strip()
                 if text:
-                    result.append({"text": text, "start": float(w.start), "end": float(w.end)})
+                    result.append(
+                        {
+                            'text': text,
+                            'start': float(w.start),
+                            'end': float(w.end),
+                        }
+                    )
         return result

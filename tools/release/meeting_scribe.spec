@@ -5,39 +5,40 @@ from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all
 
-
 ROOT = Path(SPECPATH).resolve().parents[1]
-icon_path = ROOT / "frontend" / "electron" / "assets" / "icon.ico"
+icon_path = ROOT / 'frontend' / 'electron' / 'assets' / 'icon.ico'
 datas = []
 binaries = []
 hiddenimports = []
 
-config_path = ROOT / "config.json"
+config_path = ROOT / 'config.json'
 if config_path.exists():
-    datas.append((str(config_path), "."))
+    datas.append((str(config_path), '.'))
 
 for package_name in (
-    "av",
-    "ctranslate2",
-    "faster_whisper",
-    "onnxruntime",
-    "sherpa_onnx",
-    "soundcard",
-    "sounddevice",
-    "soundfile",
-    "tokenizers",
+    'av',
+    'ctranslate2',
+    'faster_whisper',
+    'onnxruntime',
+    'sherpa_onnx',
+    'soundcard',
+    'sounddevice',
+    'soundfile',
+    'tokenizers',
 ):
     if importlib.util.find_spec(package_name) is None:
         continue
-    package_datas, package_binaries, package_hiddenimports = collect_all(package_name)
+    package_datas, package_binaries, package_hiddenimports = collect_all(
+        package_name
+    )
     datas += package_datas
     binaries += package_binaries
     hiddenimports += package_hiddenimports
 
 
 a = Analysis(
-    [str(ROOT / "backend" / "main_electron_backend.py")],
-    pathex=[str(ROOT / "backend"), str(ROOT / "backend" / "src")],
+    [str(ROOT / 'backend' / 'main_electron_backend.py')],
+    pathex=[str(ROOT / 'backend'), str(ROOT / 'backend' / 'src')],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
@@ -45,11 +46,11 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        "nemo",
-        "nemo_toolkit",
-        "pyannote",
-        "pyannote.audio",
-        "torch",
+        'nemo',
+        'nemo_toolkit',
+        'pyannote',
+        'pyannote.audio',
+        'torch',
     ],
     noarchive=False,
     optimize=0,
@@ -61,7 +62,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="meeting-scribe-backend",
+    name='meeting-scribe-backend',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -81,5 +82,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="meeting-scribe-backend",
+    name='meeting-scribe-backend',
 )

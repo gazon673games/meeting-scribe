@@ -8,25 +8,25 @@ export {
   DIARIZATION_BACKENDS,
   DIARIZATION_PROVIDERS,
   FALLBACK_OPTIONS,
-  THEME_OPTIONS
-} from "./modelParts/constants";
+  THEME_OPTIONS,
+} from './modelParts/constants';
 export {
   asrProfileRequiresStreaming,
   buildProxyUrl,
   normalizeAssistantProfiles,
-  normalizeTheme
-} from "./modelParts/helpers";
+  normalizeTheme,
+} from './modelParts/helpers';
 export {
   applySettingsToConfig,
   draftToStartParams,
-  makeSettingsDraft
-} from "./modelParts/mappers";
+  makeSettingsDraft,
+} from './modelParts/mappers';
 
-export function uniqueOptions(options, currentValue) {
+export const uniqueOptions = (options, currentValue) => {
   const result = [];
   const seen = new Set();
   for (const value of [...(options || []), currentValue]) {
-    const text = String(value || "").trim();
+    const text = String(value || '').trim();
     if (!text || seen.has(text)) {
       continue;
     }
@@ -34,9 +34,15 @@ export function uniqueOptions(options, currentValue) {
     result.push(text);
   }
   return result;
-}
+};
 
-export function languageLabel(language) {
-  const labels = { auto: "Auto", en: "English", ru: "Russian" };
-  return labels[language] || language;
-}
+const LANGUAGE_LABELS = Object.freeze({
+  auto: 'Auto',
+  en: 'English',
+  ru: 'Russian',
+});
+
+export const languageLabel = (language) =>
+  Object.hasOwn(LANGUAGE_LABELS, language)
+    ? LANGUAGE_LABELS[language]
+    : language;

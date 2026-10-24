@@ -1,97 +1,99 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
-PROFILE_ULTRA_FAST = "Ultra Fast"
-PROFILE_REALTIME = "Realtime"
-PROFILE_BALANCED = "Balanced"
-PROFILE_QUALITY = "Quality"
-PROFILE_CUSTOM = "Custom"
+PROFILE_ULTRA_FAST = 'Ultra Fast'
+PROFILE_REALTIME = 'Realtime'
+PROFILE_BALANCED = 'Balanced'
+PROFILE_QUALITY = 'Quality'
+PROFILE_CUSTOM = 'Custom'
+
+
+_DEFAULT_PROFILE_SETTINGS = {
+    'compute_type': 'float16',
+    'cpu_threads': 0,
+    'num_workers': 1,
+    'beam_size': 5,
+    'endpoint_silence_ms': 650.0,
+    'max_segment_s': 7.0,
+    'overlap_ms': 200.0,
+    'vad_energy_threshold': 0.0055,
+    'overload_strategy': 'drop_old',
+    'overload_enter_qsize': 18,
+    'overload_exit_qsize': 6,
+    'overload_hard_qsize': 28,
+    'overload_beam_cap': 2,
+    'overload_max_segment_s': 5.0,
+    'overload_overlap_ms': 120.0,
+    'streaming_enabled': False,
+}
+
+_PROFILE_SETTINGS = {
+    PROFILE_ULTRA_FAST.lower(): {
+        'compute_type': 'int8_float16',
+        'cpu_threads': 0,
+        'num_workers': 2,
+        'beam_size': 1,
+        'endpoint_silence_ms': 180.0,
+        'max_segment_s': 1.8,
+        'overlap_ms': 40.0,
+        'vad_energy_threshold': 0.0058,
+        'overload_strategy': 'drop_old',
+        'overload_enter_qsize': 8,
+        'overload_exit_qsize': 3,
+        'overload_hard_qsize': 12,
+        'overload_beam_cap': 1,
+        'overload_max_segment_s': 1.5,
+        'overload_overlap_ms': 30.0,
+        'streaming_enabled': True,
+        'streaming_chunk_interval_s': 0.45,
+        'streaming_endpoint_silence_ms': 180.0,
+    },
+    PROFILE_REALTIME.lower(): {
+        'compute_type': 'int8_float16',
+        'cpu_threads': 0,
+        'num_workers': 1,
+        'beam_size': 2,
+        'endpoint_silence_ms': 500.0,
+        'max_segment_s': 6.0,
+        'overlap_ms': 200.0,
+        'vad_energy_threshold': 0.0055,
+        'overload_strategy': 'drop_old',
+        'overload_enter_qsize': 12,
+        'overload_exit_qsize': 5,
+        'overload_hard_qsize': 18,
+        'overload_beam_cap': 1,
+        'overload_max_segment_s': 3.0,
+        'overload_overlap_ms': 80.0,
+        'streaming_enabled': False,
+    },
+    PROFILE_QUALITY.lower(): {
+        'compute_type': 'float16',
+        'cpu_threads': 0,
+        'num_workers': 1,
+        'beam_size': 6,
+        'endpoint_silence_ms': 900.0,
+        'max_segment_s': 12.0,
+        'overlap_ms': 320.0,
+        'vad_energy_threshold': 0.0052,
+        'overload_strategy': 'keep_all',
+        'overload_enter_qsize': 22,
+        'overload_exit_qsize': 8,
+        'overload_hard_qsize': 40,
+        'overload_beam_cap': 3,
+        'overload_max_segment_s': 6.0,
+        'overload_overlap_ms': 160.0,
+        'streaming_enabled': False,
+    },
+}
 
 
 def profile_requires_streaming(profile: str) -> bool:
-    return (profile or "").strip().lower() == PROFILE_ULTRA_FAST.lower()
+    profile_name = (profile or '').strip().lower()
+    return profile_name == PROFILE_ULTRA_FAST.lower()
 
 
-def profile_defaults(profile: str) -> Dict[str, Any]:
-    p = (profile or "").strip().lower()
-    if p == PROFILE_ULTRA_FAST.lower():
-        return {
-            "compute_type": "int8_float16",
-            "cpu_threads": 0,
-            "num_workers": 2,
-            "beam_size": 1,
-            "endpoint_silence_ms": 180.0,
-            "max_segment_s": 1.8,
-            "overlap_ms": 40.0,
-            "vad_energy_threshold": 0.0058,
-            "overload_strategy": "drop_old",
-            "overload_enter_qsize": 8,
-            "overload_exit_qsize": 3,
-            "overload_hard_qsize": 12,
-            "overload_beam_cap": 1,
-            "overload_max_segment_s": 1.5,
-            "overload_overlap_ms": 30.0,
-            "streaming_enabled": True,
-            "streaming_chunk_interval_s": 0.45,
-            "streaming_endpoint_silence_ms": 180.0,
-        }
-
-    if p == PROFILE_REALTIME.lower():
-        return {
-            "compute_type": "int8_float16",
-            "cpu_threads": 0,
-            "num_workers": 1,
-            "beam_size": 2,
-            "endpoint_silence_ms": 500.0,
-            "max_segment_s": 6.0,
-            "overlap_ms": 200.0,
-            "vad_energy_threshold": 0.0055,
-            "overload_strategy": "drop_old",
-            "overload_enter_qsize": 12,
-            "overload_exit_qsize": 5,
-            "overload_hard_qsize": 18,
-            "overload_beam_cap": 1,
-            "overload_max_segment_s": 3.0,
-            "overload_overlap_ms": 80.0,
-            "streaming_enabled": False,
-        }
-
-    if p == PROFILE_QUALITY.lower():
-        return {
-            "compute_type": "float16",
-            "cpu_threads": 0,
-            "num_workers": 1,
-            "beam_size": 6,
-            "endpoint_silence_ms": 900.0,
-            "max_segment_s": 12.0,
-            "overlap_ms": 320.0,
-            "vad_energy_threshold": 0.0052,
-            "overload_strategy": "keep_all",
-            "overload_enter_qsize": 22,
-            "overload_exit_qsize": 8,
-            "overload_hard_qsize": 40,
-            "overload_beam_cap": 3,
-            "overload_max_segment_s": 6.0,
-            "overload_overlap_ms": 160.0,
-            "streaming_enabled": False,
-        }
-
-    return {
-        "compute_type": "float16",
-        "cpu_threads": 0,
-        "num_workers": 1,
-        "beam_size": 5,
-        "endpoint_silence_ms": 650.0,
-        "max_segment_s": 7.0,
-        "overlap_ms": 200.0,
-        "vad_energy_threshold": 0.0055,
-        "overload_strategy": "drop_old",
-        "overload_enter_qsize": 18,
-        "overload_exit_qsize": 6,
-        "overload_hard_qsize": 28,
-        "overload_beam_cap": 2,
-        "overload_max_segment_s": 5.0,
-        "overload_overlap_ms": 120.0,
-        "streaming_enabled": False,
-    }
+def profile_defaults(profile: str) -> dict[str, Any]:
+    profile_name = (profile or '').strip().lower()
+    settings = _PROFILE_SETTINGS.get(profile_name, _DEFAULT_PROFILE_SETTINGS)
+    return settings.copy()

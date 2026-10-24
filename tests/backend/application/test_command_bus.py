@@ -25,5 +25,5 @@ class CommandDispatcherTests(unittest.TestCase):
             dispatcher.dispatch(StopSessionCommand())
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

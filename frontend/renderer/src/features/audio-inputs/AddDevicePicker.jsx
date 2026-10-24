@@ -1,25 +1,32 @@
-import React from "react";
-import { Plus } from "lucide-react";
+import React from 'react';
+import { Plus } from 'lucide-react';
 
-import { SelectShell } from "../../shared/ui/forms/SelectShell";
-import { displayDeviceLabel } from "./deviceLabels";
+import { SelectShell } from '../../shared/ui/forms/SelectShell';
+import { displayDeviceLabel } from './deviceLabels';
 
-export function AddDevicePicker({ groups, disabled, onAdd, onOpen }) {
-  const [selectedId, setSelectedId] = React.useState("");
+export const AddDevicePicker = ({ groups, disabled, onAdd, onOpen }) => {
+  const [selectedId, setSelectedId] = React.useState('');
   const normalizedGroups = React.useMemo(
     () =>
       (groups || [])
         .map((group) => ({
           label: group.label,
-          devices: (group.devices || []).filter(Boolean)
+          devices: (group.devices || []).filter(Boolean),
         }))
         .filter((group) => group.devices.length),
-    [groups]
+    [groups],
   );
-  const devices = React.useMemo(() => normalizedGroups.flatMap((group) => group.devices), [normalizedGroups]);
+  const devices = React.useMemo(
+    () => normalizedGroups.flatMap((group) => group.devices),
+    [normalizedGroups],
+  );
 
   React.useEffect(() => {
-    setSelectedId((current) => (devices.some((device) => device.id === current) ? current : devices[0]?.id || ""));
+    setSelectedId((current) =>
+      devices.some((device) => device.id === current)
+        ? current
+        : devices[0]?.id || '',
+    );
   }, [devices]);
 
   if (!devices.length) {
@@ -31,11 +38,14 @@ export function AddDevicePicker({ groups, disabled, onAdd, onOpen }) {
     );
   }
 
-  const selected = devices.find((device) => device.id === selectedId) || devices[0];
-  const selectedLabel = selected ? displayDeviceLabel(selected.fullLabel || selected.label || selected.name) : "";
+  const selected =
+    devices.find((device) => device.id === selectedId) || devices[0];
+  const selectedLabel = selected
+    ? displayDeviceLabel(selected.fullLabel || selected.label || selected.name)
+    : '';
   return (
     <details
-      className={`add-source ${disabled ? "disabled" : ""}`}
+      className={`add-source ${disabled ? 'disabled' : ''}`}
       onToggle={(event) => {
         if (event.currentTarget.open) {
           onOpen?.();
@@ -77,4 +87,4 @@ export function AddDevicePicker({ groups, disabled, onAdd, onOpen }) {
       </div>
     </details>
   );
-}
+};

@@ -22,7 +22,7 @@ from audio.domain.formats import AudioFormat
 
 @dataclass
 class _FakeSource:
-    name: str = "fake"
+    name: str = 'fake'
 
     def start(self, on_audio):  # noqa: ANN001
         raise NotImplementedError
@@ -40,22 +40,26 @@ class _FakeSource:
 class AudioApplicationControlsTests(unittest.TestCase):
     def test_normalize_tap_config_falls_back_and_clamps_threshold(self) -> None:
         config = normalize_tap_config(
-            mode="unexpected",  # type: ignore[arg-type]
-            sources=["mic", "speaker", "mic"],
+            mode='unexpected',  # type: ignore[arg-type]
+            sources=['mic', 'speaker', 'mic'],
             drop_threshold=4.0,
         )
 
-        self.assertEqual(config.mode, "both")
-        self.assertEqual(config.sources_filter, {"mic", "speaker"})
+        self.assertEqual(config.mode, 'both')
+        self.assertEqual(config.sources_filter, {'mic', 'speaker'})
         self.assertEqual(config.drop_threshold, 0.99)
 
-    def test_source_controls_reset_buffers_and_delay_without_engine(self) -> None:
+    def test_source_controls_reset_buffers_and_delay_without_engine(
+        self,
+    ) -> None:
         state = SourceState(src=_FakeSource())
-        state.buf.append("frame")  # type: ignore[arg-type]
-        state.delay_buf.append("delayed")  # type: ignore[arg-type]
+        state.buf.append('frame')  # type: ignore[arg-type]
+        state.delay_buf.append('delayed')  # type: ignore[arg-type]
         state.buffer_frames = 256
 
-        set_source_delay(state, AudioFormat(sample_rate=48_000, channels=2), 25.0)
+        set_source_delay(
+            state, AudioFormat(sample_rate=48_000, channels=2), 25.0
+        )
         set_source_enabled_state(state, False)
 
         self.assertFalse(state.enabled)
@@ -87,7 +91,7 @@ class AudioApplicationControlsTests(unittest.TestCase):
                 running=True,
                 t_start=0.0,
                 t_end=period_s,
-                items=[("fake", state)],
+                items=[('fake', state)],
                 master_filters=[],
                 tap_q=None,
                 output_enabled=True,
@@ -118,42 +122,46 @@ class AudioApplicationControlsTests(unittest.TestCase):
 
     def test_source_registry_owns_source_state_commands(self) -> None:
         registry = SourceRegistry(AudioFormat(sample_rate=48_000, channels=2))
-        source = _FakeSource(name="mic")
+        source = _FakeSource(name='mic')
 
         registry.add_source(source, running=False)
-        registry.set_source_delay_ms("mic", 10.0)
-        registry.set_source_enabled("mic", False)
+        registry.set_source_delay_ms('mic', 10.0)
+        registry.set_source_enabled('mic', False)
 
-        state = registry.get_state("mic")
+        state = registry.get_state('mic')
         self.assertIsNotNone(state)
         assert state is not None
         self.assertEqual(state.delay_frames, 480)
         self.assertFalse(state.enabled)
         self.assertEqual(registry.sources, [source])
-        self.assertEqual([name for name, _ in registry.source_items()], ["mic"])
+        self.assertEqual([name for name, _ in registry.source_items()], ['mic'])
 
         with self.assertRaises(ValueError):
             registry.add_source(source, running=False)
 
-        removed = registry.remove_source("mic", running=False)
+        removed = registry.remove_source('mic', running=False)
         self.assertIs(removed, source)
         self.assertEqual(registry.sources, [])
         self.assertEqual(registry.source_items(), [])
 
-        registry.add_source(_FakeSource(name="other"), running=True)
-        self.assertEqual([name for name, _ in registry.source_items()], ["other"])
+        registry.add_source(_FakeSource(name='other'), running=True)
+        self.assertEqual(
+            [name for name, _ in registry.source_items()], ['other']
+        )
 
         registry.add_source(source, running=False)
         with self.assertRaises(RuntimeError):
-            registry.remove_source("mic", running=True)
+            registry.remove_source('mic', running=True)
 
     def test_engine_runtime_state_owns_counters_tap_and_autosync(self) -> None:
         runtime = EngineRuntimeState(tap_queue_max=25)
         tap_q: queue.Queue[dict] = queue.Queue()
 
         runtime.set_tap_queue(tap_q)
-        runtime.apply_tap_config(normalize_tap_config(mode="mix", drop_threshold=0.2))
-        runtime.enable_auto_sync("speaker", "mic")
+        runtime.apply_tap_config(
+            normalize_tap_config(mode='mix', drop_threshold=0.2)
+        )
+        runtime.enable_auto_sync('speaker', 'mic')
         runtime.record_master_metrics(0.5, 12.0)
         runtime.record_output_drop()
         runtime.record_tap_drop()
@@ -161,7 +169,7 @@ class AudioApplicationControlsTests(unittest.TestCase):
 
         self.assertIs(runtime.tap_q, tap_q)
         self.assertEqual(runtime.tap_queue_max, 25)
-        self.assertEqual(runtime.tap_mode, "mix")
+        self.assertEqual(runtime.tap_mode, 'mix')
         self.assertEqual(runtime.tap_drop_threshold, 0.2)
         self.assertEqual((t_start, t_end), (0.0, 0.1))
         self.assertEqual(runtime.tick_index, 1)
@@ -170,8 +178,8 @@ class AudioApplicationControlsTests(unittest.TestCase):
         self.assertEqual(runtime.dropped_out_blocks, 1)
         self.assertEqual(runtime.dropped_tap_blocks, 1)
         self.assertTrue(runtime.autosync_enabled)
-        self.assertEqual(runtime.autosync_ref, "speaker")
-        self.assertEqual(runtime.autosync_target, "mic")
+        self.assertEqual(runtime.autosync_ref, 'speaker')
+        self.assertEqual(runtime.autosync_target, 'mic')
 
         runtime.disable_auto_sync()
         runtime.reset_after_stop()

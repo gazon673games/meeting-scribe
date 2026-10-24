@@ -1,26 +1,35 @@
-import { DEVICE_CACHE_KEY } from "./constants";
+import { DEVICE_CACHE_KEY } from './constants';
 
-export function normalizeDevicesResult(result) {
-  return {
-    loopback: Array.isArray(result?.loopback) ? result.loopback : [],
-    input: Array.isArray(result?.input) ? result.input : [],
-    errors: Array.isArray(result?.errors) ? result.errors : []
-  };
-}
+export const normalizeDevicesResult = (result) => ({
+  loopback: Array.isArray(result?.loopback) ? result.loopback : [],
+  input: Array.isArray(result?.input) ? result.input : [],
+  errors: Array.isArray(result?.errors) ? result.errors : [],
+});
 
-export function readCachedDevices() {
+export const readCachedDevices = () => {
   try {
     const raw = window.localStorage?.getItem(DEVICE_CACHE_KEY);
     return normalizeDevicesResult(raw ? JSON.parse(raw) : null);
-  } catch {
+  } catch (error) {
+    if (
+      !(error instanceof SyntaxError) &&
+      !(error instanceof window.DOMException)
+    ) {
+      throw error;
+    }
+    console.warn('[devices] failed to read device cache', error);
     return normalizeDevicesResult(null);
   }
-}
+};
 
-export function writeCachedDevices(devices) {
+export const writeCachedDevices = (devices) => {
   try {
-    window.localStorage?.setItem(DEVICE_CACHE_KEY, JSON.stringify(normalizeDevicesResult(devices)));
-  } catch {
-    // Device cache is only a startup convenience.
+    window.localStorage?.setItem(
+      DEVICE_CACHE_KEY,
+      JSON.stringify(normalizeDevicesResult(devices)),
+    );
+  } catch (error) {
+    if (!(error instanceof window.DOMException)) throw error;
+    console.warn('[devices] failed to write device cache', error);
   }
-}
+};

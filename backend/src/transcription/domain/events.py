@@ -7,27 +7,27 @@ from shared.domain.events import DomainEvent
 
 @dataclass(frozen=True)
 class TranscriptionStartRequested(DomainEvent):
-    model_name: str = ""
-    mode: str = ""
-    language: str = ""
+    model_name: str = ''
+    mode: str = ''
+    language: str = ''
 
 
 @dataclass(frozen=True)
 class TranscriptionFallbackStarted(DomainEvent):
-    attempt_label: str = ""
-    model_name: str = ""
-    reason: str = ""
+    attempt_label: str = ''
+    model_name: str = ''
+    reason: str = ''
 
 
 @dataclass(frozen=True)
 class TranscriptionStarted(DomainEvent):
-    attempt_label: str = ""
+    attempt_label: str = ''
     degraded: bool = False
 
 
 @dataclass(frozen=True)
 class TranscriptionStartFailed(DomainEvent):
-    reason: str = ""
+    reason: str = ''
 
 
 @dataclass(frozen=True)
@@ -37,4 +37,4 @@ class TranscriptionStopRequested(DomainEvent):
 
 @dataclass(frozen=True)
 class TranscriptionStopped(DomainEvent):
-    stop_error: str = ""
+    stop_error: str = ''

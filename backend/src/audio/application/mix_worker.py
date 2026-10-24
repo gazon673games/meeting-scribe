@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import logging
 import queue
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from threading import Event
-from typing import Callable, Optional, Sequence, Set, Tuple
 
 import numpy as np
 
@@ -16,17 +17,19 @@ from audio.domain.formats import AudioFormat
 from audio.domain.ports import AudioFilter
 from audio.domain.types import TapMode
 
+_logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class MixLoopSnapshot:
     running: bool
     t_start: float = 0.0
     t_end: float = 0.0
-    items: Sequence[Tuple[str, SourceState]] = ()
+    items: Sequence[tuple[str, SourceState]] = ()
     master_filters: Sequence[AudioFilter] = ()
-    tap_q: Optional["queue.Queue[dict]"] = None
-    tap_mode: TapMode = "both"
-    tap_sources_filter: Optional[Set[str]] = None
+    tap_q: queue.Queue[dict] | None = None
+    tap_mode: TapMode = 'both'
+    tap_sources_filter: set[str] | None = None
     tap_drop_threshold: float = 0.85
     output_enabled: bool = False
 
@@ -36,7 +39,7 @@ class AudioMixWorker:
         self,
         *,
         format: AudioFormat,
-        output_queue: "queue.Queue[np.ndarray]",
+        output_queue: queue.Queue[np.ndarray],
         stop_event: Event,
         tap_queue_max: int,
         active_rms_eps: float,
@@ -54,6 +57,7 @@ class AudioMixWorker:
         self._record_master_metrics = record_master_metrics
         self._record_output_drop = record_output_drop
         self._record_tap_drop = record_tap_drop
+        self._next_filter_log_ts = 0.0
 
     def run(self) -> None:
         period_s = self._fmt.blocksize / float(self._fmt.sample_rate)
@@ -96,10 +100,14 @@ class AudioMixWorker:
     def _render_mix(
         self,
         snapshot: MixLoopSnapshot,
-    ) -> Tuple[np.ndarray, Optional[dict[str, np.ndarray]], float]:
-        mix = np.zeros((self._fmt.blocksize, self._fmt.channels), dtype=np.float32)
-        want_sources = (snapshot.tap_q is not None) and (snapshot.tap_mode in ("sources", "both"))
-        sources_out: Optional[dict[str, np.ndarray]] = {} if want_sources else None
+    ) -> tuple[np.ndarray, dict[str, np.ndarray] | None, float]:
+        mix = np.zeros(
+            (self._fmt.blocksize, self._fmt.channels), dtype=np.float32
+        )
+        want_sources = (snapshot.tap_q is not None) and (
+            snapshot.tap_mode in ('sources', 'both')
+        )
+        sources_out: dict[str, np.ndarray] | None = {} if want_sources else None
 
         active_sources = 0
         ts_mono = time.monotonic()
@@ -117,7 +125,10 @@ class AudioMixWorker:
                 active_sources += 1
 
             if sources_out is not None:
-                if snapshot.tap_sources_filter is None or name in snapshot.tap_sources_filter:
+                if (
+                    snapshot.tap_sources_filter is None
+                    or name in snapshot.tap_sources_filter
+                ):
                     sources_out[name] = block_eng
 
             mix += block_eng
@@ -128,6 +139,11 @@ class AudioMixWorker:
         try:
             mixed = apply_filters(mix, self._fmt, snapshot.master_filters)
         except Exception:
+            if ts_mono >= self._next_filter_log_ts:
+                _logger.exception(
+                    'Master audio filter failed; using unfiltered mix'
+                )
+                self._next_filter_log_ts = ts_mono + 5.0
             mixed = mix
 
         return np.clip(mixed, -1.0, 1.0), sources_out, ts_mono

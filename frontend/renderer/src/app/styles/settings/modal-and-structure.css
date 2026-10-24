@@ -323,7 +323,6 @@
   color: var(--info-badge-text);
 }
 
-
 .process-tree-error {
   padding: 6px 10px;
   font-size: 11px;
@@ -335,7 +334,10 @@
 }
 
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
-

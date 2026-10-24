@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import logging
 import queue
 import time
-from typing import Any, Optional
+from pathlib import Path
 
-from asr.application.pipeline_config import ASRPipelineDependencies, ASRPipelineSettings
+from asr.application.pipeline_config import (
+    ASRPipelineDependencies,
+    ASRPipelineSettings,
+)
 from asr.application.runtime_graph import ASRRuntimeGraph, build_runtime_graph
+
+_logger = logging.getLogger(__name__)
 
 
 class ASRPipeline:
@@ -20,17 +26,17 @@ class ASRPipeline:
     def __init__(
         self,
         *,
-        tap_queue: "queue.Queue[dict]",
-        project_root: Any,
+        tap_queue: queue.Queue[dict],
+        project_root: Path,
         settings: ASRPipelineSettings,
         dependencies: ASRPipelineDependencies,
-        ui_queue: Optional["queue.Queue[dict]"] = None,
-        event_queue: Optional["queue.Queue[dict]"] = None,
+        ui_queue: queue.Queue[dict] | None = None,
+        event_queue: queue.Queue[object] | None = None,
     ) -> None:
         self.tap_q = tap_queue
         self.project_root = project_root
         self.settings = settings
-        self.session_id = f"sess_{int(time.time())}"
+        self.session_id = f'sess_{int(time.time())}'
         self.graph: ASRRuntimeGraph = build_runtime_graph(
             settings=settings,
             dependencies=dependencies,
@@ -59,13 +65,10 @@ class ASRPipeline:
         self.graph.stop_runtime()
 
     def identity_snapshot(self) -> dict:
-        diarization = getattr(self.graph, "diarization", None)
-        if diarization is None:
+        try:
+            return dict(self.graph.diarization.identity_snapshot() or {})
+        except (OSError, RuntimeError):
+            _logger.warning(
+                'Could not export speaker identities', exc_info=True
+            )
             return {}
-        export = getattr(diarization, "identity_snapshot", None)
-        if callable(export):
-            try:
-                return dict(export() or {})
-            except Exception:
-                return {}
-        return {}

@@ -102,6 +102,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
       - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
@@ -116,13 +124,8 @@ jobs:
           set -euo pipefail
           ls -la release-assets
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
-              while read -r asset; do
-                case "$asset" in
-                  meeting-scribe-*.zip) gh release delete-asset "$RELEASE_TAG" "$asset" -y --repo "$GITHUB_REPOSITORY" ;;
-                esac
-              done
-            gh release upload "$RELEASE_TAG" release-assets/*.zip --clobber --repo "$GITHUB_REPOSITORY"
+            python -m tools.release.replace_release_assets \
+              --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" release-assets/*.zip
           else
             gh release create "$RELEASE_TAG" release-assets/*.zip --repo "$GITHUB_REPOSITORY" --title "$RELEASE_TAG" --generate-notes
           fi

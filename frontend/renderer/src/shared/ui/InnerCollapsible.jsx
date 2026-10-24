@@ -1,19 +1,21 @@
-import React from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import React from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 
-export function InnerCollapsible({ title, children, defaultOpen = false }) {
+export const InnerCollapsible = ({ title, children, defaultOpen = false }) => {
   const [open, setOpen] = React.useState(defaultOpen);
   return (
-    <div className={`inner-collapsible${open ? " open" : ""}`}>
+    <div className={`inner-collapsible${open ? ' open' : ''}`}>
       <div
         className="inner-collapsible-head"
         role="button"
+        aria-expanded={open}
         tabIndex={0}
-        onClick={() => setOpen((o) => !o)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            setOpen((o) => !o);
+        onClick={() => setOpen((current) => !current)}
+        onKeyDown={(event) => {
+          if (event.target !== event.currentTarget) return;
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            setOpen((current) => !current);
           }
         }}
       >
@@ -23,4 +25,4 @@ export function InnerCollapsible({ title, children, defaultOpen = false }) {
       {open ? <div className="inner-collapsible-body">{children}</div> : null}
     </div>
   );
-}
+};

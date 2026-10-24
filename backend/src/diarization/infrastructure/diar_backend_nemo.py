@@ -1,17 +1,18 @@
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
+_logger = logging.getLogger(__name__)
+
 
 def _to_float32_mono(x: np.ndarray) -> np.ndarray:
-    x = np.asarray(x, dtype=np.float32).reshape(-1)
-    return x
+    return np.asarray(x, dtype=np.float32).reshape(-1)
 
 
 @dataclass
@@ -24,9 +25,12 @@ class NeMoTitaNetEmbedder:
         write segment to a temp wav, then ask NeMo to embed that file.
       - This avoids API drift around in-memory waveform embedding.
     """
-    device: str = "cuda"
-    model_name: str = "titanet_large"  # common pretrained speaker embedding model
-    temp_dir: Optional[Path] = None
+
+    device: str = 'cuda'
+    model_name: str = (
+        'titanet_large'  # common pretrained speaker embedding model
+    )
+    temp_dir: Path | None = None
 
     def __post_init__(self) -> None:
         self._model = None
@@ -35,11 +39,11 @@ class NeMoTitaNetEmbedder:
         # soundfile is required for temp wav writing
         try:
             import soundfile as sf  # type: ignore
-        except Exception as e:
+        except Exception as error:
             raise RuntimeError(
                 "NeMo diarization backend requires 'soundfile'. Install:\n"
-                "  pip install soundfile\n"
-                f"Import error: {type(e).__name__}: {e}"
+                '  pip install soundfile\n'
+                f'Import error: {type(error).__name__}: {error}'
             )
         self._sf = sf
 
@@ -49,33 +53,43 @@ class NeMoTitaNetEmbedder:
 
         try:
             import torch  # type: ignore
-        except Exception as e:
+        except Exception as error:
             raise RuntimeError(
-                "NeMo requires torch. Install torch with CUDA.\n"
-                f"Import error: {type(e).__name__}: {e}"
+                'NeMo requires torch. Install torch with CUDA.\n'
+                f'Import error: {type(error).__name__}: {error}'
             )
 
         try:
-            from nemo.collections.asr.models import EncDecSpeakerLabelModel  # type: ignore
-        except Exception as e:
+            from nemo.collections.asr.models import (
+                EncDecSpeakerLabelModel,  # type: ignore
+            )
+        except Exception as exception:
             raise RuntimeError(
-                "Failed to import NeMo speaker model.\n"
-                "Install: pip install nemo_toolkit[asr]\n"
-                f"Import error: {type(e).__name__}: {e}"
+                'Failed to import NeMo speaker model.\n'
+                'Install: pip install nemo_toolkit[asr]\n'
+                f'Import error: {type(exception).__name__}: {exception}'
             )
 
         self._torch = torch
-        dev = "cuda" if (self.device == "cuda" and torch.cuda.is_available()) else "cpu"
+        dev = (
+            'cuda'
+            if (self.device == 'cuda' and torch.cuda.is_available())
+            else 'cpu'
+        )
 
         # downloads weights from NVIDIA NGC via NeMo (no HF token)
-        model = EncDecSpeakerLabelModel.from_pretrained(model_name=self.model_name)
+        model = EncDecSpeakerLabelModel.from_pretrained(
+            model_name=self.model_name
+        )
         model = model.to(dev)
         model.eval()
 
         self._model = model
         self.device = dev  # normalize
 
-    def embed_16k(self, audio_16k: np.ndarray, sample_rate: int = 16000) -> np.ndarray:
+    def embed_16k(
+        self, audio_16k: np.ndarray, sample_rate: int = 16000
+    ) -> np.ndarray:
         """
         audio_16k: mono float32 waveform @16k
         returns: (d,) float32
@@ -85,31 +99,39 @@ class NeMoTitaNetEmbedder:
         x = _to_float32_mono(audio_16k)
         if x.size < int(0.8 * sample_rate):
             # too short => unstable embedding
-            raise RuntimeError("segment too short for NeMo embedding (<0.8s)")
+            raise RuntimeError('segment too short for NeMo embedding (<0.8s)')
 
         # Write temp wav (PCM_16 for compatibility)
         path = None
         try:
             tmp_dir = self._temp_dir()
-            path = str(tmp_dir / f"nemo_seg_{os.getpid()}_{uuid.uuid4().hex}.wav")
+            path = str(
+                tmp_dir / f'nemo_seg_{os.getpid()}_{uuid.uuid4().hex}.wav'
+            )
 
-            self._sf.write(path, x, samplerate=sample_rate, subtype="PCM_16")
+            self._sf.write(path, x, samplerate=sample_rate, subtype='PCM_16')
 
             # NeMo speaker model most-stable API: file paths
             # Returns embeddings for each file.
             embs = self._model.get_embedding(audio_file_paths=[path])
             # embs: torch.Tensor [B, D]
-            emb = embs[0].detach().cpu().numpy().astype(np.float32, copy=False)
-            return emb
+            return embs[0].detach().cpu().numpy().astype(np.float32, copy=False)
 
         finally:
             if path is not None:
                 try:
                     os.remove(path)
                 except Exception:
-                    pass
+                    _logger.debug(
+                        'Best-effort operation failed in embed_16k',
+                        exc_info=True,
+                    )
 
     def _temp_dir(self) -> Path:
-        path = Path(self.temp_dir) if self.temp_dir is not None else Path.cwd() / "tmp" / "nemo"
+        path = (
+            Path(self.temp_dir)
+            if self.temp_dir is not None
+            else Path.cwd() / 'tmp' / 'nemo'
+        )
         path.mkdir(parents=True, exist_ok=True)
         return path

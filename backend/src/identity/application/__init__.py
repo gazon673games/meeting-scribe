@@ -1,8 +1,13 @@
-from identity.application.store import MatchResult, MatchStatus, SpeakerIdentityStore, SpeakerProfile
+from identity.application.store import (
+    MatchResult,
+    MatchStatus,
+    SpeakerIdentityStore,
+    SpeakerProfile,
+)
 
 __all__ = [
-    "MatchResult",
-    "MatchStatus",
-    "SpeakerIdentityStore",
-    "SpeakerProfile",
+    'MatchResult',
+    'MatchStatus',
+    'SpeakerIdentityStore',
+    'SpeakerProfile',
 ]

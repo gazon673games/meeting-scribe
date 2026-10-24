@@ -1,76 +1,140 @@
 /* @vitest-environment jsdom */
-import "@testing-library/jest-dom/vitest";
+import '@testing-library/jest-dom/vitest';
 
-import { render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { describe, expect, test, vi } from "vitest";
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, test, vi } from 'vitest';
 
-import { SourceCard } from "../../../src/features/audio-inputs/SourceCard";
+import { SourceCard } from '../../../src/features/audio-inputs/SourceCard';
 
-describe("SourceCard", () => {
-  test("adds a selected device when no source is active", async () => {
+describe('SourceCard', () => {
+  test('uses stable device identity when labels are equal', () => {
+    render(
+      <SourceCard
+        title="Mic"
+        devices={[
+          { id: 'first', label: 'Same' },
+          { id: 'second', label: 'Same' },
+        ]}
+        source={{
+          name: 'mic',
+          label: 'Same',
+          deviceId: 'second',
+          enabled: true,
+        }}
+        onAdd={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('combobox')).toHaveValue('second');
+  });
+
+  test('does not add a replacement after removal failed', async () => {
+    const onAdd = vi.fn();
+    render(
+      <SourceCard
+        title="Mic"
+        devices={[
+          { id: 'first', label: 'First' },
+          { id: 'second', label: 'Second' },
+        ]}
+        source={{
+          name: 'mic',
+          label: 'First',
+          deviceId: 'first',
+          enabled: true,
+        }}
+        onAdd={onAdd}
+        onRemove={async () => null}
+      />,
+    );
+    await userEvent
+      .setup()
+      .selectOptions(screen.getByRole('combobox'), 'second');
+    expect(onAdd).not.toHaveBeenCalled();
+    expect(screen.getByRole('combobox')).toHaveValue('first');
+  });
+
+  test('adds a selected device when no source is active', async () => {
     const user = userEvent.setup();
     const onAdd = vi.fn();
     const { container } = render(
       <SourceCard
         devices={[
-          { id: "mic-1", label: "Built-in Mic" },
-          { id: "mic-2", label: "USB Mic" }
+          { id: 'mic-1', label: 'Built-in Mic' },
+          { id: 'mic-2', label: 'USB Mic' },
         ]}
         title="Microphone"
         onAdd={onAdd}
         onRemove={vi.fn()}
         onToggle={vi.fn()}
-      />
+      />,
     );
 
-    await user.selectOptions(container.querySelector("select"), "mic-2");
-    expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ id: "mic-2" }));
+    await user.selectOptions(container.querySelector('select'), 'mic-2');
+    expect(onAdd).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'mic-2' }),
+    );
 
-    await user.click(container.querySelector(".switch-button"));
-    expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ id: "mic-2" }));
+    await user.click(container.querySelector('.switch-button'));
+    expect(onAdd).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'mic-2' }),
+    );
   });
 
-  test("replaces, toggles, and removes an existing source", async () => {
+  test('replaces, toggles, and removes an existing source', async () => {
     const user = userEvent.setup();
     const props = {
       devices: [
-        { id: "loop-1", label: "Speakers" },
-        { id: "loop-2", label: "Headphones", fullLabel: "System / Headphones" }
+        { id: 'loop-1', label: 'Speakers' },
+        { id: 'loop-2', label: 'Headphones', fullLabel: 'System / Headphones' },
       ],
       removable: true,
-      source: { name: "loop", label: "Speakers", enabled: true, level: 92 },
-      title: "System Audio",
+      source: { name: 'loop', label: 'Speakers', enabled: true, level: 92 },
+      title: 'System Audio',
       onAdd: vi.fn(),
       onRemove: vi.fn(),
-      onToggle: vi.fn()
+      onToggle: vi.fn(),
     };
     const { container } = render(<SourceCard {...props} />);
 
-    expect(container.querySelector(".audio-meter > div")).toHaveClass("hot");
-    await user.selectOptions(container.querySelector("select"), "loop-2");
+    expect(container.querySelector('.audio-meter > div')).toHaveClass('hot');
+    await user.selectOptions(container.querySelector('select'), 'loop-2');
     expect(props.onRemove).toHaveBeenCalledWith(props.source);
-    expect(props.onAdd).toHaveBeenCalledWith(expect.objectContaining({ id: "loop-2" }));
+    expect(props.onAdd).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'loop-2' }),
+    );
 
-    await user.click(container.querySelector(".switch-button"));
+    await user.click(container.querySelector('.switch-button'));
     expect(props.onToggle).toHaveBeenCalledWith(props.source);
 
-    await user.click(screen.getByRole("button", { name: /Remove System Audio/i }));
+    await user.click(
+      screen.getByRole('button', { name: /Remove System Audio/i }),
+    );
     expect(props.onRemove).toHaveBeenCalledTimes(2);
   });
 
-  test("renders static current source when the device picker has no alternatives", () => {
+  test('renders static current source when the device picker has no alternatives', () => {
     render(
       <SourceCard
         devices={[]}
-        source={{ name: "ghost", label: "Disconnected Mic", enabled: true, level: 20 }}
+        source={{
+          name: 'ghost',
+          label: 'Disconnected Mic',
+          enabled: true,
+          level: 20,
+        }}
         title="Microphone"
         onAdd={vi.fn()}
         onRemove={vi.fn()}
         onToggle={vi.fn()}
-      />
+      />,
     );
 
-    expect(within(screen.getByText("Disconnected Mic").closest(".source-static-value")).getByText("Disconnected Mic")).toBeInTheDocument();
+    expect(
+      within(
+        screen.getByText('Disconnected Mic').closest('.source-static-value'),
+      ).getByText('Disconnected Mic'),
+    ).toBeInTheDocument();
   });
 });

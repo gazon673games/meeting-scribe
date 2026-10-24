@@ -1,24 +1,27 @@
-import { X } from "lucide-react";
-import { useColorTheme } from "../entities/settings/useColorTheme";
+import { X } from 'lucide-react';
+import { useColorTheme } from '../entities/settings/useColorTheme';
 
-import { AssistantColumn } from "../features/assistant/AssistantColumn";
-import { AudioInputs } from "../features/audio-inputs/AudioInputs";
-import { ProcessingColumn } from "../features/processing/ProcessingColumn";
-import { RuntimeNoticeTray } from "../features/runtime/RuntimeNoticeTray";
-import { TopBar } from "../features/top-bar/TopBar";
-import { TranscriptColumn } from "../features/transcript/TranscriptColumn";
-import { ResizablePipeline } from "../shared/ui/pipeline/ResizablePipeline";
-import { usePipelineLayout } from "../shared/ui/pipeline/usePipelineLayout";
-import { useMeetingScribeApp } from "./useMeetingScribeApp";
-import "./styles.css";
+import { AssistantColumn } from '../features/assistant/AssistantColumn';
+import { AudioInputs } from '../features/audio-inputs/AudioInputs';
+import { ProcessingColumn } from '../features/processing/ProcessingColumn';
+import { RuntimeNoticeTray } from '../features/runtime/RuntimeNoticeTray';
+import { TopBar } from '../features/top-bar/TopBar';
+import { TranscriptColumn } from '../features/transcript/TranscriptColumn';
+import { ResizablePipeline } from '../shared/ui/pipeline/ResizablePipeline';
+import { usePipelineLayout } from '../shared/ui/pipeline/usePipelineLayout';
+import { useMeetingScribeApp } from './useMeetingScribeApp';
+import './styles.css';
 
-export function App() {
+export const App = () => {
   const app = useMeetingScribeApp();
-  const theme = useColorTheme({ theme: app.settingsDraft.theme, persist: !app.loading });
+  const theme = useColorTheme({
+    theme: app.settingsDraft.theme,
+    persist: !app.loading,
+  });
   const pipelineColumns = [
     {
-      id: "audio-inputs",
-      label: "Audio Inputs",
+      id: 'audio-inputs',
+      label: 'Audio Inputs',
       minWidth: 160,
       defaultWidth: 260,
       element: (
@@ -29,15 +32,27 @@ export function App() {
           sourceSelectionLocked={app.session.running}
           perProcessAudio={app.settingsDraft.perProcessAudio}
           sources={app.sources}
-          onAdd={(device) => app.runBackendAction("add_source", { deviceId: device.id, label: device.fullLabel || device.label })}
-          onRemove={(source) => app.runBackendAction("remove_source", { name: source.name })}
-          onToggle={(source) => app.runBackendAction("set_source_enabled", { name: source.name, enabled: !source.enabled })}
+          onAdd={(device) =>
+            app.runBackendAction('add_source', {
+              deviceId: device.id,
+              label: device.fullLabel || device.label,
+            })
+          }
+          onRemove={(source) =>
+            app.runBackendAction('remove_source', { name: source.name })
+          }
+          onToggle={(source) =>
+            app.runBackendAction('set_source_enabled', {
+              name: source.name,
+              enabled: !source.enabled,
+            })
+          }
         />
-      )
+      ),
     },
     {
-      id: "processing",
-      label: "Processing",
+      id: 'processing',
+      label: 'Processing',
       minWidth: 160,
       defaultWidth: 260,
       element: (
@@ -53,19 +68,26 @@ export function App() {
           onChange={app.updateSettings}
           onProfileChange={app.applyProfile}
         />
-      )
+      ),
     },
     {
-      id: "transcript",
-      label: "Live Transcript",
+      id: 'transcript',
+      label: 'Live Transcript',
       minWidth: 180,
       defaultWidth: 320,
       flex: true,
-      element: <TranscriptColumn lines={app.transcript} session={app.session} status={app.status} onClear={() => app.runBackendAction("clear_transcript")} />
+      element: (
+        <TranscriptColumn
+          lines={app.transcript}
+          session={app.session}
+          status={app.status}
+          onClear={() => app.runBackendAction('clear_transcript')}
+        />
+      ),
     },
     {
-      id: "assistant",
-      label: "AI Assistant",
+      id: 'assistant',
+      label: 'AI Assistant',
       minWidth: 180,
       defaultWidth: 360,
       element: (
@@ -73,17 +95,23 @@ export function App() {
           assistant={app.assistant}
           assistantPing={app.assistantPing}
           contextReady={app.assistantContextReady}
-          disabled={!app.capabilities.assistant || !app.assistant.enabled || app.assistant.busy}
+          disabled={
+            !app.capabilities.assistant ||
+            !app.assistant.enabled ||
+            app.assistant.busy
+          }
           localLlmStatus={app.localLlmStatus}
           profiles={app.assistantProfiles}
           onAuthorize={app.startAssistantLogin}
           onPing={app.pingAssistantProvider}
           onStartLocalModel={app.startLocalModel}
           onStopLocalModel={app.stopLocalModel}
-          onInvoke={(params) => app.runBackendAction("invoke_assistant", params)}
+          onInvoke={(params) =>
+            app.runBackendAction('invoke_assistant', params)
+          }
         />
-      )
-    }
+      ),
+    },
   ];
   const pipelineLayout = usePipelineLayout(pipelineColumns);
 
@@ -108,7 +136,7 @@ export function App() {
           onAsrChange: app.updateAsrSetting,
           onChange: app.updateSettings,
           onReloadApp: app.reloadApp,
-          onSave: app.saveSettings
+          onSave: app.saveSettings,
         }}
         status={app.status}
         asrMetrics={app.asrMetrics}
@@ -120,7 +148,11 @@ export function App() {
       {app.error ? (
         <div className="error-strip" role="alert">
           <span>{app.error}</span>
-          <button aria-label="Close error" onClick={app.clearError} type="button">
+          <button
+            aria-label="Close error"
+            onClick={app.clearError}
+            type="button"
+          >
             <X size={16} />
           </button>
         </div>
@@ -132,7 +164,10 @@ export function App() {
         onReorderColumn={pipelineLayout.moveColumnTo}
         resetSignal={pipelineLayout.resetRevision}
       />
-      <RuntimeNoticeTray notices={app.runtimeNotices} onDismiss={app.dismissRuntimeNotice} />
+      <RuntimeNoticeTray
+        notices={app.runtimeNotices}
+        onDismiss={app.dismissRuntimeNotice}
+      />
     </main>
   );
-}
+};

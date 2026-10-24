@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import time
-from typing import Any
 
+from application.codex_config import CodexProfile
 from assistant.application.provider import (
     AssistantProviderError,
     AssistantProviderInfo,
@@ -13,23 +13,31 @@ from assistant.application.provider import (
 from infrastructure.local_llm_parts.errors import LocalLlmError
 
 
-def status_error(provider_id: str, label: str, error: LocalLlmError, base_url: str) -> AssistantProviderInfo:
+def status_error(
+    provider_id: str, label: str, error: LocalLlmError, base_url: str
+) -> AssistantProviderInfo:
     return AssistantProviderInfo(
         id=provider_id,
         label=label,
         available=False,
-        message=f"{error.message} ({base_url})",
+        message=f'{error.message} ({base_url})',
         error_code=error.code,
         retryable=error.retryable,
         suggestion=error.suggestion,
     )
 
 
-def ping_ok(provider_id: str, label: str, message: str) -> AssistantProviderPingResult:
-    return AssistantProviderPingResult(id=provider_id, label=label, ok=True, message=message, status_code=200)
+def ping_ok(
+    provider_id: str, label: str, message: str
+) -> AssistantProviderPingResult:
+    return AssistantProviderPingResult(
+        id=provider_id, label=label, ok=True, message=message, status_code=200
+    )
 
 
-def ping_error(provider_id: str, label: str, error: LocalLlmError) -> AssistantProviderPingResult:
+def ping_error(
+    provider_id: str, label: str, error: LocalLlmError
+) -> AssistantProviderPingResult:
     return AssistantProviderPingResult(
         id=provider_id,
         label=label,
@@ -44,14 +52,14 @@ def ping_error(provider_id: str, label: str, error: LocalLlmError) -> AssistantP
 
 def model_required(label: str) -> AssistantProviderError:
     return AssistantProviderError(
-        code="model_required",
-        message=f"{label} profile requires a model name.",
-        suggestion="Set the assistant profile model to one of the models loaded in the local runtime.",
+        code='model_required',
+        message=f'{label} profile requires a model name.',
+        suggestion='Set the assistant profile model to one of the models loaded in the local runtime.',
     )
 
 
 def error_result(
-    profile: Any,
+    profile: CodexProfile,
     cmd: str,
     provider_id: str,
     model: str,
@@ -69,7 +77,7 @@ def error_result(
 
 
 def ok_result(
-    profile: Any,
+    profile: CodexProfile,
     cmd: str,
     provider_id: str,
     model: str,
@@ -78,7 +86,7 @@ def ok_result(
 ) -> AssistantProviderResult:
     return AssistantProviderResult(
         ok=True,
-        profile=str(getattr(profile, "label", "") or ""),
+        profile=str(profile.label or ''),
         cmd=str(cmd),
         text=text,
         dt_s=max(0.0, time.time() - started),

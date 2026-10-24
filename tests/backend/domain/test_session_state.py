@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from session.domain.state import InvalidSessionTransition, SessionState, SessionStateMachine
+from session.domain.state import (
+    InvalidSessionTransition,
+    SessionState,
+    SessionStateMachine,
+)
 
 
 class SessionStateMachineTests(unittest.TestCase):
@@ -61,5 +65,5 @@ class SessionStateMachineTests(unittest.TestCase):
             machine.begin_offline_pass()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

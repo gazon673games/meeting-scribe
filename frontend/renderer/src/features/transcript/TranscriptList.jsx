@@ -1,33 +1,31 @@
-import React from "react";
+import React from 'react';
 
-import { TranscriptLine } from "./TranscriptLine";
-import { TypingRow } from "./TypingRow";
+import { TranscriptLine } from './TranscriptLine';
+import { TypingRow } from './TypingRow';
 
 const SPEAKER_TONE_COUNT = 10;
 
-function speakerLabel(line) {
-  const speaker = String(line.speaker ?? "").trim();
-  const stream = String(line.stream ?? "").trim();
-  return speaker && speaker !== "S?" ? speaker : stream || "mix";
-}
+const speakerLabel = (line) => {
+  const speaker = String(line.speaker ?? '').trim();
+  const stream = String(line.stream ?? '').trim();
+  return speaker && speaker !== 'S?' ? speaker : stream || 'mix';
+};
 
-function speakerKey(line) {
-  return speakerLabel(line).toLocaleLowerCase();
-}
+const speakerKey = (line) => speakerLabel(line).toLocaleLowerCase();
 
-function resolveSpeakerTone(line, tones) {
+const resolveSpeakerTone = (line) => {
   const key = speakerKey(line);
-  if (!tones.has(key)) {
-    tones.set(key, tones.size % SPEAKER_TONE_COUNT);
+  let hash = 0;
+  for (const character of key) {
+    hash = (Math.imul(hash, 31) + character.codePointAt(0)) >>> 0;
   }
-  return tones.get(key);
-}
+  return hash % SPEAKER_TONE_COUNT;
+};
 
-export function TranscriptList({ lines, running }) {
+export const TranscriptList = ({ lines, running }) => {
   const listRef = React.useRef(null);
   const shouldStickToBottomRef = React.useRef(true);
   const isProgrammaticScrollRef = React.useRef(false);
-  const speakerTones = new Map();
 
   const updateStickiness = React.useCallback(() => {
     if (isProgrammaticScrollRef.current) {
@@ -38,11 +36,14 @@ export function TranscriptList({ lines, running }) {
     if (!element) {
       return;
     }
-    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    const distanceFromBottom =
+      element.scrollHeight - element.scrollTop - element.clientHeight;
     shouldStickToBottomRef.current = distanceFromBottom <= 80;
   }, []);
 
-  const lastLineTs = lines.length > 0 ? lines[lines.length - 1]?.ts : 0;
+  const lastLine = lines.at(-1);
+  const lastLineTs = lastLine?.ts;
+  const lastLineText = lastLine?.text;
 
   React.useLayoutEffect(() => {
     const element = listRef.current;
@@ -51,7 +52,7 @@ export function TranscriptList({ lines, running }) {
     }
     isProgrammaticScrollRef.current = true;
     element.scrollTop = element.scrollHeight;
-  }, [lastLineTs, running]);
+  }, [lastLineTs, lastLineText, lines.length, running]);
 
   return (
     <div className="transcript-list" onScroll={updateStickiness} ref={listRef}>
@@ -60,17 +61,20 @@ export function TranscriptList({ lines, running }) {
           key={line.id || `${line.ts}-${index}`}
           line={line}
           speaker={speakerLabel(line)}
-          tone={resolveSpeakerTone(line, speakerTones)}
+          tone={resolveSpeakerTone(line)}
         />
       ))}
       {!lines.length && !running ? (
         <div className="transcript-empty">
           <span>Transcript stream</span>
           <strong>Waiting for speech</strong>
-          <p>Enable an audio source and press Start. Recognized speech will appear here.</p>
+          <p>
+            Enable an audio source and press Start. Recognized speech will
+            appear here.
+          </p>
         </div>
       ) : null}
       {running ? <TypingRow /> : null}
     </div>
   );
-}
+};

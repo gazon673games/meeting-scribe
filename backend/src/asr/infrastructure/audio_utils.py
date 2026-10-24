@@ -7,13 +7,12 @@ def _make_decim3_kernel() -> np.ndarray:
     # Windowed-sinc lowpass FIR for 3x decimation (48 kHz → 16 kHz).
     # Cutoff 7500 Hz, 31 taps, Hann window.  Computed once at import time.
     n = 31
-    fc = 7500.0 / 24000.0  # normalised to input Nyquist (48 000 / 2)
+    fc = 7500.0 / 48000.0  # cycles per input sample for the sinc formula
     half = (n - 1) / 2.0
     t = np.arange(n, dtype=np.float64) - half
     h = 2.0 * fc * np.sinc(2.0 * fc * t)
     h = h * np.hanning(n)
-    h = (h / h.sum()).astype(np.float32)
-    return h
+    return (h / h.sum()).astype(np.float32)
 
 
 _DECIM3_KERNEL: np.ndarray = _make_decim3_kernel()
@@ -86,5 +85,6 @@ def resample_linear(x: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
 
     src_t = np.linspace(0.0, dur, num=n, endpoint=False, dtype=np.float64)
     dst_t = np.linspace(0.0, dur, num=m, endpoint=False, dtype=np.float64)
-    y = np.interp(dst_t, src_t, x.astype(np.float64, copy=False)).astype(np.float32, copy=False)
-    return y
+    return np.interp(dst_t, src_t, x.astype(np.float64, copy=False)).astype(
+        np.float32, copy=False
+    )

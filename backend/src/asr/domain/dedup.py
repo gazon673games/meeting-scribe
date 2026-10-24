@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Tuple
 
 from asr.domain.text import normalize_text, trim_overlap
 
@@ -13,22 +12,27 @@ class StreamDedupFilter:
     enabled: bool
     window: int
     min_match: int = 8
-    _last: Dict[str, str] = field(default_factory=dict, init=False, repr=False)
+    _last: dict[str, str] = field(default_factory=dict, init=False, repr=False)
 
     def reset(self) -> None:
         self._last.clear()
 
-    def filter(self, stream: str, text: str) -> Tuple[str, int]:
+    def filter(self, stream: str, text: str) -> tuple[str, int]:
         """Return (deduplicated text, removed char count)."""
         if not self.enabled:
             if text:
                 self._last[stream] = normalize_text(text)
             return text, 0
 
-        prev = self._last.get(stream, "")
-        trimmed, removed = trim_overlap(prev, text, max_window=self.window, min_match=self.min_match)
+        previous_text = self._last.get(stream, '')
+        trimmed, removed = trim_overlap(
+            previous_text,
+            text,
+            max_window=self.window,
+            min_match=self.min_match,
+        )
         if trimmed:
-            updated = normalize_text(prev + " " + trimmed).strip()
+            updated = normalize_text(previous_text + ' ' + trimmed).strip()
             # trim_overlap reads only prev[-window:], so keep only that suffix
-            self._last[stream] = updated[-self.window:]
+            self._last[stream] = updated[-self.window :]
         return trimmed, removed

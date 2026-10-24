@@ -1,24 +1,29 @@
-import { DIARIZATION_BACKENDS, DIARIZATION_PROVIDERS, FALLBACK_OPTIONS, uniqueOptions } from "../../entities/settings/model";
-import { CollapsibleSection } from "../../shared/ui/CollapsibleSection";
-import { Field } from "../../shared/ui/Field";
-import { FeatureToggle } from "../../shared/ui/FeatureToggle";
+import {
+  DIARIZATION_BACKENDS,
+  DIARIZATION_PROVIDERS,
+  FALLBACK_OPTIONS,
+  uniqueOptions,
+} from '../../entities/settings/model';
+import { CollapsibleSection } from '../../shared/ui/CollapsibleSection';
+import { Field } from '../../shared/ui/Field';
+import { FeatureToggle } from '../../shared/ui/FeatureToggle';
 
-export function DiarizationSettings({ draft, locked, options, onChange }) {
+export const DiarizationSettings = ({ draft, locked, options, onChange }) => {
   const enabled = Boolean(draft.diarizationEnabled);
   const availableOptions = options || {};
   const backendOptions = uniqueOptions(
     availableOptions.diarizationBackends?.length
       ? availableOptions.diarizationBackends
       : FALLBACK_OPTIONS.diarizationBackends || DIARIZATION_BACKENDS,
-    draft.diarizationBackend
+    draft.diarizationBackend,
   );
   const providerOptions = uniqueOptions(
     availableOptions.diarizationProviders?.length
       ? availableOptions.diarizationProviders
       : FALLBACK_OPTIONS.diarizationProviders || DIARIZATION_PROVIDERS,
-    draft.diarSherpaProvider
+    draft.diarSherpaProvider,
   );
-  const isSherpa = draft.diarizationBackend === "sherpa_onnx";
+  const isSherpa = draft.diarizationBackend === 'sherpa_onnx';
 
   return (
     <CollapsibleSection title="Speaker ID" defaultOpen={false}>
@@ -33,7 +38,11 @@ export function DiarizationSettings({ draft, locked, options, onChange }) {
           checked={Boolean(draft.diarizationSidecarEnabled)}
           disabled={locked || !enabled}
           label="Sidecar"
-          onClick={() => onChange({ diarizationSidecarEnabled: !draft.diarizationSidecarEnabled })}
+          onClick={() =>
+            onChange({
+              diarizationSidecarEnabled: !draft.diarizationSidecarEnabled,
+            })
+          }
         />
       </div>
       <div className="settings-grid">
@@ -41,7 +50,9 @@ export function DiarizationSettings({ draft, locked, options, onChange }) {
           <select
             disabled={locked || !enabled}
             value={draft.diarizationBackend}
-            onChange={(event) => onChange({ diarizationBackend: event.target.value })}
+            onChange={(event) =>
+              onChange({ diarizationBackend: event.target.value })
+            }
           >
             {backendOptions.map((backend) => (
               <option key={backend} value={backend}>
@@ -58,7 +69,9 @@ export function DiarizationSettings({ draft, locked, options, onChange }) {
             step={1}
             type="number"
             value={draft.diarizationQueueSize}
-            onChange={(event) => onChange({ diarizationQueueSize: event.target.value })}
+            onChange={(event) =>
+              onChange({ diarizationQueueSize: event.target.value })
+            }
           />
         </Field>
         {isSherpa ? (
@@ -68,14 +81,18 @@ export function DiarizationSettings({ draft, locked, options, onChange }) {
                 disabled={locked || !enabled}
                 spellCheck={false}
                 value={draft.diarSherpaEmbeddingModelPath}
-                onChange={(event) => onChange({ diarSherpaEmbeddingModelPath: event.target.value })}
+                onChange={(event) =>
+                  onChange({ diarSherpaEmbeddingModelPath: event.target.value })
+                }
               />
             </Field>
             <Field label="Sherpa Provider">
               <select
                 disabled={locked || !enabled}
                 value={draft.diarSherpaProvider}
-                onChange={(event) => onChange({ diarSherpaProvider: event.target.value })}
+                onChange={(event) =>
+                  onChange({ diarSherpaProvider: event.target.value })
+                }
               >
                 {providerOptions.map((provider) => (
                   <option key={provider} value={provider}>
@@ -92,7 +109,9 @@ export function DiarizationSettings({ draft, locked, options, onChange }) {
                 step={1}
                 type="number"
                 value={draft.diarSherpaNumThreads}
-                onChange={(event) => onChange({ diarSherpaNumThreads: event.target.value })}
+                onChange={(event) =>
+                  onChange({ diarSherpaNumThreads: event.target.value })
+                }
               />
             </Field>
           </>
@@ -100,4 +119,4 @@ export function DiarizationSettings({ draft, locked, options, onChange }) {
       </div>
     </CollapsibleSection>
   );
-}
+};

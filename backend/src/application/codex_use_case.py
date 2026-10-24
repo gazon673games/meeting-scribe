@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from application.assistant_use_case import AssistantRequestInput, AssistantRequestUseCase
+from application.assistant_use_case import (
+    AssistantRequestInput,
+    AssistantRequestUseCase,
+)
 
 CodexRequestInput = AssistantRequestInput
 CodexRequestUseCase = AssistantRequestUseCase

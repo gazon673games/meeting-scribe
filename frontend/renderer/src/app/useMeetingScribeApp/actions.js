@@ -1,15 +1,33 @@
-import React from "react";
+import React from 'react';
+import { createAssistantPing } from './assistantState';
 
-import { applySettingsToConfig, draftToStartParams } from "../../entities/settings/model";
-import { meetingScribeClient } from "../../shared/api/meetingScribeClient";
-import { formatRequestError } from "./errors";
-import { removeSessionSource, upsertSessionSource } from "./sessionState";
-import { applyProfileDefaults, mergeSettingsPatch } from "./settingsDraft";
-import { mergeBackendStateSnapshot } from "./transcriptState";
+import {
+  applySettingsToConfig,
+  draftToStartParams,
+} from '../../entities/settings/model';
+import { meetingScribeClient } from '../../shared/api/meetingScribeClient';
+import { formatRequestError } from './errors';
+import { removeSessionSource, upsertSessionSource } from './sessionState';
+import { applyProfileDefaults, mergeSettingsPatch } from './settingsDraft';
+import { mergeBackendStateSnapshot } from './transcriptState';
 
-const SESSION_LIFECYCLE_METHODS = new Set(["start_session", "stop_session"]);
+const SESSION_LIFECYCLE_METHODS = Object.freeze([
+  'start_session',
+  'stop_session',
+]);
 
-export function useAppActions({
+const applySessionSnapshot = (state, session) => ({ ...state, session });
+
+const ACTION_REDUCERS = Object.freeze({
+  start_session: applySessionSnapshot,
+  stop_session: applySessionSnapshot,
+  clear_transcript: applySessionSnapshot,
+  add_source: upsertSessionSource,
+  set_source_enabled: upsertSessionSource,
+  remove_source: removeSessionSource,
+});
+
+export const useAppActions = ({
   appOptions,
   config,
   refresh,
@@ -24,25 +42,35 @@ export function useAppActions({
   setSettingsDraft,
   setState,
   settingsDraft,
-}) {
+}) => {
   const sessionActionRef = React.useRef(false);
   const [sessionActionPending, setSessionActionPending] = React.useState(false);
 
-  const updateSettings = React.useCallback((patch) => {
-    setSettingsDraft((current) => mergeSettingsPatch(current, patch, appOptions));
-    setSettingsDirty(true);
-  }, [appOptions, setSettingsDirty, setSettingsDraft]);
+  const updateSettings = React.useCallback(
+    (patch) => {
+      setSettingsDraft((current) =>
+        mergeSettingsPatch(current, patch, appOptions),
+      );
+      setSettingsDirty(true);
+    },
+    [appOptions, setSettingsDirty, setSettingsDraft],
+  );
 
   const clearError = React.useCallback(() => {
-    setError("");
+    setError('');
   }, [setError]);
 
-  const dismissRuntimeNotice = React.useCallback((key) => {
-    setRuntimeNotices((current) => current.filter((notice) => notice.key !== key));
-  }, [setRuntimeNotices]);
+  const dismissRuntimeNotice = React.useCallback(
+    (key) => {
+      setRuntimeNotices((current) =>
+        current.filter((notice) => notice.key !== key),
+      );
+    },
+    [setRuntimeNotices],
+  );
 
   const reloadApp = React.useCallback(async () => {
-    setError("");
+    setError('');
     try {
       await meetingScribeClient.reloadApp();
     } catch (requestError) {
@@ -58,67 +86,126 @@ export function useAppActions({
     }
   }, [setError]);
 
-  const startAssistantLogin = React.useCallback(async (providerId = "codex") => {
-    setError("");
-    try {
-      const result = await meetingScribeClient.request("start_assistant_login", { providerId });
-      await refresh();
-      if (result?.errorCode) {
-        setError(result.suggestion || result.message || result.errorCode);
+  const startAssistantLogin = React.useCallback(
+    async (providerId = 'codex') => {
+      setError('');
+      try {
+        const result = await meetingScribeClient.request(
+          'start_assistant_login',
+          { providerId },
+        );
+        await refresh();
+        if (result?.errorCode) {
+          setError(result.suggestion || result.message || result.errorCode);
+        }
+      } catch (requestError) {
+        setError(formatRequestError(requestError));
       }
-    } catch (requestError) {
-      setError(formatRequestError(requestError));
-    }
-  }, [refresh, setError]);
+    },
+    [refresh, setError],
+  );
 
-  const pingAssistantProvider = React.useCallback((providerId = "codex", profileId = "") => {
-    setError("");
-    setAssistantPing({ busy: true, providerId, profileId });
-    meetingScribeClient.request("ping_assistant_provider", { providerId, profileId }).catch((requestError) => {
-      setAssistantPing({
-        busy: false,
-        providerId,
-        profileId,
-        ok: false,
-        message: formatRequestError(requestError),
-        errorCode: "ping_failed",
-        retryable: true,
-        ts: Date.now()
-      });
-    });
-  }, [setAssistantPing, setError]);
+  const pingAssistantProvider = React.useCallback(
+    (providerId = 'codex', profileId = '') => {
+      setError('');
+      setAssistantPing(
+        createAssistantPing({ busy: true, providerId, profileId }),
+      );
+      meetingScribeClient
+        .request('ping_assistant_provider', { providerId, profileId })
+        .catch((requestError) => {
+          setAssistantPing(
+            createAssistantPing({
+              busy: false,
+              providerId,
+              profileId,
+              ok: false,
+              message: formatRequestError(requestError),
+              errorCode: 'ping_failed',
+              retryable: true,
+              ts: Date.now(),
+            }),
+          );
+        });
+    },
+    [setAssistantPing, setError],
+  );
 
-  const startLocalModel = React.useCallback((profileId) => {
-    setLocalLlmStatus((current) => ({ ...current, [profileId]: { state: "starting", message: "" } }));
-    meetingScribeClient.request("start_local_llm", { profileId }).catch(() => {
-      setLocalLlmStatus((current) => ({ ...current, [profileId]: { state: "error", message: "Failed to start" } }));
-    });
-  }, [setLocalLlmStatus]);
+  const startLocalModel = React.useCallback(
+    (profileId) => {
+      setLocalLlmStatus((current) => ({
+        ...current,
+        [profileId]: { state: 'starting', message: '' },
+      }));
+      meetingScribeClient
+        .request('start_local_llm', { profileId })
+        .catch((requestError) => {
+          setLocalLlmStatus((current) => ({
+            ...current,
+            [profileId]: {
+              state: 'error',
+              message: formatRequestError(requestError),
+            },
+          }));
+        });
+    },
+    [setLocalLlmStatus],
+  );
 
-  const stopLocalModel = React.useCallback((profileId) => {
-    meetingScribeClient.request("stop_local_llm", { profileId }).then(() => {
-      setLocalLlmStatus((current) => ({ ...current, [profileId]: { state: "stopped", message: "" } }));
-    }).catch(() => {});
-  }, [setLocalLlmStatus]);
+  const stopLocalModel = React.useCallback(
+    (profileId) => {
+      meetingScribeClient
+        .request('stop_local_llm', { profileId })
+        .then(() => {
+          setLocalLlmStatus((current) => ({
+            ...current,
+            [profileId]: { state: 'stopped', message: '' },
+          }));
+        })
+        .catch((requestError) => {
+          setLocalLlmStatus((current) => ({
+            ...current,
+            [profileId]: {
+              state: 'error',
+              message: formatRequestError(requestError),
+            },
+          }));
+        });
+    },
+    [setLocalLlmStatus],
+  );
 
-  const updateAsrSetting = React.useCallback((key, value) => {
-    setSettingsDraft((current) => ({ ...current, asr: { ...current.asr, [key]: value } }));
-    setSettingsDirty(true);
-  }, [setSettingsDirty, setSettingsDraft]);
+  const updateAsrSetting = React.useCallback(
+    (key, value) => {
+      setSettingsDraft((current) => ({
+        ...current,
+        asr: { ...current.asr, [key]: value },
+      }));
+      setSettingsDirty(true);
+    },
+    [setSettingsDirty, setSettingsDraft],
+  );
 
-  const applyProfile = React.useCallback((profile) => {
-    setSettingsDraft((current) => applyProfileDefaults(current, profile, appOptions));
-    setSettingsDirty(true);
-  }, [appOptions, setSettingsDirty, setSettingsDraft]);
+  const applyProfile = React.useCallback(
+    (profile) => {
+      setSettingsDraft((current) =>
+        applyProfileDefaults(current, profile, appOptions),
+      );
+      setSettingsDirty(true);
+    },
+    [appOptions, setSettingsDirty, setSettingsDraft],
+  );
 
   const saveSettings = React.useCallback(async () => {
     setSavingSettings(true);
-    setError("");
+    setError('');
     try {
-      const result = await meetingScribeClient.request("save_config", { config: applySettingsToConfig(config, settingsDraft) });
+      const result = await meetingScribeClient.request('save_config', {
+        config: applySettingsToConfig(config, settingsDraft),
+      });
       setSettingsDirty(false);
       setConfig(result.config);
-      const stateResult = await meetingScribeClient.request("get_state");
+      const stateResult = await meetingScribeClient.request('get_state');
       setState((current) => mergeBackendStateSnapshot(current, stateResult));
       return true;
     } catch (requestError) {
@@ -127,63 +214,76 @@ export function useAppActions({
     } finally {
       setSavingSettings(false);
     }
-  }, [config, setConfig, setError, setSavingSettings, setSettingsDirty, setState, settingsDraft]);
+  }, [
+    config,
+    setConfig,
+    setError,
+    setSavingSettings,
+    setSettingsDirty,
+    setState,
+    settingsDraft,
+  ]);
 
-  const runBackendAction = React.useCallback(async (method, params = {}) => {
-    const sessionLifecycle = SESSION_LIFECYCLE_METHODS.has(method);
-    if (sessionLifecycle && sessionActionRef.current) {
-      return undefined;
-    }
-    if (sessionLifecycle) {
-      sessionActionRef.current = true;
-      setSessionActionPending(true);
-    }
-    setError("");
-    try {
-      const result = await meetingScribeClient.request(method, params);
-      if (method === "start_session" || method === "stop_session" || method === "clear_transcript") {
-        setState((current) => ({ ...(current || {}), session: result }));
-      } else if (method === "add_source" || method === "set_source_enabled") {
-        setState((current) => upsertSessionSource(current, result));
-      } else if (method === "remove_source") {
-        setState((current) => removeSessionSource(current, result));
-      } else {
-        await refresh();
+  const runBackendAction = React.useCallback(
+    async (method, params = {}) => {
+      const isSessionLifecycle = SESSION_LIFECYCLE_METHODS.includes(method);
+      if (isSessionLifecycle && sessionActionRef.current) {
+        return null;
       }
-      if (result?.warning) {
-        setError(result.warning);
+      if (isSessionLifecycle) {
+        sessionActionRef.current = true;
+        setSessionActionPending(true);
       }
-      return result;
-    } catch (requestError) {
-      setError(formatRequestError(requestError));
-      if (sessionLifecycle) {
-        try {
-          const currentState = await meetingScribeClient.request("get_state");
-          setState((current) => mergeBackendStateSnapshot(current, currentState));
-        } catch {
-          // Keep the original lifecycle error when state refresh is unavailable.
+      setError('');
+      try {
+        const result = await meetingScribeClient.request(method, params);
+        if (Object.hasOwn(ACTION_REDUCERS, method)) {
+          const reduce = ACTION_REDUCERS[method];
+          setState((current) => reduce(current, result));
+        } else {
+          await refresh();
+        }
+        if (result?.warning) {
+          setError(result.warning);
+        }
+        return result;
+      } catch (requestError) {
+        setError(formatRequestError(requestError));
+        if (isSessionLifecycle) {
+          try {
+            const snapshot = await meetingScribeClient.request('get_state');
+            setState((current) => mergeBackendStateSnapshot(current, snapshot));
+          } catch (refreshError) {
+            console.warn(
+              '[session] failed to refresh state after lifecycle error',
+              refreshError,
+            );
+          }
+        }
+        return null;
+      } finally {
+        if (isSessionLifecycle) {
+          sessionActionRef.current = false;
+          setSessionActionPending(false);
         }
       }
-      return undefined;
-    } finally {
-      if (sessionLifecycle) {
-        sessionActionRef.current = false;
-        setSessionActionPending(false);
-      }
-    }
-  }, [refresh, setError, setState]);
+    },
+    [refresh, setError, setState],
+  );
 
   const startOrStop = React.useCallback(() => {
     if (runState) {
-      return runBackendAction("stop_session", {
+      return runBackendAction('stop_session', {
         runOfflinePass: Boolean(settingsDraft.offlineOnStop),
         outputFile: settingsDraft.outputFile,
         language: settingsDraft.language,
         model: settingsDraft.model,
-        offlineModelName: settingsDraft.offlineModel
+        offlineModelName: settingsDraft.offlineModel,
+        modelsDir: String(settingsDraft.modelsDirectory ?? '').trim(),
+        modelsSubdir: String(settingsDraft.asrModelsSubdir ?? '').trim(),
       });
     }
-    return runBackendAction("start_session", draftToStartParams(settingsDraft));
+    return runBackendAction('start_session', draftToStartParams(settingsDraft));
   }, [runBackendAction, runState, settingsDraft]);
 
   return {
@@ -203,4 +303,4 @@ export function useAppActions({
     updateAsrSetting,
     updateSettings,
   };
-}
+};

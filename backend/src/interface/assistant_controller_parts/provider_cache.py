@@ -1,44 +1,51 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from application.codex_config import CodexProfile, CodexSettings
 from assistant.application.provider import ASSISTANT_PROVIDER_CODEX
 
 
-def provider_snapshot_fields(provider: Dict[str, Any] | None) -> Dict[str, Any]:
+def provider_snapshot_fields(provider: dict[str, Any] | None) -> dict[str, Any]:
     if provider is None:
         return {
-            "providerAvailable": False,
-            "providerId": "",
-            "providerMessage": "",
-            "providerErrorCode": "",
-            "providerSuggestion": "",
-            "providerAuthRequired": False,
-            "providerLoginSupported": False,
-            "providerLocalHome": "",
+            'providerAvailable': False,
+            'providerId': '',
+            'providerMessage': '',
+            'providerErrorCode': '',
+            'providerSuggestion': '',
+            'providerAuthRequired': False,
+            'providerLoginSupported': False,
+            'providerLocalHome': '',
         }
     return {
-        "providerAvailable": bool(provider.get("available", False)),
-        "providerId": str(provider.get("id", "")),
-        "providerMessage": str(provider.get("message", "")),
-        "providerErrorCode": str(provider.get("errorCode", "")),
-        "providerSuggestion": str(provider.get("suggestion", "")),
-        "providerAuthRequired": bool(provider.get("authRequired", False)),
-        "providerLoginSupported": bool(provider.get("loginSupported", False)),
-        "providerLocalHome": str(provider.get("localHome", "")),
+        'providerAvailable': bool(provider.get('available', False)),
+        'providerId': str(provider.get('id', '')),
+        'providerMessage': str(provider.get('message', '')),
+        'providerErrorCode': str(provider.get('errorCode', '')),
+        'providerSuggestion': str(provider.get('suggestion', '')),
+        'providerAuthRequired': bool(provider.get('authRequired', False)),
+        'providerLoginSupported': bool(provider.get('loginSupported', False)),
+        'providerLocalHome': str(provider.get('localHome', '')),
     }
 
 
 def provider_for_profile(
-    providers: list[Dict[str, Any]],
+    providers: list[dict[str, Any]],
     profile: CodexProfile | None,
-) -> Dict[str, Any] | None:
+) -> dict[str, Any] | None:
     if not providers:
         return None
-    wanted = str(getattr(profile, "provider_id", "") or ASSISTANT_PROVIDER_CODEX).strip().lower()
+    wanted = (
+        str(
+            (profile.provider_id if profile is not None else '')
+            or ASSISTANT_PROVIDER_CODEX
+        )
+        .strip()
+        .lower()
+    )
     for provider in providers:
-        if str(provider.get("id", "")).strip().lower() == wanted:
+        if str(provider.get('id', '')).strip().lower() == wanted:
             return provider
     return None
 
@@ -46,7 +53,9 @@ def provider_for_profile(
 def provider_cache_key(settings: CodexSettings) -> tuple:
     return (
         bool(settings.enabled),
-        str(settings.proxy or ""),
+        str(settings.proxy or ''),
+        int(settings.timeout_s),
+        str(settings.selected_profile_id),
         tuple(settings.command_tokens or []),
         tuple(settings.path_hints or []),
         tuple(
@@ -56,6 +65,9 @@ def provider_cache_key(settings: CodexSettings) -> tuple:
                 str(profile.model),
                 str(profile.base_url),
                 str(profile.codex_profile),
+                str(profile.api_key),
+                int(profile.gpu_layers),
+                int(profile.context_size),
             )
             for profile in list(settings.profiles or [])
         ),

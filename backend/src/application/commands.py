@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import TextIO
 
 from application.codex_config import CodexProfile
 
@@ -34,10 +34,10 @@ class InvokeAssistantCommand:
     source_label: str
     context_source: str
     context_label: str
-    context_text: Optional[str] = None
-    human_log_path: Optional[Path] = None
-    human_log_fh: Any = None
-    max_log_chars: Optional[int] = None
-    timeout_s: Optional[int] = None
-    fallback_max_log_chars: Optional[int] = None
-    fallback_timeout_s: Optional[int] = None
+    context_text: str | None = None
+    human_log_path: Path | None = None
+    human_log_fh: TextIO | None = None
+    max_log_chars: int | None = None
+    timeout_s: int | None = None
+    fallback_max_log_chars: int | None = None
+    fallback_timeout_s: int | None = None

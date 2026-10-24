@@ -1,25 +1,25 @@
-import { createRequire } from "node:module";
+import { createRequire } from 'node:module';
 
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from 'vitest';
 
 const require = createRequire(import.meta.url);
-const { registerIpcHandlers } = require("../ipc-handlers.cjs");
+const { registerIpcHandlers } = require('../ipc-handlers.cjs');
 
-function registeredHandlers() {
+const registeredHandlers = () => {
   const handlers = new Map();
   const ipcMain = {
-    handle: vi.fn((channel, handler) => handlers.set(channel, handler))
+    handle: vi.fn((channel, handler) => handlers.set(channel, handler)),
   };
   return { handlers, ipcMain };
-}
+};
 
-describe("main-process IPC handlers", () => {
-  test("registers backend and app handlers", async () => {
+describe('main-process IPC handlers', () => {
+  test('registers backend and app handlers', async () => {
     const { handlers, ipcMain } = registeredHandlers();
     const backend = {
-      recentEvents: vi.fn(() => [{ type: "backend_ready" }]),
+      recentEvents: vi.fn(() => [{ type: 'backend_ready' }]),
       request: vi.fn(async (method, params) => ({ method, params })),
-      status: vi.fn(() => ({ ready: true }))
+      status: vi.fn(() => ({ ready: true })),
     };
     const window = {};
     const BrowserWindow = { fromWebContents: vi.fn(() => window) };
@@ -35,22 +35,30 @@ describe("main-process IPC handlers", () => {
       ipcMain,
       reloadWindow,
       setWindowContentProtection,
-      showDebugConsole
+      showDebugConsole,
     });
 
     expect(ipcMain.handle).toHaveBeenCalledTimes(7);
-    await expect(handlers.get("backend:request")({}, "get_state", { a: 1 })).resolves.toEqual({
-      method: "get_state",
-      params: { a: 1 }
+    await expect(
+      handlers.get('backend:request')({}, 'get_state', { a: 1 }),
+    ).resolves.toEqual({
+      method: 'get_state',
+      params: { a: 1 },
     });
-    expect(handlers.get("backend:status")()).toEqual({ ready: true });
-    expect(handlers.get("backend:recent-events")()).toEqual([{ type: "backend_ready" }]);
-    expect(handlers.get("debug:show")()).toEqual({ shown: true });
-    await expect(handlers.get("app:get-resource-usage")()).resolves.toEqual({ app: {} });
+    expect(handlers.get('backend:status')()).toEqual({ ready: true });
+    expect(handlers.get('backend:recent-events')()).toEqual([
+      { type: 'backend_ready' },
+    ]);
+    expect(handlers.get('debug:show')()).toEqual({ shown: true });
+    await expect(handlers.get('app:get-resource-usage')()).resolves.toEqual({
+      app: {},
+    });
 
     const event = { sender: {} };
-    expect(handlers.get("window:set-content-protection")(event, true)).toEqual({ enabled: true });
-    expect(handlers.get("window:reload")(event)).toEqual({ reloaded: true });
+    expect(handlers.get('window:set-content-protection')(event, true)).toEqual({
+      enabled: true,
+    });
+    expect(handlers.get('window:reload')(event)).toEqual({ reloaded: true });
     expect(setWindowContentProtection).toHaveBeenCalledWith(window, true);
     expect(reloadWindow).toHaveBeenCalledWith(window);
   });
